@@ -250,7 +250,10 @@ async def _flow_search(query: str) -> int:
         _print_series_header(info)
         _print_chapters_table(info.chapters)
 
-        # 4. Select chapters
+        # 4. Filter chapters (optional)
+        filtered = _filter_chapters_interactive(info.chapters)
+
+        # 5. Select chapters
         console.print()
         console.print("[dim]Examples: 1  ·  1-5  ·  1,3,5  ·  all  ·  q to quit[/dim]")
         ch_choice = Prompt.ask(
@@ -260,7 +263,7 @@ async def _flow_search(query: str) -> int:
         if ch_choice.lower() in ("q", "quit", "exit"):
             return 0
 
-        to_download = _parse_chapter_selection(ch_choice, info.chapters)
+        to_download = _parse_chapter_selection(ch_choice, filtered)
         if not to_download:
             console.print("[red]No valid chapters selected.[/red]")
             return 1
@@ -321,13 +324,15 @@ async def _flow_url_download(url: str) -> int:
         _print_series_header(info)
         _print_chapters_table(info.chapters)
 
+        filtered = _filter_chapters_interactive(info.chapters)
+
         console.print()
         console.print("[dim]Examples: 1  ·  1-5  ·  1,3,5  ·  all  ·  q to quit[/dim]")
         ch_choice = Prompt.ask("[bold]Select chapters[/bold]", default="all")
         if ch_choice.lower() in ("q", "quit", "exit"):
             return 0
 
-        to_download = _parse_chapter_selection(ch_choice, info.chapters)
+        to_download = _parse_chapter_selection(ch_choice, filtered)
         if not to_download:
             console.print("[red]No valid chapters selected.[/red]")
             return 1
@@ -593,6 +598,66 @@ def _print_chapters_table(chapters: list[ChapterInfo]) -> None:
         table.add_row(str(i), ch.title, pages, ch.language)
 
     console.print(table)
+
+
+def _filter_chapters_interactive(chapters: list[ChapterInfo]) -> list[ChapterInfo]:
+    """Let the user filter the chapter list by keyword before selection.
+
+    Syntax (case-insensitive):
+        +keyword   keep only chapters whose title contains 'keyword'
+        -keyword   remove chapters whose title contains 'keyword'
+        (empty)    done filtering, continue to selection
+
+    Multiple filters can be applied one after the other.
+    """
+    filtered = list(chapters)
+
+    console.print()
+    console.print(
+        "[dim]Filter chapters:  +keyword (keep)  ·  -keyword (exclude)  ·  Enter to skip[/dim]"
+    )
+
+    while True:
+        raw = Prompt.ask("[bold]Filter[/bold]", default="")
+        if not raw:
+            break
+
+        keyword = raw.strip()
+        if not keyword:
+            break
+
+        if keyword.startswith("+"):
+            word = keyword[1:].strip().lower()
+            if word:
+                before = len(filtered)
+                filtered = [ch for ch in filtered if word in ch.title.lower()]
+                removed = before - len(filtered)
+                console.print(f"  [green]Kept {len(filtered)} chapter(s) matching '{word}' (removed {removed})[/green]")
+        elif keyword.startswith("-"):
+            word = keyword[1:].strip().lower()
+            if word:
+                before = len(filtered)
+                filtered = [ch for ch in filtered if word not in ch.title.lower()]
+                removed = before - len(filtered)
+                msg = f"  [yellow]Removed {removed} chapter(s) matching '{word}' ({len(filtered)} remaining)[/yellow]"
+                console.print(msg)
+        else:
+            # Treat bare keyword as +keyword (keep matching)
+            word = keyword.lower()
+            before = len(filtered)
+            filtered = [ch for ch in filtered if word in ch.title.lower()]
+            removed = before - len(filtered)
+            console.print(f"  [green]Kept {len(filtered)} chapter(s) matching '{word}' (removed {removed})[/green]")
+
+        if not filtered:
+            console.print("[red]No chapters left! Resetting filter.[/red]")
+            filtered = list(chapters)
+
+    if len(filtered) != len(chapters):
+        console.print(f"\n[bold]{len(filtered)} chapters after filtering:[/bold]")
+        _print_chapters_table(filtered)
+
+    return filtered
 
 
 def _parse_chapter_selection(selection: str, chapters: list[ChapterInfo]) -> list[ChapterInfo]:
