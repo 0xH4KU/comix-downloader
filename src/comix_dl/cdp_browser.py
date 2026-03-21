@@ -258,6 +258,30 @@ class CdpBrowser:
             with contextlib.suppress(asyncio.QueueFull):
                 self._page_pool.put_nowait(page)
 
+    async def _init_pool_pages(self, url: str) -> None:
+        """Navigate all pool pages to *url* so they share the correct origin.
+
+        Without this, pool pages are on about:blank and fetch() to
+        comix.to fails with CORS/origin errors.
+        """
+        async def _nav(page: Page) -> None:
+            with contextlib.suppress(Exception):
+                await page.goto(url, wait_until="domcontentloaded")
+
+        # Drain pool, navigate all pages, put them back
+        pages: list[Page] = []
+        while not self._page_pool.empty():
+            try:
+                pages.append(self._page_pool.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+
+        if pages:
+            await asyncio.gather(*[_nav(p) for p in pages])
+            for p in pages:
+                self._page_pool.put_nowait(p)
+            logger.debug("Initialized %d pool pages at %s", len(pages), url)
+
     # -- CF clearance ---------------------------------------------------------
 
     async def ensure_cf_clearance(self) -> None:
@@ -290,6 +314,9 @@ class CdpBrowser:
 
             self._cf_cleared = True
             logger.info("CF clearance confirmed")
+
+            # Navigate pool pages to the same origin so fetch() works on them
+            await self._init_pool_pages(url)
 
     # -- public API -----------------------------------------------------------
 
