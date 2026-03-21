@@ -1,4 +1,7 @@
-"""Application configuration as frozen dataclasses."""
+"""Application configuration.
+
+Provides sensible defaults that can be overridden by user settings.
+"""
 
 from __future__ import annotations
 
@@ -6,9 +9,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-@dataclass(frozen=True)
+@dataclass
 class BrowserConfig:
-    """Playwright browser settings."""
+    """Chrome / CDP settings."""
 
     headless: bool = True
     timeout_ms: int = 30_000
@@ -21,10 +24,11 @@ class BrowserConfig:
     )
 
 
-@dataclass(frozen=True)
+@dataclass
 class DownloadConfig:
     """Download behaviour."""
 
+    max_concurrent_chapters: int = 2
     max_concurrent_images: int = 8
     max_retries: int = 3
     retry_delay: float = 1.0
@@ -33,7 +37,7 @@ class DownloadConfig:
     default_output_dir: Path = field(default_factory=lambda: Path.home() / "Downloads" / "comix-dl")
 
 
-@dataclass(frozen=True)
+@dataclass
 class ServiceConfig:
     """comix.to API settings."""
 
@@ -43,18 +47,18 @@ class ServiceConfig:
     max_search_pages: int = 3
 
 
-@dataclass(frozen=True)
+@dataclass
 class ConvertConfig:
     """Converter settings."""
 
     pdf_dpi: float = 100.0
-    default_format: str = "cbz"
-    supported_image_formats: tuple[str, ...] = ("png", "jpg", "jpeg", "gif", "bmp", "webp")
+    default_format: str = "pdf"
+    supported_image_formats: tuple[str, ...] = ("png", "jpg", "jpeg", "gif", "bmp", "webp", "avif")
 
 
-@dataclass(frozen=True)
+@dataclass
 class AppConfig:
-    """Root configuration."""
+    """Root configuration — mutable so user settings can override defaults."""
 
     browser: BrowserConfig = field(default_factory=BrowserConfig)
     download: DownloadConfig = field(default_factory=DownloadConfig)

@@ -1,4 +1,4 @@
-"""Concurrent image downloader with progress tracking."""
+"""Concurrent image downloader with progress tracking and resume support."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_COMPLETE_MARKER = ".complete"
+
 
 @dataclass
 class DownloadProgress:
@@ -26,6 +28,7 @@ class DownloadProgress:
     completed: int
     total: int
     failed: int
+    skipped: int
     current_file: str
 
 
@@ -42,7 +45,7 @@ def sanitize_dirname(name: str) -> str:
 
 
 class Downloader:
-    """Download chapter images concurrently with retry logic.
+    """Download chapter images concurrently with retry logic and resume.
 
     Args:
         client: CDP browser client for fetching images.
@@ -60,6 +63,11 @@ class Downloader:
         self._output_dir = output_dir or CONFIG.download.default_output_dir
         self._on_progress = on_progress
 
+    def is_chapter_complete(self, title: str, chapter: str) -> bool:
+        """Check whether a chapter has already been downloaded."""
+        chapter_dir = self._output_dir / sanitize_dirname(title) / sanitize_dirname(chapter)
+        return (chapter_dir / _COMPLETE_MARKER).exists()
+
     async def download_chapter(
         self,
         image_urls: list[str],
@@ -69,6 +77,9 @@ class Downloader:
         referer: str | None = None,
     ) -> Path:
         """Download all images for a chapter.
+
+        Supports resume — if individual images already exist on disk they are
+        skipped.  A ``.complete`` marker is written after all images succeed.
 
         Args:
             image_urls: List of image URLs to download.
@@ -85,15 +96,45 @@ class Downloader:
         chapter_dir = self._output_dir / sanitize_dirname(title) / sanitize_dirname(chapter)
         chapter_dir.mkdir(parents=True, exist_ok=True)
 
+        # Already fully downloaded?
+        if (chapter_dir / _COMPLETE_MARKER).exists():
+            logger.info("%s - %s: already downloaded, skipping", title, chapter)
+            if self._on_progress:
+                self._on_progress(DownloadProgress(
+                    completed=len(image_urls),
+                    total=len(image_urls),
+                    failed=0,
+                    skipped=len(image_urls),
+                    current_file="(skipped)",
+                ))
+            return chapter_dir
+
         total = len(image_urls)
         completed = 0
         failed = 0
+        skipped = 0
         semaphore = asyncio.Semaphore(CONFIG.download.max_concurrent_images)
 
         async def fetch_one(index: int, url: str) -> bool:
-            nonlocal completed, failed
+            nonlocal completed, failed, skipped
             async with semaphore:
                 filename = f"{index + 1:03d}"
+
+                # Resume: skip if image already exists
+                existing = list(chapter_dir.glob(f"{filename}.*"))
+                if existing and any(f.stat().st_size > 0 for f in existing):
+                    skipped += 1
+                    completed += 1
+                    if self._on_progress:
+                        self._on_progress(DownloadProgress(
+                            completed=completed + failed,
+                            total=total,
+                            failed=failed,
+                            skipped=skipped,
+                            current_file=filename,
+                        ))
+                    return True
+
                 success = await self._download_image(url, chapter_dir, filename, referer=referer)
 
                 if success:
@@ -107,6 +148,7 @@ class Downloader:
                             completed=completed + failed,
                             total=total,
                             failed=failed,
+                            skipped=skipped,
                             current_file=filename,
                         )
                     )
@@ -119,7 +161,16 @@ class Downloader:
         if success_count == 0:
             raise RuntimeError(f"All {total} image downloads failed for {title} - {chapter}")
 
-        if failed > 0:
+        # Mark as complete (only if no failures)
+        if failed == 0:
+            (chapter_dir / _COMPLETE_MARKER).touch()
+
+        if skipped > 0:
+            logger.info(
+                "%s - %s: %d downloaded, %d skipped (resumed), %d failed",
+                title, chapter, completed - skipped, skipped, failed,
+            )
+        elif failed > 0:
             logger.warning(
                 "%s - %s: %d/%d images failed",
                 title, chapter, failed, total,
@@ -189,5 +240,7 @@ class Downloader:
             return ".jpg"
         if data[:4] == b"GIF8":
             return ".gif"
+        if len(data) >= 12 and data[4:12] == b"ftypavif":
+            return ".avif"
 
         return ".jpg"  # default fallback

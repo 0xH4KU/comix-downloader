@@ -1,23 +1,42 @@
-"""Command-line interface for comix-downloader."""
+"""Command-line interface for comix-downloader.
+
+Supports both interactive (menu) and non-interactive (CLI flags) modes.
+
+Usage::
+
+    comix-dl                    # Interactive main menu
+    comix-dl "query"            # Quick search shortcut
+    comix-dl search "query"     # Search with subcommand
+    comix-dl download URL       # Non-interactive download
+    comix-dl doctor             # Diagnostics
+    comix-dl settings           # View / edit settings
+"""
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
+import signal
 import sys
+import time
 from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.prompt import IntPrompt, Prompt
 from rich.table import Table
 from rich.text import Text
 
 from comix_dl import __version__
+from comix_dl.cdp_browser import CdpBrowser
+from comix_dl.comix_service import ChapterInfo, ComixService, SearchResult, SeriesInfo
+from comix_dl.downloader import Downloader, DownloadProgress
 from comix_dl.settings import Settings, load_settings, save_settings
 
 console = Console()
+_shutdown_requested = False
 
 BANNER = r"""
   ██████╗ ██████╗ ███╗   ███╗██╗██╗  ██╗
@@ -29,31 +48,97 @@ BANNER = r"""
 """
 
 
+def _build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="comix-dl",
+        description="A focused comix.to manga downloader with Cloudflare bypass.",
+    )
+    parser.add_argument("-V", "--version", action="version", version=f"comix-dl v{__version__}")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+
+    sub = parser.add_subparsers(dest="command")
+
+    # search
+    p_search = sub.add_parser("search", help="Search for manga")
+    p_search.add_argument("query", help="Search query")
+
+    # download
+    p_dl = sub.add_parser("download", help="Download manga by URL or slug")
+    p_dl.add_argument("url", help="Manga URL or slug")
+    p_dl.add_argument("-c", "--chapters", default="all", help="Chapter selection: all, 1-5, 1,3,5 (default: all)")
+    p_dl.add_argument("-f", "--format", choices=["pdf", "cbz", "both"], default=None, help="Output format")
+    p_dl.add_argument("-o", "--output", default=None, help="Output directory")
+
+    # doctor
+    sub.add_parser("doctor", help="Run environment diagnostics")
+
+    # settings
+    sub.add_parser("settings", help="View and edit settings")
+
+    return parser
+
+
 def main() -> int:
     """CLI entry point."""
-    args = sys.argv[1:]
+    parser = _build_parser()
 
-    # Quick shortcut: `comix-dl "omori"` → direct search
-    if args and not args[0].startswith("-"):
+    # Special case: bare `comix-dl "query"` (no subcommand, positional arg)
+    if (
+        len(sys.argv) == 2
+        and not sys.argv[1].startswith("-")
+        and sys.argv[1] not in ("search", "download", "doctor", "settings")
+    ):
         logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
-        return asyncio.run(_flow_search(args[0]))
+        return _run_async(_flow_search(sys.argv[1]))
 
-    # Flags
-    if "--version" in args or "-v" in args:
-        console.print(f"comix-dl v{__version__}")
-        return 0
+    args = parser.parse_args()
 
-    if "--doctor" in args:
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    logging.basicConfig(level=log_level, format="%(levelname)s:%(name)s:%(message)s")
+
+    if args.command == "search":
+        return _run_async(_flow_search(args.query))
+
+    if args.command == "download":
+        settings = load_settings()
+        fmt = args.format or settings.default_format
+        output = args.output or settings.output_dir
+        return _run_async(_flow_noninteractive_download(args.url, args.chapters, fmt, output))
+
+    if args.command == "doctor":
         return _run_doctor()
 
-    # Set log level
-    if "--debug" in args:
-        logging.basicConfig(level=logging.DEBUG, format="%(levelname)s:%(name)s:%(message)s")
-    else:
-        logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+    if args.command == "settings":
+        _flow_settings()
+        return 0
 
-    # Main menu loop
+    # No subcommand → interactive main menu
     return _main_menu()
+
+
+def _run_async(coro: object) -> int:
+    """Run an async coroutine with Ctrl+C handling."""
+    global _shutdown_requested
+    _shutdown_requested = False
+
+    loop = asyncio.new_event_loop()
+
+    def _on_sigint(*_: object) -> None:
+        global _shutdown_requested
+        _shutdown_requested = True
+        console.print("\n[yellow]⚠ Ctrl+C — finishing current downloads then stopping…[/yellow]")
+
+    signal.signal(signal.SIGINT, _on_sigint)
+
+    try:
+        return loop.run_until_complete(coro)  # type: ignore[arg-type]
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+        return 130
+    finally:
+        loop.close()
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 
 # -- Main Menu ----------------------------------------------------------------
@@ -97,12 +182,12 @@ def _main_menu() -> int:
         if choice == "1":
             query = Prompt.ask("[bold]Search query[/bold]")
             if query.strip():
-                asyncio.run(_flow_search(query.strip()))
+                _run_async(_flow_search(query.strip()))
 
         elif choice == "2":
-            url = Prompt.ask("[bold]Manga URL[/bold]")
+            url = Prompt.ask("[bold]Manga URL or slug[/bold]")
             if url.strip():
-                asyncio.run(_flow_url_download(url.strip()))
+                _run_async(_flow_url_download(url.strip()))
 
         elif choice == "3":
             _flow_settings()
@@ -116,9 +201,6 @@ def _main_menu() -> int:
 
 async def _flow_search(query: str) -> int:
     """Interactive search → select → download."""
-    from comix_dl.cdp_browser import CdpBrowser
-    from comix_dl.comix_service import ComixService
-
     settings = load_settings()
     output_dir = Path(settings.output_dir)
 
@@ -163,10 +245,7 @@ async def _flow_search(query: str) -> int:
             console.print("[yellow]No chapters found.[/yellow]")
             return 0
 
-        if info.description:
-            console.print(f"\n[dim]{info.description[:200]}[/dim]")
-
-        console.print(f"\n[bold]{len(info.chapters)} chapters available[/bold]\n")
+        _print_series_header(info)
         _print_chapters_table(info.chapters)
 
         # 4. Select chapters
@@ -191,50 +270,53 @@ async def _flow_search(query: str) -> int:
             default=settings.default_format,
         )
 
-        console.print(
-            f"\n[bold green]Downloading {len(to_download)} chapter(s)…[/bold green]\n"
-        )
-
-        # 6. Parallel download & convert
-        await _download_chapters(
-            browser, service, info.title, to_download, output_dir, fmt, settings,
-        )
-
-        console.print(f"\n[bold green]✓ Done! Files saved to {output_dir}[/bold green]")
+        # 6. Download
+        await _download_chapters(browser, service, info.title, to_download, output_dir, fmt, settings)
 
     return 0
 
 
 async def _flow_url_download(url: str) -> int:
-    """Download from a manga URL."""
-    from comix_dl.cdp_browser import CdpBrowser
-    from comix_dl.comix_service import ComixService
-
+    """Download from a manga URL (interactive mode)."""
     settings = load_settings()
     output_dir = Path(settings.output_dir)
 
-    # Extract hash_id from the URL or try as search term
+    # Extract slug from the URL
     slug = url.rstrip("/").split("/")[-1]
 
     async with CdpBrowser() as browser:
         service = ComixService(browser)
 
-        # Try to get series info
         with console.status("[bold cyan]Fetching series info…"):
             try:
-                # First search for the slug to get hash_id
-                results = await service.search(slug, limit=5)
+                results = await service.search(slug, limit=10)
+                # Try exact slug match first, then partial title match
                 matched = next((r for r in results if r.slug == slug), None)
-                if matched:
-                    info = await service.get_series(matched.hash_id)
-                else:
+                if not matched and results:
+                    console.print(f"[yellow]Exact match not found for '{slug}'. Did you mean:[/yellow]\n")
+                    _print_search_table(results, slug)
+                    choice = Prompt.ask(
+                        "\n[bold]Select manga[/bold] [dim](number, or q to quit)[/dim]",
+                        default="1",
+                    )
+                    if choice.lower() in ("q", "quit", "exit"):
+                        return 0
+                    try:
+                        matched = results[int(choice) - 1]
+                    except (ValueError, IndexError):
+                        console.print("[red]Invalid selection.[/red]")
+                        return 1
+
+                if not matched:
                     console.print("[yellow]Could not find manga. Try using search instead.[/yellow]")
                     return 1
+
+                info = await service.get_series(matched.hash_id)
             except RuntimeError as exc:
                 console.print(f"[red]{exc}[/red]")
                 return 1
 
-        console.print(f"\n[bold]{info.title}[/bold] — {len(info.chapters)} chapters\n")
+        _print_series_header(info)
         _print_chapters_table(info.chapters)
 
         console.print()
@@ -254,15 +336,42 @@ async def _flow_url_download(url: str) -> int:
             default=settings.default_format,
         )
 
-        console.print(
-            f"\n[bold green]Downloading {len(to_download)} chapter(s)…[/bold green]\n"
-        )
+        await _download_chapters(browser, service, info.title, to_download, output_dir, fmt, settings)
 
-        await _download_chapters(
-            browser, service, info.title, to_download, output_dir, fmt, settings,
-        )
+    return 0
 
-        console.print(f"\n[bold green]✓ Done! Files saved to {output_dir}[/bold green]")
+
+async def _flow_noninteractive_download(url: str, chapters_sel: str, fmt: str, output: str) -> int:
+    """Fully non-interactive download flow."""
+    output_dir = Path(output)
+    slug = url.rstrip("/").split("/")[-1]
+
+    async with CdpBrowser() as browser:
+        service = ComixService(browser)
+
+        console.print(f"[bold]Searching for '{slug}'…[/bold]")
+        results = await service.search(slug, limit=10)
+        matched = next((r for r in results if r.slug == slug), results[0] if results else None)
+
+        if not matched:
+            console.print("[red]Manga not found.[/red]")
+            return 1
+
+        console.print(f"[bold cyan]→ {matched.title}[/bold cyan]")
+        info = await service.get_series(matched.hash_id)
+
+        if not info.chapters:
+            console.print("[yellow]No chapters found.[/yellow]")
+            return 0
+
+        to_download = _parse_chapter_selection(chapters_sel, info.chapters)
+        if not to_download:
+            console.print("[red]No valid chapters selected.[/red]")
+            return 1
+
+        console.print(f"[bold]Downloading {len(to_download)} chapter(s) as {fmt.upper()}…[/bold]\n")
+        settings = load_settings()
+        await _download_chapters(browser, service, info.title, to_download, output_dir, fmt, settings)
 
     return 0
 
@@ -307,58 +416,78 @@ def _flow_settings() -> None:
             )
 
         elif choice == "3":
-            settings.concurrent_chapters = IntPrompt.ask(
-                "  Concurrent chapters (1-5)",
-                default=settings.concurrent_chapters,
-            )
+            val = IntPrompt.ask("  Concurrent chapters (1-5)", default=settings.concurrent_chapters)
+            settings.concurrent_chapters = max(1, min(5, val))
 
         elif choice == "4":
-            settings.concurrent_images = IntPrompt.ask(
-                "  Concurrent images (1-16)",
-                default=settings.concurrent_images,
-            )
+            val = IntPrompt.ask("  Concurrent images (1-16)", default=settings.concurrent_images)
+            settings.concurrent_images = max(1, min(16, val))
 
         elif choice == "5":
-            settings.max_retries = IntPrompt.ask(
-                "  Max retries (0-10)",
-                default=settings.max_retries,
-            )
+            val = IntPrompt.ask("  Max retries (0-10)", default=settings.max_retries)
+            settings.max_retries = max(0, min(10, val))
 
 
 # -- Download engine ----------------------------------------------------------
 
 
 async def _download_chapters(
-    browser: object,
-    service: object,
+    browser: CdpBrowser,
+    service: ComixService,
     series_title: str,
-    chapters: list[object],
+    chapters: list[ChapterInfo],
     output_dir: Path,
     fmt: str,
     settings: Settings,
 ) -> None:
     """Download and convert multiple chapters in parallel."""
     from comix_dl.converters import convert
-    from comix_dl.downloader import Downloader, DownloadProgress
+
+    start_time = time.monotonic()
+    total_chapters = len(chapters)
+    completed_ok = 0
+    skipped_count = 0
+    failed_count = 0
+
+    console.print(
+        f"\n[bold green]Downloading {total_chapters} chapter(s) → {output_dir}[/bold green]\n"
+    )
 
     progress = Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         MofNCompleteColumn(),
+        TimeElapsedColumn(),
         console=console,
     )
 
     sem = asyncio.Semaphore(settings.concurrent_chapters)
 
-    async def _one(ch: object) -> None:
-        async with sem:
-            ch_info = ch  # type: ignore[assignment]
-            task_id = progress.add_task(f"  {ch_info.title}", total=None)
+    async def _one(ch: ChapterInfo) -> None:
+        nonlocal completed_ok, skipped_count, failed_count
 
-            chapter_data = await service.get_chapter_images(ch_info.chapter_id)  # type: ignore[union-attr]
+        if _shutdown_requested:
+            return
+
+        async with sem:
+            if _shutdown_requested:
+                return
+
+            downloader = Downloader(browser, output_dir=output_dir)
+
+            # Check if already downloaded (resume)
+            if downloader.is_chapter_complete(series_title, ch.title):
+                task_id = progress.add_task(f"  [dim]↳ {ch.title} (skipped)[/dim]", total=1, completed=1)
+                skipped_count += 1
+                return
+
+            task_id = progress.add_task(f"  {ch.title}", total=None)
+
+            chapter_data = await service.get_chapter_images(ch.chapter_id)
             if chapter_data is None:
-                progress.update(task_id, description=f"  [red]✗ {ch_info.title}[/red]")
+                progress.update(task_id, description=f"  [red]✗ {ch.title} (no images)[/red]")
+                failed_count += 1
                 return
 
             total = len(chapter_data.image_urls)
@@ -367,7 +496,7 @@ async def _download_chapters(
             def on_img(p: DownloadProgress, _tid: int = task_id) -> None:
                 progress.update(_tid, completed=p.completed)
 
-            downloader = Downloader(browser, output_dir=output_dir, on_progress=on_img)  # type: ignore[arg-type]
+            downloader._on_progress = on_img
             try:
                 image_dir = await downloader.download_chapter(
                     chapter_data.image_urls,
@@ -375,24 +504,45 @@ async def _download_chapters(
                     chapter_data.chapter_label,
                 )
             except RuntimeError:
-                progress.update(task_id, description=f"  [red]✗ {ch_info.title}[/red]")
+                progress.update(task_id, description=f"  [red]✗ {ch.title}[/red]")
+                failed_count += 1
                 return
 
             try:
                 out = convert(image_dir, fmt)
                 progress.update(task_id, description=f"  [green]✓ {out.name}[/green]")
+                completed_ok += 1
             except RuntimeError:
-                progress.update(task_id, description=f"  [yellow]⚠ {ch_info.title}[/yellow]")
+                progress.update(task_id, description=f"  [yellow]⚠ {ch.title} (convert failed)[/yellow]")
+                failed_count += 1
 
     with progress:
         tasks = [_one(ch) for ch in chapters]
         await asyncio.gather(*tasks)
 
+    # Summary
+    elapsed = time.monotonic() - start_time
+    console.print()
+    parts = []
+    if completed_ok:
+        parts.append(f"[green]{completed_ok} downloaded[/green]")
+    if skipped_count:
+        parts.append(f"[dim]{skipped_count} skipped[/dim]")
+    if failed_count:
+        parts.append(f"[red]{failed_count} failed[/red]")
+
+    summary = " · ".join(parts) if parts else "[green]Nothing to do[/green]"
+    console.print(Panel(
+        f"{summary}  ·  [dim]{elapsed:.1f}s elapsed[/dim]  ·  {output_dir}",
+        title="[bold]Download Summary[/bold]",
+        border_style="green" if failed_count == 0 else "yellow",
+    ))
+
 
 # -- UI Helpers ---------------------------------------------------------------
 
 
-def _print_search_table(results: list[object], query: str) -> None:
+def _print_search_table(results: list[SearchResult], query: str) -> None:
     """Print search results table."""
     table = Table(title=f"Search results for '{query}'", show_lines=False)
     table.add_column("#", style="dim", width=4)
@@ -400,24 +550,36 @@ def _print_search_table(results: list[object], query: str) -> None:
     table.add_column("URL", style="dim cyan")
 
     for i, r in enumerate(results, 1):
-        table.add_row(str(i), r.title, r.url)  # type: ignore[union-attr]
+        table.add_row(str(i), r.title, r.url)
 
     console.print(table)
 
 
-def _print_chapters_table(chapters: list[object]) -> None:
+def _print_series_header(info: SeriesInfo) -> None:
+    """Print series metadata."""
+    console.print(f"\n[bold]{info.title}[/bold]")
+    if info.description:
+        desc = info.description[:200]
+        if len(info.description) > 200:
+            desc += "…"
+        console.print(f"[dim]{desc}[/dim]")
+    console.print(f"\n[bold]{len(info.chapters)} chapters available[/bold]\n")
+
+
+def _print_chapters_table(chapters: list[ChapterInfo]) -> None:
     """Print chapter list table."""
-    table = Table(show_lines=False)
+    table = Table(show_lines=False, show_header=True)
     table.add_column("#", style="dim", width=4)
     table.add_column("Chapter", style="bold")
+    table.add_column("Language", style="dim", width=6)
 
     for i, ch in enumerate(chapters, 1):
-        table.add_row(str(i), ch.title)  # type: ignore[union-attr]
+        table.add_row(str(i), ch.title, ch.language)
 
     console.print(table)
 
 
-def _parse_chapter_selection(selection: str, chapters: list[object]) -> list[object]:
+def _parse_chapter_selection(selection: str, chapters: list[ChapterInfo]) -> list[ChapterInfo]:
     """Parse chapter selection: ``all``, ``1``, ``1-5``, ``1,3,5``."""
     if selection.strip().lower() == "all":
         return list(chapters)
@@ -450,8 +612,8 @@ def _run_doctor() -> int:
     """Run environment diagnostics."""
     import shutil
 
-    console.print("[bold]comix-downloader — Diagnostics[/bold]")
-    console.print("=" * 40)
+    console.print()
+    console.print(Panel("[bold]comix-downloader — Diagnostics[/bold]", border_style="cyan"))
     all_ok = True
 
     v = sys.version_info
@@ -462,7 +624,6 @@ def _run_doctor() -> int:
 
     for module, name in [
         ("playwright", "playwright"),
-        ("bs4", "beautifulsoup4"),
         ("PIL", "Pillow"),
         ("rich", "rich"),
     ]:
@@ -470,14 +631,14 @@ def _run_doctor() -> int:
             __import__(module)
             console.print(f"  [green]✓[/green] {name}")
         except ImportError:
-            console.print(f"  [red]✗[/red] {name}")
+            console.print(f"  [red]✗[/red] {name} — install with: pip install {name}")
             all_ok = False
 
     chrome = shutil.which("google-chrome") or "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     if Path(chrome).exists():
         console.print("  [green]✓[/green] Chrome")
     else:
-        console.print("  [red]✗[/red] Chrome not found")
+        console.print("  [red]✗[/red] Chrome not found — install Google Chrome")
         all_ok = False
 
     settings = load_settings()
@@ -486,12 +647,12 @@ def _run_doctor() -> int:
         out.mkdir(parents=True, exist_ok=True)
         console.print(f"  [green]✓[/green] Output: {out}")
     except OSError:
-        console.print(f"  [red]✗[/red] Output: {out}")
+        console.print(f"  [red]✗[/red] Output: {out} (cannot create)")
         all_ok = False
 
-    console.print("=" * 40)
+    console.print()
     if all_ok:
-        console.print("[bold green]✓ All OK[/bold green]")
+        console.print("[bold green]✓ All OK — ready to download![/bold green]")
     else:
-        console.print("[bold red]✗ Issues found[/bold red]")
+        console.print("[bold red]✗ Issues found — fix the above before continuing[/bold red]")
     return 0 if all_ok else 1

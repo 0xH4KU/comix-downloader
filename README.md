@@ -8,8 +8,9 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 
 - **Cloudflare bypass** — launches a real Chrome instance via CDP, no automation detection
 - **REST API integration** — uses comix.to's v2 API directly, no HTML scraping
-- **Interactive CLI** — main menu with search, download, and settings
-- **Parallel downloads** — concurrent chapter and image downloads
+- **Interactive & non-interactive CLI** — main menu, quick search, or full CLI flags
+- **Parallel downloads** — concurrent chapter and image downloads with page pool
+- **Resume / skip** — automatically skips already-downloaded chapters and images
 - **PDF / CBZ output** — convert downloaded images to PDF or CBZ archives
 - **Persistent settings** — saves preferences to `~/.config/comix-dl/settings.json`
 
@@ -19,7 +20,22 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - Google Chrome (used for Cloudflare bypass)
 - Playwright (`pip install playwright && playwright install chromium`)
 
-## Install
+## Quick Install (one-click)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/0xH4KU/comix-downloader/main/install.sh | bash
+```
+
+This will:
+- Auto-detect Python 3.11+ and Chrome
+- Clone the repo to `~/.local/share/comix-dl`
+- Create an isolated venv and install all dependencies
+- Install Playwright Chromium
+- Add `comix-dl` to your PATH
+
+After install, use `comix-dl` from **any directory**.
+
+## Manual Install
 
 ```bash
 git clone https://github.com/0xH4KU/comix-downloader.git
@@ -27,6 +43,16 @@ cd comix-downloader
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 playwright install chromium
+```
+
+## Update / Uninstall
+
+```bash
+# Update: re-run the install script
+curl -fsSL https://raw.githubusercontent.com/0xH4KU/comix-downloader/main/install.sh | bash
+
+# Uninstall
+comix-dl-uninstall
 ```
 
 ## Usage
@@ -51,6 +77,19 @@ The main menu offers:
   q  Exit
 ```
 
+### Non-Interactive Mode
+
+```bash
+# Search
+comix-dl search "manga name"
+
+# Download specific chapters as CBZ
+comix-dl download "manga-slug" --chapters 1-5 --format cbz
+
+# Download all chapters to a custom directory
+comix-dl download "https://comix.to/manga/some-manga" --chapters all --format pdf --output ~/Comics
+```
+
 ### Search & Download Flow
 
 1. Enter a search query
@@ -59,10 +98,11 @@ The main menu offers:
 4. Select chapters to download (`all`, `1-5`, `1,3,5`)
 5. Choose output format (`pdf`, `cbz`, `both`)
 6. Chapters are downloaded in parallel with progress bars
+7. Already-downloaded chapters are automatically skipped
 
 ### Settings
 
-Accessible from the main menu (`3`). Configurable options:
+Accessible from the main menu (`3`) or `comix-dl settings`. Configurable options:
 
 | Setting              | Default                          | Description                    |
 | -------------------- | -------------------------------- | ------------------------------ |
@@ -77,16 +117,16 @@ Settings persist to `~/.config/comix-dl/settings.json`.
 ### Diagnostics
 
 ```bash
-comix-dl --doctor
+comix-dl doctor
 ```
 
 Checks Python version, dependencies, Chrome availability, and output directory.
 
 ## How It Works
 
-1. **Chrome CDP** — comix-dl launches a real Chrome subprocess with `--remote-debugging-port`, then connects via Playwright's `connect_over_cdp`. No `--enable-automation` flag, so Cloudflare sees a normal browser.
+1. **Chrome CDP** — comix-dl launches a real Chrome subprocess with `--remote-debugging-port`, then connects via Playwright's `connect_over_cdp`. No `--enable-automation` flag, so Cloudflare sees a normal browser. Chrome is hidden off-screen and only brought forward if a manual CF challenge needs solving.
 
-2. **CF Clearance** — on first run, Chrome opens visibly. If a Cloudflare challenge appears, the user solves it once. The Chrome profile is persisted at `~/.config/comix-dl/chrome-profile/`, so subsequent runs pass automatically.
+2. **CF Clearance** — on first run, if a Cloudflare challenge appears, Chrome moves to the foreground for the user to solve it once. The Chrome profile is persisted at `~/.config/comix-dl/chrome-profile/`, so subsequent runs pass automatically.
 
 3. **REST API** — all data comes from comix.to's v2 REST API:
    - `GET /api/v2/manga?keyword=...` — search
@@ -94,9 +134,11 @@ Checks Python version, dependencies, Chrome availability, and output directory.
    - `GET /api/v2/manga/{hash_id}/chapters` — chapter list
    - `GET /api/v2/chapters/{chapter_id}` — chapter images (URLs included)
 
-4. **Download** — image URLs from the API are fetched via `page.evaluate(fetch())` inside Chrome's page context, preserving all cookies/headers.
+4. **Download** — image URLs from the API are fetched via `page.evaluate(fetch())` inside Chrome's page context using a page pool for parallelism. Binary data is transferred via base64 encoding for efficiency.
 
-5. **Convert** — downloaded images are packaged into PDF (via Pillow) or CBZ (zip archive).
+5. **Resume** — each chapter directory gets a `.complete` marker after successful download. Re-running the same download skips completed chapters and resumes partially-downloaded ones.
+
+6. **Convert** — downloaded images are packaged into PDF (via Pillow) or CBZ (zip archive).
 
 ## Project Structure
 
@@ -104,15 +146,13 @@ Checks Python version, dependencies, Chrome availability, and output directory.
 src/comix_dl/
   __init__.py         # Package version
   __main__.py         # python -m comix_dl entry point
-  cli.py              # Interactive CLI with main menu
-  cdp_browser.py      # Chrome CDP connection (CF bypass)
+  cli.py              # Interactive & non-interactive CLI
+  cdp_browser.py      # Chrome CDP connection (CF bypass, page pool)
   comix_service.py    # REST API client (search, chapters, images)
-  downloader.py       # Concurrent image downloader
+  downloader.py       # Concurrent image downloader with resume
   converters.py       # PDF / CBZ conversion
   config.py           # Default configuration dataclasses
   settings.py         # Persistent user settings (JSON)
-  parser.py           # HTML chapter parser (legacy, kept as fallback)
-  tui.py              # Textual TUI (alternative interface)
 ```
 
 ## License

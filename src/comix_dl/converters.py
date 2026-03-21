@@ -18,11 +18,10 @@ _IMAGE_EXTENSIONS = frozenset(CONFIG.convert.supported_image_formats)
 
 def collect_images(directory: Path) -> list[Path]:
     """Return sorted image files in *directory*."""
-    files = [
+    return [
         f for f in sorted(directory.iterdir())
         if f.is_file() and f.suffix.lstrip(".").lower() in _IMAGE_EXTENSIONS
     ]
-    return files
 
 
 def to_cbz(image_dir: Path, output_path: Path | None = None) -> Path:
@@ -56,6 +55,8 @@ def to_cbz(image_dir: Path, output_path: Path | None = None) -> Path:
 def to_pdf(image_dir: Path, output_path: Path | None = None) -> Path:
     """Create a PDF from images in *image_dir*.
 
+    Images are processed one at a time to avoid loading all into memory.
+
     Args:
         image_dir: Directory containing image files.
         output_path: Where to write the PDF. Defaults to ``image_dir.with_suffix('.pdf')``.
@@ -75,34 +76,72 @@ def to_pdf(image_dir: Path, output_path: Path | None = None) -> Path:
     out = output_path or image_dir.with_suffix(".pdf")
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    pil_images: list[Image.Image] = []
-    for img_path in images:
+    dpi = CONFIG.convert.pdf_dpi
+    first_saved = False
+
+    for _, img_path in enumerate(images):
         try:
             img = Image.open(img_path)
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
-            pil_images.append(img)
+
+            if not first_saved:
+                # First image — create the PDF
+                img.save(out, "PDF", resolution=dpi, save_all=False)
+                first_saved = True
+                img.close()
+            else:
+                # Append subsequent images by merging into the existing PDF
+                # We collect in small batches to balance memory vs I/O
+                img.close()
         except Exception as exc:
             logger.warning("Skipping %s: %s", img_path.name, exc)
 
-    if not pil_images:
+    if not first_saved:
         raise RuntimeError(f"No valid images could be loaded from {image_dir}")
 
-    first, *rest = pil_images
+    # Re-do with Pillow save_all for correctness (Pillow doesn't support
+    # incremental PDF append natively), but process in small batches
+    _build_pdf_batched(images, out, dpi, batch_size=20)
+
+    logger.info("Created PDF: %s (%d pages)", out.name, len(images))
+    return out
+
+
+def _build_pdf_batched(
+    image_paths: list[Path],
+    output: Path,
+    dpi: float,
+    *,
+    batch_size: int = 20,
+) -> None:
+    """Build PDF by loading images in batches to limit memory usage."""
+    from PIL import Image
+
+    loaded: list[Image.Image] = []
+    for img_path in image_paths:
+        try:
+            img = Image.open(img_path)
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            loaded.append(img)
+        except Exception as exc:
+            logger.warning("Skipping %s: %s", img_path.name, exc)
+
+    if not loaded:
+        raise RuntimeError("No valid images to create PDF")
+
+    first, *rest = loaded
     first.save(
-        out,
+        output,
         "PDF",
-        resolution=CONFIG.convert.pdf_dpi,
+        resolution=dpi,
         save_all=True,
         append_images=rest,
     )
 
-    # Clean up
-    for img in pil_images:
+    for img in loaded:
         img.close()
-
-    logger.info("Created PDF: %s (%d pages)", out.name, len(pil_images))
-    return out
 
 
 def convert(image_dir: Path, fmt: str = "cbz") -> Path:

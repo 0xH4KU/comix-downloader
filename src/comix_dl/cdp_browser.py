@@ -9,7 +9,12 @@ This prevents Cloudflare from detecting automation.
 
 from __future__ import annotations
 
+import asyncio
+import atexit
+import base64
+import contextlib
 import logging
+import socket
 import subprocess
 import time
 from typing import TYPE_CHECKING
@@ -21,32 +26,72 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_CDP_PORT = 9222
+# Module-level reference for atexit cleanup
+_active_chrome: subprocess.Popen[bytes] | None = None
+
+
+def _atexit_kill_chrome() -> None:
+    """Last-resort cleanup: kill Chrome if still running."""
+    global _active_chrome
+    if _active_chrome is not None:
+        try:
+            _active_chrome.terminate()
+            _active_chrome.wait(timeout=3)
+        except Exception:
+            with contextlib.suppress(Exception):
+                _active_chrome.kill()
+        _active_chrome = None
+
+
+atexit.register(_atexit_kill_chrome)
+
+
+def _find_free_port() -> int:
+    """Find an available port for CDP."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _is_port_in_use(port: int) -> bool:
+    """Check whether a TCP port is already bound."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.connect(("127.0.0.1", port))
+            return True
+        except (ConnectionRefusedError, OSError):
+            return False
 
 
 class CdpBrowser:
     """Connect to a user-launched Chrome via CDP for Cloudflare bypass.
 
-    Flow:
-    1. We launch Chrome ourselves (subprocess) with ``--remote-debugging-port``.
-    2. Playwright connects via CDP — Chrome has NO automation banner.
-    3. Requests made through the page context carry real browser fingerprint.
+    Features:
+    - Base64 binary transfer (3-4x faster than JSON array)
+    - Page pool for parallel downloads
+    - Dynamic CDP port (no conflicts)
+    - Graceful shutdown with atexit fallback
 
     Usage::
 
         async with CdpBrowser() as browser:
-            html = await browser.fetch_page("https://comix.to/chapter/...")
-            data = await browser.post_json("https://comix.to/apo/", {...})
+            data = await browser.get_bytes("https://example.com/image.jpg")
+            json = await browser.get_json("https://example.com/api/data")
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_pages: int = 4) -> None:
         self._playwright: Playwright | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
         self._chrome_process: subprocess.Popen[bytes] | None = None
         self._started = False
         self._cf_cleared = False
+        self._cf_lock = asyncio.Lock()
         self._user_data_dir = CONFIG.browser.cookie_dir / "chrome-profile"
+        self._cdp_port: int = 0
+        self._max_pages = max_pages
+        self._page_pool: asyncio.Queue[Page] = asyncio.Queue()
+        self._all_pages: list[Page] = []
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -64,7 +109,7 @@ class CdpBrowser:
 
         # Connect to the Chrome we just launched
         browser = await self._playwright.chromium.connect_over_cdp(
-            f"http://127.0.0.1:{_CDP_PORT}",
+            f"http://127.0.0.1:{self._cdp_port}",
         )
         # Get the default context (which is Chrome's real context)
         contexts = browser.contexts
@@ -74,10 +119,22 @@ class CdpBrowser:
         pages = self._context.pages
         self._page = pages[0] if pages else await self._context.new_page()
         self._started = True
-        logger.info("Connected to Chrome via CDP (port %d)", _CDP_PORT)
+
+        # Initialise page pool with additional pages
+        for _ in range(self._max_pages):
+            try:
+                page = await self._context.new_page()
+                self._all_pages.append(page)
+                self._page_pool.put_nowait(page)
+            except Exception:
+                break
+
+        logger.info("Connected to Chrome via CDP (port %d, %d pool pages)",
+                     self._cdp_port, self._page_pool.qsize())
 
     def _launch_chrome(self) -> None:
         """Launch Chrome subprocess with remote debugging enabled."""
+        global _active_chrome
         import platform
         import shutil
 
@@ -90,14 +147,22 @@ class CdpBrowser:
         else:
             chrome_path = shutil.which("chrome") or "chrome"
 
+        # Pick port — use 9222 if free, otherwise find a random one
+        if _is_port_in_use(9222):
+            self._cdp_port = _find_free_port()
+            logger.info("Port 9222 in use, using %d instead", self._cdp_port)
+        else:
+            self._cdp_port = 9222
+
         args = [
             chrome_path,
-            f"--remote-debugging-port={_CDP_PORT}",
+            f"--remote-debugging-port={self._cdp_port}",
             f"--user-data-dir={self._user_data_dir}",
             "--no-first-run",
             "--no-default-browser-check",
-            # Always launch visible — headless Chrome is still detected by CF.
-            # The window opens briefly and closes after work is done.
+            # Hide window off-screen — only show if CF challenge needs manual solve
+            "--window-position=-32000,-32000",
+            "--window-size=1,1",
         ]
 
         logger.debug("Launching Chrome: %s", " ".join(args))
@@ -107,7 +172,7 @@ class CdpBrowser:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            # Wait for Chrome to start and open the debug port
+            _active_chrome = self._chrome_process
             self._wait_for_cdp_ready()
         except FileNotFoundError:
             raise RuntimeError(
@@ -117,35 +182,55 @@ class CdpBrowser:
 
     def _wait_for_cdp_ready(self, timeout: float = 10.0) -> None:
         """Wait until Chrome's CDP port is accepting connections."""
-        import socket
-
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
-                with socket.create_connection(("127.0.0.1", _CDP_PORT), timeout=1):
+                with socket.create_connection(("127.0.0.1", self._cdp_port), timeout=1):
                     return
             except (ConnectionRefusedError, OSError):
                 time.sleep(0.3)
 
         raise RuntimeError(
             f"Chrome did not start within {timeout}s. "
-            "Check if another Chrome instance is using port 9222."
+            f"Check if another process is using port {self._cdp_port}."
         )
 
     async def close(self) -> None:
         """Disconnect from Chrome and close the subprocess."""
+        global _active_chrome
+
+        # Close pool pages
+        for page in self._all_pages:
+            with contextlib.suppress(Exception):
+                await page.close()
+        self._all_pages.clear()
+        # Drain the queue
+        while not self._page_pool.empty():
+            try:
+                self._page_pool.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
         if self._playwright:
-            await self._playwright.stop()
+            with contextlib.suppress(Exception):
+                await self._playwright.stop()
 
         if self._chrome_process:
-            self._chrome_process.terminate()
-            self._chrome_process.wait(timeout=5)
+            try:
+                self._chrome_process.terminate()
+                self._chrome_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._chrome_process.kill()
+                self._chrome_process.wait(timeout=3)
+            except Exception:
+                pass
             logger.debug("Chrome process terminated")
 
         self._page = None
         self._context = None
         self._playwright = None
         self._chrome_process = None
+        _active_chrome = None
         self._started = False
         self._cf_cleared = False
         logger.info("Browser session closed")
@@ -157,25 +242,54 @@ class CdpBrowser:
     async def __aexit__(self, *_: object) -> None:
         await self.close()
 
+    # -- page pool ------------------------------------------------------------
+
+    async def acquire_page(self) -> Page:
+        """Get a page from the pool (blocks if none available)."""
+        try:
+            return self._page_pool.get_nowait()
+        except asyncio.QueueEmpty:
+            # All pool pages in use — fall back to the main page
+            return await self._ensure_page()
+
+    def release_page(self, page: Page) -> None:
+        """Return a page to the pool."""
+        if page in self._all_pages:
+            with contextlib.suppress(asyncio.QueueFull):
+                self._page_pool.put_nowait(page)
+
     # -- CF clearance ---------------------------------------------------------
 
     async def ensure_cf_clearance(self) -> None:
-        """Navigate to comix.to to pass CF challenge if needed."""
+        """Navigate to comix.to to pass CF challenge if needed.
+
+        Uses a lock so only one concurrent task performs the clearance check.
+        """
         if self._cf_cleared:
             return
 
-        url = CONFIG.service.base_url
-        logger.info("Checking CF clearance at %s", url)
-        page = await self._ensure_page()
+        async with self._cf_lock:
+            # Double-check after acquiring lock
+            if self._cf_cleared:
+                return
 
-        await page.goto(url, wait_until="domcontentloaded")
+            url = CONFIG.service.base_url
+            logger.info("Checking CF clearance at %s", url)
+            page = await self._ensure_page()
 
-        if await self._is_cf_challenge(page):
-            logger.info("CF challenge detected, waiting for resolution…")
-            await self._wait_for_cf_clearance(page)
+            await page.goto(url, wait_until="domcontentloaded")
 
-        self._cf_cleared = True
-        logger.info("CF clearance confirmed")
+            if await self._is_cf_challenge(page):
+                logger.info("CF challenge detected — bringing Chrome to front for manual solve")
+                with contextlib.suppress(Exception):
+                    await page.evaluate("""() => {
+                        window.moveTo(100, 100);
+                        window.resizeTo(800, 600);
+                    }""")
+                await self._wait_for_cf_clearance(page)
+
+            self._cf_cleared = True
+            logger.info("CF clearance confirmed")
 
     # -- public API -----------------------------------------------------------
 
@@ -190,22 +304,34 @@ class CdpBrowser:
         return await page.content()
 
     async def get_bytes(self, url: str, *, referer: str | None = None) -> bytes:
-        """Download binary content via page.evaluate(fetch())."""
+        """Download binary content via page.evaluate(fetch()) with base64 encoding.
+
+        Uses base64 instead of JSON array for ~3-4x less overhead.
+        """
         if not self._started:
             await self.start()
         await self.ensure_cf_clearance()
-        page = await self._ensure_page()
 
-        result = await page.evaluate(
-            """async ([url, headers]) => {
-                const resp = await fetch(url, { headers: headers || {} });
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                const buf = await resp.arrayBuffer();
-                return Array.from(new Uint8Array(buf));
-            }""",
-            [url, {"Referer": referer} if referer else {}],
-        )
-        return bytes(result)
+        page = await self.acquire_page()
+        try:
+            result = await page.evaluate(
+                """async ([url, headers]) => {
+                    const resp = await fetch(url, { headers: headers || {} });
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const buf = await resp.arrayBuffer();
+                    const bytes = new Uint8Array(buf);
+                    let binary = '';
+                    const chunkSize = 8192;
+                    for (let i = 0; i < bytes.length; i += chunkSize) {
+                        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+                    }
+                    return btoa(binary);
+                }""",
+                [url, {"Referer": referer} if referer else {}],
+            )
+            return base64.b64decode(result)
+        finally:
+            self.release_page(page)
 
     async def post_json(self, url: str, payload: dict[str, object]) -> dict[str, object]:
         """POST JSON via page.evaluate(fetch())."""
@@ -272,8 +398,6 @@ class CdpBrowser:
         return False
 
     async def _wait_for_cf_clearance(self, page: Page) -> None:
-        import asyncio
-
         deadline = time.monotonic() + CONFIG.browser.cf_wait_seconds
 
         while time.monotonic() < deadline:
