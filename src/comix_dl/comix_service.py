@@ -157,64 +157,92 @@ class ComixService:
         )
 
     async def _fetch_chapters(self, hash_id: str) -> list[ChapterInfo]:
-        """Fetch all chapters for a manga by hash_id."""
-        chapters: list[ChapterInfo] = []
-        page = 1
+        """Fetch all chapters for a manga by hash_id.
+
+        Uses parallel page fetching and reads ``pages_count`` directly from the
+        chapter list API, avoiding extra per-chapter API calls.
+        """
+        import asyncio
+
         limit = 100
+        all_chapters: list[ChapterInfo] = []
 
-        while True:
-            api_url = (
-                f"{self._base}/api/v2/manga/{hash_id}/chapters"
-                f"?limit={limit}&page={page}"
-            )
-            try:
-                resp = await self._client.get_json(api_url)
-            except Exception as exc:
-                logger.error("Failed to fetch chapters (page %d): %s", page, exc)
-                break
+        # --- Phase 1: fetch first page to learn total count ---
+        first_url = (
+            f"{self._base}/api/v2/manga/{hash_id}/chapters"
+            f"?limit={limit}&page=1"
+        )
+        try:
+            first_resp = await self._client.get_json(first_url)
+        except Exception as exc:
+            logger.error("Failed to fetch chapters (page 1): %s", exc)
+            return []
 
-            result_obj = resp.get("result", {})
-            items = result_obj.get("items", []) if isinstance(result_obj, dict) else []
-            if not isinstance(items, list) or not items:
-                break
+        result_obj = first_resp.get("result", {})
+        first_items = result_obj.get("items", []) if isinstance(result_obj, dict) else []
+        if not isinstance(first_items, list) or not first_items:
+            return []
 
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                chapter_id = item.get("chapter_id", 0)
-                number = item.get("number", 0)
-                name = item.get("name", "")
-                lang = item.get("language", "en")
+        all_chapters.extend(self._parse_chapter_items(first_items))
 
-                if chapter_id:
-                    label = f"Chapter {number}"
-                    if name:
-                        label += f" - {name}"
-                    chapters.append(ChapterInfo(
-                        title=label,
-                        chapter_id=chapter_id,
-                        number=number,
-                        name=name,
-                        language=lang,
-                    ))
+        total = result_obj.get("total", 0) if isinstance(result_obj, dict) else 0
+        total_pages = (total + limit - 1) // limit if isinstance(total, int) and total > 0 else 1
 
-            # Pagination
-            total = result_obj.get("total", 0) if isinstance(result_obj, dict) else 0
-            if isinstance(total, int) and total > 0 and len(chapters) >= total:
-                break
-            if len(items) < limit:
-                break
-            page += 1
+        # --- Phase 2: fetch remaining pages in parallel ---
+        if total_pages > 1:
+            remaining = list(range(2, total_pages + 1))
+            logger.debug("Fetching %d more chapter page(s) in parallel", len(remaining))
+
+            async def _fetch_page(page: int) -> list[ChapterInfo]:
+                url = (
+                    f"{self._base}/api/v2/manga/{hash_id}/chapters"
+                    f"?limit={limit}&page={page}"
+                )
+                try:
+                    resp = await self._client.get_json(url)
+                    items = resp.get("result", {}).get("items", [])
+                    return self._parse_chapter_items(items) if isinstance(items, list) else []
+                except Exception as exc:
+                    logger.error("Failed to fetch chapters (page %d): %s", page, exc)
+                    return []
+
+            results = await asyncio.gather(*[_fetch_page(p) for p in remaining])
+            for page_chapters in results:
+                all_chapters.extend(page_chapters)
 
         # Sort by chapter number
-        chapters.sort(key=lambda c: c.number)
+        all_chapters.sort(key=lambda c: c.number)
 
-        # Deduplicate: API often returns multiple entries per chapter number
-        # (e.g. from different uploaders). For duplicates, fetch the image
-        # count and keep the version with the most images.
-        chapters = await self._deduplicate_chapters(chapters)
+        # Deduplicate
+        all_chapters = await self._deduplicate_chapters(all_chapters)
 
-        logger.info("Fetched %d chapters for '%s'", len(chapters), hash_id)
+        logger.info("Fetched %d chapters for '%s'", len(all_chapters), hash_id)
+        return all_chapters
+
+    def _parse_chapter_items(self, items: list[dict[str, object]]) -> list[ChapterInfo]:
+        """Parse raw API chapter items into ChapterInfo objects."""
+        chapters: list[ChapterInfo] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            chapter_id = item.get("chapter_id", 0)
+            number = item.get("number", 0)
+            name = item.get("name", "")
+            lang = item.get("language", "en")
+            pages_count = item.get("pages_count", 0)
+
+            if chapter_id:
+                label = f"Chapter {number}"
+                if name:
+                    label += f" - {name}"
+                chapters.append(ChapterInfo(
+                    title=label,
+                    chapter_id=chapter_id,
+                    number=number,
+                    name=name,
+                    language=lang,
+                    image_count=pages_count if isinstance(pages_count, int) else 0,
+                ))
         return chapters
 
     async def _deduplicate_chapters(self, chapters: list[ChapterInfo]) -> list[ChapterInfo]:
@@ -225,16 +253,14 @@ class ComixService:
         Only chapters with the same number AND the same (or missing) subtitle are
         considered true duplicates.
 
-        Also populates ``image_count`` on every chapter for CLI display.
+        Uses ``image_count`` from the chapter list API (``pages_count`` field).
+        Only falls back to per-chapter API calls if ``pages_count`` was missing.
         """
         if not chapters:
             return chapters
 
-        import asyncio
         from collections import defaultdict
 
-        # Group by (number, name) — this keeps distinct subtitles separate
-        # An empty name is treated as a wildcard that matches any name
         groups: dict[float, list[ChapterInfo]] = defaultdict(list)
         for ch in chapters:
             groups[ch.number].append(ch)
@@ -244,11 +270,10 @@ class ComixService:
 
         for _num, chs in groups.items():
             if len(chs) == 1:
-                # No duplicates for this number
                 result.append(chs[0])
                 continue
 
-            # Multiple entries for same chapter number — sub-group by name
+            # Multiple entries — sub-group by name
             named: dict[str, list[ChapterInfo]] = defaultdict(list)
             unnamed: list[ChapterInfo] = []
             for ch in chs:
@@ -258,12 +283,10 @@ class ComixService:
                     unnamed.append(ch)
 
             if not named:
-                # All unnamed — they're true duplicates, pick best by image count
                 best = await self._pick_best(unnamed)
                 result.append(best)
                 dup_count += len(unnamed) - 1
             else:
-                # Keep one from each distinct name group
                 for name_group in named.values():
                     if len(name_group) == 1:
                         result.append(name_group[0])
@@ -271,40 +294,30 @@ class ComixService:
                         best = await self._pick_best(name_group)
                         result.append(best)
                         dup_count += len(name_group) - 1
-                # Unnamed entries are duplicates of named ones — discard
                 dup_count += len(unnamed)
 
         result.sort(key=lambda c: c.number)
         if dup_count:
             logger.info("Removed %d duplicate chapter(s)", dup_count)
 
-        # Fetch image counts for chapters that don't have them yet (in parallel)
-        missing = [ch for ch in result if ch.image_count == 0]
-        if missing:
-            logger.info("Fetching image counts for %d chapter(s)…", len(missing))
-
-            async def _fetch_count(ch: ChapterInfo) -> None:
-                ch.image_count = await self._get_image_count(ch.chapter_id)
-
-            await asyncio.gather(*[_fetch_count(ch) for ch in missing])
-
         return result
 
     async def _pick_best(self, candidates: list[ChapterInfo]) -> ChapterInfo:
-        """From a list of true duplicates, pick the one with the most images."""
-        best = candidates[0]
-        best_count = 0
+        """From a list of true duplicates, pick the one with the most images.
 
-        for ch in candidates:
-            count = await self._get_image_count(ch.chapter_id)
-            ch.image_count = count
-            if count > best_count:
-                best_count = count
-                best = ch
-            elif count == best_count and len(ch.title) > len(best.title):
-                best = ch
+        Uses ``image_count`` already populated from the list API's ``pages_count``.
+        Falls back to per-chapter API calls only if all counts are 0.
+        """
+        # Check if we already have counts from pages_count
+        has_counts = any(ch.image_count > 0 for ch in candidates)
 
-        return best
+        if not has_counts:
+            # pages_count was missing — fetch individually
+            for ch in candidates:
+                ch.image_count = await self._get_image_count(ch.chapter_id)
+
+        # Pick the one with the most images (tie-break: longer title)
+        return max(candidates, key=lambda ch: (ch.image_count, len(ch.title)))
 
     async def _get_image_count(self, chapter_id: int) -> int:
         """Fetch the number of images in a chapter (lightweight dedup check)."""
