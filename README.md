@@ -109,10 +109,27 @@ comix-dl download "https://comix.to/manga/some-manga" --chapters all --format pd
 1. Enter a search query
 2. Select a manga from the results
 3. View available chapters (with page counts and automatic deduplication)
-4. Select chapters to download (`all`, `1-5`, `1,3,5`)
-5. Choose output format (`pdf`, `cbz`, `both`)
-6. Chapters are downloaded in parallel with progress bars
-7. Already-downloaded chapters are automatically skipped (resume)
+4. **Filter chapters** by keyword (optional — press Enter to skip)
+5. Select chapters to download (`all`, `1-5`, `1,3,5`)
+6. Choose output format (`pdf`, `cbz`, `both`)
+7. Chapters are downloaded in parallel with progress bars
+8. Already-downloaded chapters are automatically skipped (resume)
+
+### Chapter Filter
+
+After the chapter list is displayed, you can filter before selecting:
+
+| Command | Effect | Example |
+|---------|--------|---------|
+| `+keyword` | Keep only chapters matching the keyword | `+stage` |
+| `-keyword` | Remove chapters matching the keyword | `-extra` |
+| `+key1 +key2` | Keep chapters matching **any** keyword (OR) | `+stage +extra` |
+| `-key1 -key2` | Remove chapters matching **any** keyword | `-stage -extra` |
+| `u` | Undo last filter | |
+| `r` | Reset to original list | |
+| Enter | Done filtering, proceed to selection | |
+
+Filters are case-insensitive and match anywhere in the chapter title. If a filter removes all chapters, it auto-resets. The filtered list is re-displayed after each operation.
 
 ### Settings
 
