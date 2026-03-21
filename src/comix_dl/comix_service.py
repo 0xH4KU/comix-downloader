@@ -157,64 +157,49 @@ class ComixService:
         )
 
     async def _fetch_chapters(self, hash_id: str) -> list[ChapterInfo]:
-        """Fetch all chapters for a manga by hash_id.
-
-        Uses parallel page fetching and reads ``pages_count`` directly from the
-        chapter list API, avoiding extra per-chapter API calls.
-        """
+        """Fetch all chapters for a manga by hash_id."""
         import asyncio
 
         limit = 100
         all_chapters: list[ChapterInfo] = []
+        page = 1
 
-        # --- Phase 1: fetch first page to learn total count ---
-        first_url = (
-            f"{self._base}/api/v2/manga/{hash_id}/chapters"
-            f"?limit={limit}&page=1"
-        )
-        try:
-            first_resp = await self._client.get_json(first_url)
-        except Exception as exc:
-            logger.error("Failed to fetch chapters (page 1): %s", exc)
-            return []
+        # Fetch chapter list pages sequentially until exhausted
+        while True:
+            api_url = (
+                f"{self._base}/api/v2/manga/{hash_id}/chapters"
+                f"?limit={limit}&page={page}"
+            )
+            try:
+                resp = await self._client.get_json(api_url)
+            except Exception as exc:
+                logger.error("Failed to fetch chapters (page %d): %s", page, exc)
+                break
 
-        result_obj = first_resp.get("result", {})
-        first_items = result_obj.get("items", []) if isinstance(result_obj, dict) else []
-        if not isinstance(first_items, list) or not first_items:
-            return []
+            result_obj = resp.get("result", {})
+            items = result_obj.get("items", []) if isinstance(result_obj, dict) else []
+            if not isinstance(items, list) or not items:
+                break
 
-        all_chapters.extend(self._parse_chapter_items(first_items))
+            all_chapters.extend(self._parse_chapter_items(items))
 
-        total = result_obj.get("total", 0) if isinstance(result_obj, dict) else 0
-        total_pages = (total + limit - 1) // limit if isinstance(total, int) and total > 0 else 1
+            if len(items) < limit:
+                break
+            page += 1
 
-        # --- Phase 2: fetch remaining pages in parallel ---
-        if total_pages > 1:
-            remaining = list(range(2, total_pages + 1))
-            logger.debug("Fetching %d more chapter page(s) in parallel", len(remaining))
-
-            async def _fetch_page(page: int) -> list[ChapterInfo]:
-                url = (
-                    f"{self._base}/api/v2/manga/{hash_id}/chapters"
-                    f"?limit={limit}&page={page}"
-                )
-                try:
-                    resp = await self._client.get_json(url)
-                    items = resp.get("result", {}).get("items", [])
-                    return self._parse_chapter_items(items) if isinstance(items, list) else []
-                except Exception as exc:
-                    logger.error("Failed to fetch chapters (page %d): %s", page, exc)
-                    return []
-
-            results = await asyncio.gather(*[_fetch_page(p) for p in remaining])
-            for page_chapters in results:
-                all_chapters.extend(page_chapters)
-
-        # Sort by chapter number
+        # Sort + deduplicate
         all_chapters.sort(key=lambda c: c.number)
-
-        # Deduplicate
         all_chapters = await self._deduplicate_chapters(all_chapters)
+
+        # Fetch image counts in parallel for the final (deduplicated) list
+        missing = [ch for ch in all_chapters if ch.image_count == 0]
+        if missing:
+            logger.info("Fetching image counts for %d chapter(s)…", len(missing))
+
+            async def _fetch_count(ch: ChapterInfo) -> None:
+                ch.image_count = await self._get_image_count(ch.chapter_id)
+
+            await asyncio.gather(*[_fetch_count(ch) for ch in missing])
 
         logger.info("Fetched %d chapters for '%s'", len(all_chapters), hash_id)
         return all_chapters
