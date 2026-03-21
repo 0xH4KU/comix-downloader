@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import random
 import signal
 import sys
 import time
@@ -32,6 +33,7 @@ from rich.text import Text
 from comix_dl import __version__
 from comix_dl.cdp_browser import CdpBrowser
 from comix_dl.comix_service import ChapterInfo, ComixService, SearchResult, SeriesInfo
+from comix_dl.config import CONFIG
 from comix_dl.downloader import Downloader, DownloadProgress
 from comix_dl.settings import Settings, load_settings, save_settings
 
@@ -386,11 +388,13 @@ def _flow_settings() -> None:
     while True:
         console.print()
         console.print(Panel("[bold]Settings[/bold]", border_style="cyan"))
+        delay_status = "[green]on[/green]" if settings.download_delay else "[red]off[/red]"
         console.print(f"  [cyan]1[/cyan]  Download directory:    [bold]{settings.output_dir}[/bold]")
         console.print(f"  [cyan]2[/cyan]  Default format:        [bold]{settings.default_format}[/bold]")
         console.print(f"  [cyan]3[/cyan]  Concurrent chapters:   [bold]{settings.concurrent_chapters}[/bold]")
         console.print(f"  [cyan]4[/cyan]  Concurrent images:     [bold]{settings.concurrent_images}[/bold]")
         console.print(f"  [cyan]5[/cyan]  Max retries:           [bold]{settings.max_retries}[/bold]")
+        console.print(f"  [cyan]6[/cyan]  Download delay:        {delay_status}")
         console.print("  [cyan]s[/cyan]  Save & return")
         console.print("  [cyan]q[/cyan]  Discard & return")
 
@@ -426,6 +430,11 @@ def _flow_settings() -> None:
         elif choice == "5":
             val = IntPrompt.ask("  Max retries (0-10)", default=settings.max_retries)
             settings.max_retries = max(0, min(10, val))
+
+        elif choice == "6":
+            settings.download_delay = not settings.download_delay
+            state = "enabled" if settings.download_delay else "disabled"
+            console.print(f"  [bold]Download delay {state}[/bold]")
 
 
 # -- Download engine ----------------------------------------------------------
@@ -515,6 +524,11 @@ async def _download_chapters(
             except RuntimeError:
                 progress.update(task_id, description=f"  [yellow]⚠ {ch.title} (convert failed)[/yellow]")
                 failed_count += 1
+
+            # Delay between chapters to avoid rate limits
+            ch_delay = CONFIG.download.chapter_delay
+            if ch_delay > 0:
+                await asyncio.sleep(random.uniform(ch_delay * 0.5, ch_delay * 1.5))
 
     with progress:
         tasks = [_one(ch) for ch in chapters]

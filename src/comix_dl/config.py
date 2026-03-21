@@ -32,6 +32,8 @@ class DownloadConfig:
     max_concurrent_images: int = 8
     max_retries: int = 3
     retry_delay: float = 1.0
+    image_delay: float = 0.15  # seconds between image requests (anti-rate-limit)
+    chapter_delay: float = 0.8  # seconds between chapters
     connect_timeout_ms: int = 10_000
     read_timeout_ms: int = 30_000
     default_output_dir: Path = field(default_factory=lambda: Path.home() / "Downloads" / "comix-dl")

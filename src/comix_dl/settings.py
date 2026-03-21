@@ -28,6 +28,7 @@ class Settings:
     concurrent_chapters: int = 2
     concurrent_images: int = 8
     max_retries: int = 3
+    download_delay: bool = True  # add random delays to avoid rate limits
 
 
 def load_settings() -> Settings:
@@ -67,3 +68,10 @@ def apply_settings_to_config(settings: Settings) -> None:
     CONFIG.download.max_concurrent_images = settings.concurrent_images
     CONFIG.download.max_retries = settings.max_retries
     CONFIG.convert.default_format = settings.default_format
+    # Rate limiting: 0 means no delay
+    if settings.download_delay:
+        CONFIG.download.image_delay = 0.15
+        CONFIG.download.chapter_delay = 0.8
+    else:
+        CONFIG.download.image_delay = 0.0
+        CONFIG.download.chapter_delay = 0.0

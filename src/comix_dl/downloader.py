@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -118,6 +119,11 @@ class Downloader:
         async def fetch_one(index: int, url: str) -> bool:
             nonlocal completed, failed, skipped
             async with semaphore:
+                # Random delay to avoid rate limits
+                delay = CONFIG.download.image_delay
+                if delay > 0:
+                    await asyncio.sleep(random.uniform(delay * 0.3, delay * 1.7))
+
                 filename = f"{index + 1:03d}"
 
                 # Resume: skip if image already exists
