@@ -603,18 +603,20 @@ def _print_chapters_table(chapters: list[ChapterInfo]) -> None:
 def _filter_chapters_interactive(chapters: list[ChapterInfo]) -> list[ChapterInfo]:
     """Let the user filter the chapter list by keyword before selection.
 
-    Syntax (case-insensitive):
-        +keyword   keep only chapters whose title contains 'keyword'
-        -keyword   remove chapters whose title contains 'keyword'
-        (empty)    done filtering, continue to selection
-
-    Multiple filters can be applied one after the other.
+    Syntax (case-insensitive, multiple tokens per line):
+        +key1 +key2   keep chapters matching ANY of the keywords (OR)
+        -key1 -key2   remove chapters matching ANY of the keywords
+        u             undo last filter
+        r             reset to original list
+        (empty)       done filtering, continue to selection
     """
     filtered = list(chapters)
+    history: list[list[ChapterInfo]] = []  # undo stack
 
     console.print()
     console.print(
-        "[dim]Filter chapters:  +keyword (keep)  ·  -keyword (exclude)  ·  Enter to skip[/dim]"
+        "[dim]Filter:  +key (keep)  ·  -key (exclude)  ·"
+        "  multi: +key1 +key2  ·  u=undo  ·  r=reset  ·  Enter=skip[/dim]"
     )
 
     while True:
@@ -622,41 +624,89 @@ def _filter_chapters_interactive(chapters: list[ChapterInfo]) -> list[ChapterInf
         if not raw:
             break
 
-        keyword = raw.strip()
-        if not keyword:
+        cmd = raw.strip()
+        if not cmd:
             break
 
-        if keyword.startswith("+"):
-            word = keyword[1:].strip().lower()
-            if word:
-                before = len(filtered)
-                filtered = [ch for ch in filtered if word in ch.title.lower()]
-                removed = before - len(filtered)
-                console.print(f"  [green]Kept {len(filtered)} chapter(s) matching '{word}' (removed {removed})[/green]")
-        elif keyword.startswith("-"):
-            word = keyword[1:].strip().lower()
-            if word:
-                before = len(filtered)
-                filtered = [ch for ch in filtered if word not in ch.title.lower()]
-                removed = before - len(filtered)
-                msg = f"  [yellow]Removed {removed} chapter(s) matching '{word}' ({len(filtered)} remaining)[/yellow]"
-                console.print(msg)
-        else:
-            # Treat bare keyword as +keyword (keep matching)
-            word = keyword.lower()
-            before = len(filtered)
-            filtered = [ch for ch in filtered if word in ch.title.lower()]
-            removed = before - len(filtered)
-            console.print(f"  [green]Kept {len(filtered)} chapter(s) matching '{word}' (removed {removed})[/green]")
+        # Undo
+        if cmd.lower() == "u":
+            if history:
+                filtered = history.pop()
+                console.print(f"  [cyan]Undone. {len(filtered)} chapter(s)[/cyan]")
+                _print_chapters_table(filtered)
+            else:
+                console.print("  [dim]Nothing to undo[/dim]")
+            continue
+
+        # Reset
+        if cmd.lower() == "r":
+            history.append(filtered)
+            filtered = list(chapters)
+            console.print(f"  [cyan]Reset. {len(filtered)} chapter(s)[/cyan]")
+            _print_chapters_table(filtered)
+            continue
+
+        # Parse tokens: split by space, group by +/-
+        import re
+        tokens = re.findall(r'[+\-]?\S+', cmd)
+        keep_words: list[str] = []
+        remove_words: list[str] = []
+
+        for tok in tokens:
+            if tok.startswith("+"):
+                w = tok[1:].strip().lower()
+                if w:
+                    keep_words.append(w)
+            elif tok.startswith("-"):
+                w = tok[1:].strip().lower()
+                if w:
+                    remove_words.append(w)
+            else:
+                # bare word → keep
+                keep_words.append(tok.lower())
+
+        if not keep_words and not remove_words:
+            continue
+
+        # Save state for undo
+        history.append(filtered)
+        before = len(filtered)
+
+        if keep_words:
+            # Keep chapters matching ANY of the keywords (OR)
+            filtered = [
+                ch for ch in filtered
+                if any(w in ch.title.lower() for w in keep_words)
+            ]
+            label = ", ".join(keep_words)
+            kept = len(filtered)
+            console.print(
+                f"  [green]Kept {kept} chapter(s) matching"
+                f" '{label}' (removed {before - kept})[/green]"
+            )
+
+        if remove_words:
+            before2 = len(filtered)
+            # Remove chapters matching ANY of the keywords
+            filtered = [
+                ch for ch in filtered
+                if not any(w in ch.title.lower() for w in remove_words)
+            ]
+            label = ", ".join(remove_words)
+            removed = before2 - len(filtered)
+            console.print(
+                f"  [yellow]Removed {removed} chapter(s) matching"
+                f" '{label}' ({len(filtered)} remaining)[/yellow]"
+            )
 
         if not filtered:
-            console.print("[red]No chapters left! Resetting filter.[/red]")
-            filtered = list(chapters)
+            console.print("[red]No chapters left! Resetting.[/red]")
+            filtered = history.pop()
+            continue
 
-        # Show updated list after each filter
-        if len(filtered) != len(chapters):
-            console.print(f"\n[bold]{len(filtered)} chapters after filtering:[/bold]")
-            _print_chapters_table(filtered)
+        # Show updated list
+        console.print(f"\n[bold]{len(filtered)} chapters after filtering:[/bold]")
+        _print_chapters_table(filtered)
 
     return filtered
 
