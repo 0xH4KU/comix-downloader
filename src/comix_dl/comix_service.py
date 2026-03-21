@@ -43,6 +43,7 @@ class ChapterInfo:
     title: str
     chapter_id: int
     number: float
+    name: str = ""  # subtitle (e.g. "Dear Little Brother")
     language: str = "en"
     image_count: int = 0
 
@@ -193,6 +194,7 @@ class ComixService:
                         title=label,
                         chapter_id=chapter_id,
                         number=number,
+                        name=name,
                         language=lang,
                     ))
 
@@ -218,6 +220,11 @@ class ComixService:
     async def _deduplicate_chapters(self, chapters: list[ChapterInfo]) -> list[ChapterInfo]:
         """Remove duplicate chapters, keeping the one with the most images.
 
+        Chapters with the same number but *different* subtitles are treated as
+        distinct content (e.g. "Chapter 0 - Volume 11" vs "Chapter 0 - Volume 12").
+        Only chapters with the same number AND the same (or missing) subtitle are
+        considered true duplicates.
+
         Also populates ``image_count`` on every chapter for CLI display.
         """
         if not chapters:
@@ -226,47 +233,50 @@ class ComixService:
         import asyncio
         from collections import defaultdict
 
-        # Group by chapter number
+        # Group by (number, name) — this keeps distinct subtitles separate
+        # An empty name is treated as a wildcard that matches any name
         groups: dict[float, list[ChapterInfo]] = defaultdict(list)
         for ch in chapters:
             groups[ch.number].append(ch)
 
-        # Find which groups have duplicates
-        duplicates = {num: chs for num, chs in groups.items() if len(chs) > 1}
-
-        if duplicates:
-            logger.info("Found %d chapter(s) with duplicates, checking image counts…",
-                         len(duplicates))
-
-        # For each duplicate group, fetch image count and pick the best
-        best: dict[float, ChapterInfo] = {}
-        for num, chs in duplicates.items():
-            best_ch = chs[0]
-            best_count = 0
-
-            for ch in chs:
-                count = await self._get_image_count(ch.chapter_id)
-                ch.image_count = count
-                if count > best_count:
-                    best_count = count
-                    best_ch = ch
-                elif count == best_count and len(ch.title) > len(best_ch.title):
-                    best_ch = ch
-
-            best[num] = best_ch
-
-        # Build deduplicated list
         result: list[ChapterInfo] = []
-        for num, chs in groups.items():
-            if num in best:
-                result.append(best[num])
-            else:
+        dup_count = 0
+
+        for _num, chs in groups.items():
+            if len(chs) == 1:
+                # No duplicates for this number
                 result.append(chs[0])
+                continue
+
+            # Multiple entries for same chapter number — sub-group by name
+            named: dict[str, list[ChapterInfo]] = defaultdict(list)
+            unnamed: list[ChapterInfo] = []
+            for ch in chs:
+                if ch.name:
+                    named[ch.name].append(ch)
+                else:
+                    unnamed.append(ch)
+
+            if not named:
+                # All unnamed — they're true duplicates, pick best by image count
+                best = await self._pick_best(unnamed)
+                result.append(best)
+                dup_count += len(unnamed) - 1
+            else:
+                # Keep one from each distinct name group
+                for name_group in named.values():
+                    if len(name_group) == 1:
+                        result.append(name_group[0])
+                    else:
+                        best = await self._pick_best(name_group)
+                        result.append(best)
+                        dup_count += len(name_group) - 1
+                # Unnamed entries are duplicates of named ones — discard
+                dup_count += len(unnamed)
 
         result.sort(key=lambda c: c.number)
-        if duplicates:
-            removed = len(chapters) - len(result)
-            logger.info("Removed %d duplicate chapter(s)", removed)
+        if dup_count:
+            logger.info("Removed %d duplicate chapter(s)", dup_count)
 
         # Fetch image counts for chapters that don't have them yet (in parallel)
         missing = [ch for ch in result if ch.image_count == 0]
@@ -279,6 +289,22 @@ class ComixService:
             await asyncio.gather(*[_fetch_count(ch) for ch in missing])
 
         return result
+
+    async def _pick_best(self, candidates: list[ChapterInfo]) -> ChapterInfo:
+        """From a list of true duplicates, pick the one with the most images."""
+        best = candidates[0]
+        best_count = 0
+
+        for ch in candidates:
+            count = await self._get_image_count(ch.chapter_id)
+            ch.image_count = count
+            if count > best_count:
+                best_count = count
+                best = ch
+            elif count == best_count and len(ch.title) > len(best.title):
+                best = ch
+
+        return best
 
     async def _get_image_count(self, chapter_id: int) -> int:
         """Fetch the number of images in a chapter (lightweight dedup check)."""
