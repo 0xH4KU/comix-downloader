@@ -44,6 +44,7 @@ class ChapterInfo:
     chapter_id: int
     number: float
     language: str = "en"
+    image_count: int = 0
 
 
 @dataclass
@@ -205,8 +206,93 @@ class ComixService:
 
         # Sort by chapter number
         chapters.sort(key=lambda c: c.number)
+
+        # Deduplicate: API often returns multiple entries per chapter number
+        # (e.g. from different uploaders). For duplicates, fetch the image
+        # count and keep the version with the most images.
+        chapters = await self._deduplicate_chapters(chapters)
+
         logger.info("Fetched %d chapters for '%s'", len(chapters), hash_id)
         return chapters
+
+    async def _deduplicate_chapters(self, chapters: list[ChapterInfo]) -> list[ChapterInfo]:
+        """Remove duplicate chapters, keeping the one with the most images.
+
+        Also populates ``image_count`` on every chapter for CLI display.
+        """
+        if not chapters:
+            return chapters
+
+        import asyncio
+        from collections import defaultdict
+
+        # Group by chapter number
+        groups: dict[float, list[ChapterInfo]] = defaultdict(list)
+        for ch in chapters:
+            groups[ch.number].append(ch)
+
+        # Find which groups have duplicates
+        duplicates = {num: chs for num, chs in groups.items() if len(chs) > 1}
+
+        if duplicates:
+            logger.info("Found %d chapter(s) with duplicates, checking image counts…",
+                         len(duplicates))
+
+        # For each duplicate group, fetch image count and pick the best
+        best: dict[float, ChapterInfo] = {}
+        for num, chs in duplicates.items():
+            best_ch = chs[0]
+            best_count = 0
+
+            for ch in chs:
+                count = await self._get_image_count(ch.chapter_id)
+                ch.image_count = count
+                if count > best_count:
+                    best_count = count
+                    best_ch = ch
+                elif count == best_count and len(ch.title) > len(best_ch.title):
+                    best_ch = ch
+
+            best[num] = best_ch
+
+        # Build deduplicated list
+        result: list[ChapterInfo] = []
+        for num, chs in groups.items():
+            if num in best:
+                result.append(best[num])
+            else:
+                result.append(chs[0])
+
+        result.sort(key=lambda c: c.number)
+        if duplicates:
+            removed = len(chapters) - len(result)
+            logger.info("Removed %d duplicate chapter(s)", removed)
+
+        # Fetch image counts for chapters that don't have them yet (in parallel)
+        missing = [ch for ch in result if ch.image_count == 0]
+        if missing:
+            logger.info("Fetching image counts for %d chapter(s)…", len(missing))
+
+            async def _fetch_count(ch: ChapterInfo) -> None:
+                ch.image_count = await self._get_image_count(ch.chapter_id)
+
+            await asyncio.gather(*[_fetch_count(ch) for ch in missing])
+
+        return result
+
+    async def _get_image_count(self, chapter_id: int) -> int:
+        """Fetch the number of images in a chapter (lightweight dedup check)."""
+        api_url = f"{self._base}/api/v2/chapters/{chapter_id}"
+        try:
+            resp = await self._client.get_json(api_url)
+            data = resp.get("result", {})
+            if isinstance(data, dict):
+                images = data.get("images", [])
+                if isinstance(images, list):
+                    return len(images)
+        except Exception as exc:
+            logger.debug("Failed to get image count for chapter %d: %s", chapter_id, exc)
+        return 0
 
     async def get_chapter_images(self, chapter_id: int) -> ChapterImages | None:
         """Fetch chapter images by chapter_id.

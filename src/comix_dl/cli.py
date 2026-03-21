@@ -571,10 +571,12 @@ def _print_chapters_table(chapters: list[ChapterInfo]) -> None:
     table = Table(show_lines=False, show_header=True)
     table.add_column("#", style="dim", width=4)
     table.add_column("Chapter", style="bold")
-    table.add_column("Language", style="dim", width=6)
+    table.add_column("Pages", style="cyan", justify="right", width=6)
+    table.add_column("Lang", style="dim", width=5)
 
     for i, ch in enumerate(chapters, 1):
-        table.add_row(str(i), ch.title, ch.language)
+        pages = str(ch.image_count) if ch.image_count > 0 else "—"
+        table.add_row(str(i), ch.title, pages, ch.language)
 
     console.print(table)
 
