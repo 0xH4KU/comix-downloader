@@ -653,9 +653,10 @@ def _filter_chapters_interactive(chapters: list[ChapterInfo]) -> list[ChapterInf
             console.print("[red]No chapters left! Resetting filter.[/red]")
             filtered = list(chapters)
 
-    if len(filtered) != len(chapters):
-        console.print(f"\n[bold]{len(filtered)} chapters after filtering:[/bold]")
-        _print_chapters_table(filtered)
+        # Show updated list after each filter
+        if len(filtered) != len(chapters):
+            console.print(f"\n[bold]{len(filtered)} chapters after filtering:[/bold]")
+            _print_chapters_table(filtered)
 
     return filtered
 
