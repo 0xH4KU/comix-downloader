@@ -355,21 +355,27 @@ class CdpBrowser:
         return result  # type: ignore[no-any-return]
 
     async def get_json(self, url: str) -> dict[str, object]:
-        """GET JSON via page.evaluate(fetch())."""
+        """GET JSON via page.evaluate(fetch()).
+
+        Uses page pool for parallel requests.
+        """
         if not self._started:
             await self.start()
         await self.ensure_cf_clearance()
-        page = await self._ensure_page()
 
-        result = await page.evaluate(
-            """async (url) => {
-                const resp = await fetch(url);
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                return await resp.json();
-            }""",
-            url,
-        )
-        return result  # type: ignore[no-any-return]
+        page = await self.acquire_page()
+        try:
+            result = await page.evaluate(
+                """async (url) => {
+                    const resp = await fetch(url);
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    return await resp.json();
+                }""",
+                url,
+            )
+            return result  # type: ignore[no-any-return]
+        finally:
+            self.release_page(page)
 
     # -- CF detection ---------------------------------------------------------
 
