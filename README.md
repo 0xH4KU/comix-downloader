@@ -1,5 +1,10 @@
 # comix-downloader
 
+[![Version](https://img.shields.io/badge/version-0.2.0-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
+
 A focused [comix.to](https://comix.to) manga downloader with Cloudflare bypass.
 
 Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI output).
