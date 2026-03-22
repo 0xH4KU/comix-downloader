@@ -29,6 +29,7 @@ class Settings:
     concurrent_images: int = 8
     max_retries: int = 3
     download_delay: bool = True  # add random delays to avoid rate limits
+    optimize_images: bool = True  # convert images to WebP before packaging
 
 
 def load_settings() -> Settings:
@@ -68,6 +69,7 @@ def apply_settings_to_config(settings: Settings) -> None:
     CONFIG.download.max_concurrent_images = settings.concurrent_images
     CONFIG.download.max_retries = settings.max_retries
     CONFIG.convert.default_format = settings.default_format
+    CONFIG.convert.optimize_images = settings.optimize_images
     # Rate limiting: 0 means no delay
     if settings.download_delay:
         CONFIG.download.image_delay = 0.15

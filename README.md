@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -19,6 +19,10 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Smart dedup** — auto-detects duplicate chapter uploads, keeps the best version by image count
 - **Rate limiting** — randomized download delays to avoid triggering anti-scraping (toggleable)
 - **PDF / CBZ output** — convert downloaded images to PDF or CBZ archives
+- **Image optimization** — optional WebP conversion for 40-60% size savings (on by default)
+- **Download speed stats** — shows total size and average speed in download summary
+- **Desktop notifications** — system notification on download completion (macOS/Linux)
+- **Download history** — tracks what you've downloaded with `comix-dl history`
 - **Persistent settings** — saves preferences to `~/.config/comix-dl/settings.json`
 
 ## Platform Support
@@ -54,6 +58,12 @@ This will:
 
 After install, use `comix-dl` from **any directory**.
 
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/0xH4KU/comix-downloader/main/install.ps1 | iex
+```
+
 ## Manual Install
 
 ```bash
@@ -72,6 +82,9 @@ curl -fsSL https://raw.githubusercontent.com/0xH4KU/comix-downloader/main/instal
 
 # Uninstall
 comix-dl-uninstall
+# or
+bash install.sh --uninstall  # Linux/macOS
+.\install.ps1 -Uninstall     # Windows
 ```
 
 ## Usage
@@ -91,8 +104,10 @@ The main menu offers:
 ```
   1  Search manga
   2  Download by URL
-  3  Settings
-  4  Doctor (diagnostics)
+  3  My downloads
+  4  Download history
+  5  Settings
+  6  Doctor (diagnostics)
   q  Exit
 ```
 
@@ -107,18 +122,39 @@ comix-dl download "manga-slug" --chapters 1-5 --format cbz
 
 # Download all chapters to a custom directory
 comix-dl download "https://comix.to/manga/some-manga" --chapters all --format pdf --output ~/Comics
+
+# Download without image optimization
+comix-dl download "manga-slug" --no-optimize
+
+# Show manga info without downloading
+comix-dl info "https://comix.to/manga/some-manga"
+
+# List downloaded manga
+comix-dl list
+
+# Clean up raw image directories (after conversion)
+comix-dl clean
+comix-dl clean --force    # Skip confirmation
+
+# View download history
+comix-dl history
+comix-dl history clear    # Purge all history
+
+# Quiet mode (for scripting, errors only)
+comix-dl -q download "manga-slug"
 ```
 
 ### Search & Download Flow
 
 1. Enter a search query
-2. Select a manga from the results
+2. Select a manga from the results (`1` for direct, `1i` to show info first)
 3. View available chapters (with page counts and automatic deduplication)
 4. **Filter chapters** by keyword (optional — press Enter to skip)
 5. Select chapters to download (`all`, `1-5`, `1,3,5`)
 6. Choose output format (`pdf`, `cbz`, `both`)
 7. Chapters are downloaded in parallel with progress bars
 8. Already-downloaded chapters are automatically skipped (resume)
+9. Cleanup prompt — choose to remove raw image directories after conversion
 
 ### Chapter Filter
 
@@ -148,6 +184,7 @@ Accessible from the main menu (`3`) or `comix-dl settings`. Configurable options
 | Concurrent images    | `8`                              | Images per chapter in parallel      |
 | Max retries          | `3`                              | Retry count for failed images       |
 | Download delay       | `on`                             | Random delays to avoid rate limits  |
+| Optimize images      | `on`                             | Convert images to WebP before packaging |
 
 Settings persist to `~/.config/comix-dl/settings.json`.
 
@@ -191,9 +228,11 @@ src/comix_dl/
   cdp_browser.py      # Chrome CDP connection (CF bypass, page pool)
   comix_service.py    # REST API client (search, chapters, dedup)
   downloader.py       # Concurrent image downloader with resume
-  converters.py       # PDF / CBZ conversion
+  converters.py       # PDF / CBZ conversion + image optimization
   config.py           # Default configuration dataclasses
   settings.py         # Persistent user settings (JSON)
+  history.py          # Download history tracking
+  notify.py           # Desktop notifications (macOS/Linux)
 ```
 
 ## License

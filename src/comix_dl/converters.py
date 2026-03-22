@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import zipfile
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from comix_dl.config import CONFIG
@@ -41,7 +42,7 @@ def to_cbz(image_dir: Path, output_path: Path | None = None) -> Path:
     if not images:
         raise RuntimeError(f"No images found in {image_dir}")
 
-    out = output_path or image_dir.with_suffix(".cbz")
+    out = output_path or (image_dir.parent / (image_dir.name + ".cbz"))
     out.parent.mkdir(parents=True, exist_ok=True)
 
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_STORED) as zf:
@@ -55,7 +56,7 @@ def to_cbz(image_dir: Path, output_path: Path | None = None) -> Path:
 def to_pdf(image_dir: Path, output_path: Path | None = None) -> Path:
     """Create a PDF from images in *image_dir*.
 
-    Images are processed one at a time to avoid loading all into memory.
+    Images are processed in batches to limit memory usage.
 
     Args:
         image_dir: Directory containing image files.
@@ -67,41 +68,14 @@ def to_pdf(image_dir: Path, output_path: Path | None = None) -> Path:
     Raises:
         RuntimeError: If no images are found.
     """
-    from PIL import Image
-
     images = collect_images(image_dir)
     if not images:
         raise RuntimeError(f"No images found in {image_dir}")
 
-    out = output_path or image_dir.with_suffix(".pdf")
+    out = output_path or (image_dir.parent / (image_dir.name + ".pdf"))
     out.parent.mkdir(parents=True, exist_ok=True)
 
     dpi = CONFIG.convert.pdf_dpi
-    first_saved = False
-
-    for _, img_path in enumerate(images):
-        try:
-            img: Image.Image = Image.open(img_path)
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
-
-            if not first_saved:
-                # First image — create the PDF
-                img.save(out, "PDF", resolution=dpi, save_all=False)
-                first_saved = True
-                img.close()
-            else:
-                # Append subsequent images by merging into the existing PDF
-                # We collect in small batches to balance memory vs I/O
-                img.close()
-        except Exception as exc:
-            logger.warning("Skipping %s: %s", img_path.name, exc)
-
-    if not first_saved:
-        raise RuntimeError(f"No valid images could be loaded from {image_dir}")
-
-    # Re-do with Pillow save_all for correctness (Pillow doesn't support
-    # incremental PDF append natively), but process in small batches
     _build_pdf_batched(images, out, dpi, batch_size=20)
 
     logger.info("Created PDF: %s (%d pages)", out.name, len(images))
@@ -144,17 +118,21 @@ def _build_pdf_batched(
         img.close()
 
 
-def convert(image_dir: Path, fmt: str = "cbz") -> Path:
+def convert(image_dir: Path, fmt: str = "cbz", *, optimize: bool = False) -> Path:
     """Convert images using the specified format.
 
     Args:
         image_dir: Directory containing image files.
         fmt: One of ``"cbz"``, ``"pdf"``, or ``"both"``.
+        optimize: If True, convert images to WebP before packaging.
 
     Returns:
         Path to the last created output file.
     """
     fmt = fmt.lower().strip()
+
+    if optimize:
+        optimize_images(image_dir)
 
     if fmt == "both":
         to_cbz(image_dir)
@@ -164,3 +142,92 @@ def convert(image_dir: Path, fmt: str = "cbz") -> Path:
         return to_pdf(image_dir)
 
     return to_cbz(image_dir)
+
+
+@dataclass
+class OptimizeResult:
+    """Result of image optimization."""
+
+    original_bytes: int
+    optimized_bytes: int
+    converted_count: int
+    skipped_count: int
+
+    @property
+    def saved_bytes(self) -> int:
+        return self.original_bytes - self.optimized_bytes
+
+    @property
+    def savings_pct(self) -> float:
+        if self.original_bytes == 0:
+            return 0.0
+        return (self.saved_bytes / self.original_bytes) * 100
+
+
+def optimize_images(image_dir: Path, *, quality: int = 85) -> OptimizeResult:
+    """Convert PNG/JPG/JPEG images in *image_dir* to WebP for smaller size.
+
+    Already-WebP images are skipped.  The original files are replaced.
+
+    Args:
+        image_dir: Directory containing image files.
+        quality: WebP quality (0-100).  Default 85 balances size vs quality.
+
+    Returns:
+        OptimizeResult with size savings info.
+    """
+    from PIL import Image
+
+    images = collect_images(image_dir)
+    original_bytes = 0
+    optimized_bytes = 0
+    converted = 0
+    skipped = 0
+
+    for img_path in images:
+        original_bytes += img_path.stat().st_size
+
+        # Skip if already WebP
+        if img_path.suffix.lower() == ".webp":
+            optimized_bytes += img_path.stat().st_size
+            skipped += 1
+            continue
+
+        try:
+            img = Image.open(img_path)
+            if img.mode in ("RGBA", "P", "LA"):
+                img = img.convert("RGB")
+
+            webp_path = img_path.with_suffix(".webp")
+            img.save(webp_path, "WEBP", quality=quality)
+            img.close()
+
+            optimized_bytes += webp_path.stat().st_size
+
+            # Remove original file
+            if img_path != webp_path:
+                img_path.unlink()
+
+            converted += 1
+        except Exception as exc:
+            logger.warning("Optimize skip %s: %s", img_path.name, exc)
+            optimized_bytes += img_path.stat().st_size
+            skipped += 1
+
+    result = OptimizeResult(
+        original_bytes=original_bytes,
+        optimized_bytes=optimized_bytes,
+        converted_count=converted,
+        skipped_count=skipped,
+    )
+
+    if converted > 0:
+        logger.info(
+            "Optimized %d images: %.1f MB → %.1f MB (%.0f%% saved)",
+            converted,
+            result.original_bytes / 1_048_576,
+            result.optimized_bytes / 1_048_576,
+            result.savings_pct,
+        )
+
+    return result

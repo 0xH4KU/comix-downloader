@@ -156,3 +156,60 @@ class TestBuildParser:
         parser = _build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args(["download", "test", "-f", "epub"])
+
+    # -- New subcommands & flags ------------------------------------------------
+
+    def test_quiet_flag(self):
+        parser = _build_parser()
+        args = parser.parse_args(["-q", "search", "test"])
+        assert args.quiet is True
+
+    def test_quiet_flag_long(self):
+        parser = _build_parser()
+        args = parser.parse_args(["--quiet", "doctor"])
+        assert args.quiet is True
+
+    def test_info_subcommand(self):
+        parser = _build_parser()
+        args = parser.parse_args(["info", "https://comix.to/manga/test"])
+        assert args.command == "info"
+        assert args.url == "https://comix.to/manga/test"
+
+    def test_list_subcommand(self):
+        parser = _build_parser()
+        args = parser.parse_args(["list"])
+        assert args.command == "list"
+
+    def test_clean_subcommand(self):
+        parser = _build_parser()
+        args = parser.parse_args(["clean"])
+        assert args.command == "clean"
+        assert args.force is False
+
+    def test_clean_with_force(self):
+        parser = _build_parser()
+        args = parser.parse_args(["clean", "--force"])
+        assert args.force is True
+
+    def test_history_subcommand(self):
+        parser = _build_parser()
+        args = parser.parse_args(["history"])
+        assert args.command == "history"
+        assert args.action is None
+
+    def test_history_clear(self):
+        parser = _build_parser()
+        args = parser.parse_args(["history", "clear"])
+        assert args.command == "history"
+        assert args.action == "clear"
+
+    def test_download_no_optimize(self):
+        parser = _build_parser()
+        args = parser.parse_args(["download", "test", "--no-optimize"])
+        assert args.no_optimize is True
+
+    def test_download_default_optimize(self):
+        parser = _build_parser()
+        args = parser.parse_args(["download", "test"])
+        assert args.no_optimize is False
+

@@ -10,7 +10,9 @@ Uses the REST API v2 at ``/api/v2/``:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import quote
@@ -158,7 +160,7 @@ class ComixService:
 
     async def _fetch_chapters(self, hash_id: str) -> list[ChapterInfo]:
         """Fetch all chapters for a manga by hash_id."""
-        import asyncio
+
 
         limit = 100
         all_chapters: list[ChapterInfo] = []
@@ -245,8 +247,6 @@ class ComixService:
         """
         if not chapters:
             return chapters
-
-        from collections import defaultdict
 
         groups: dict[float, list[ChapterInfo]] = defaultdict(list)
         for ch in chapters:

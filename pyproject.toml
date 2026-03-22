@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "comix-downloader"
-version = "0.2.0"
+version = "0.3.0"
 description = "A focused comix.to manga downloader with Cloudflare bypass"
 requires-python = ">=3.11"
 license = {text = "MIT"}

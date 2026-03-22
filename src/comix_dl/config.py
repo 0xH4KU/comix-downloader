@@ -56,6 +56,7 @@ class ConvertConfig:
     pdf_dpi: float = 100.0
     default_format: str = "pdf"
     supported_image_formats: tuple[str, ...] = ("png", "jpg", "jpeg", "gif", "bmp", "webp", "avif")
+    optimize_images: bool = True
 
 
 @dataclass

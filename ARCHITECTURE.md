@@ -11,17 +11,17 @@ comix-downloader uses a Chrome CDP connection to bypass Cloudflare protection on
                       |
                  [cli.py] ---- argparse + Interactive menu
                       |
-         +-----------+-----------+
-         |           |           |
-   [settings.py] [comix_service] [converters.py]
-         |           |           |
-         |     [cdp_browser.py]  [Pillow / ZIP]
+         +-----------+-----------+-----------+
+         |           |           |           |
+   [settings.py] [comix_service] [converters.py] [history.py]
+         |           |           |           |
+         |     [cdp_browser.py]  [Pillow]   history.json
          |           |
-    settings.json  Chrome (subprocess)
-                     |
-              Playwright (CDP)
-                     |
-               comix.to API
+     settings.json  Chrome (subprocess)
+                     |              [notify.py]
+              Playwright (CDP)       |
+                     |          osascript /
+               comix.to API     notify-send
 ```
 
 ## Key Components
@@ -79,16 +79,31 @@ Key identifiers:
 
 - Settings stored as JSON at `~/.config/comix-dl/settings.json`
 - Loaded at startup and **synced to CONFIG** so all modules use user's values
-- Controls: output directory, default format, concurrency, retry count
+- Controls: output directory, default format, concurrency, retry count, image optimization
+
+### `history.py` — Download History
+
+- JSON storage at `~/.config/comix-dl/history.json`
+- Records each download session (title, chapter count, format, size, status)
+- Auto-trims oldest entries at 500 max
+- Accessed via `comix-dl history` / `comix-dl history clear`
+
+### `notify.py` — Desktop Notifications
+
+- Platform-aware: `osascript` on macOS, `notify-send` on Linux
+- Best-effort, never raises — silently no-ops if tools unavailable
+- Triggered after download completion
 
 ### `cli.py` — CLI Interface
 
-- **argparse-based** with subcommands: `search`, `download`, `doctor`, `settings`
+- **argparse-based** with subcommands: `search`, `download`, `info`, `list`, `clean`, `history`, `doctor`, `settings`
 - Interactive main menu loop with Rich TUI elements
 - Non-interactive mode: `comix-dl download URL --chapters 1-5 --format cbz`
 - Quick search: `comix-dl "query"` (no subcommand needed)
+- **`--quiet` mode** — suppress all output for scripting
+- **`--no-optimize`** — disable WebP image optimization
 - **Ctrl+C handling** — graceful shutdown, finishes current downloads then stops
-- Download summary panel with elapsed time and success/skip/fail counts
+- Download summary panel with speed stats, size, and success/skip/fail counts
 
 ## Data Flow
 
@@ -101,7 +116,9 @@ Download: hash_id → API chapters → user selects → for each chapter:
 Resume:  chapter_dir/.complete exists? → skip
          image file already exists?    → skip
 
-Convert: image directory → PDF/CBZ → output file
+Convert: image directory → (optional: optimize to WebP) → PDF/CBZ → output file
+
+History: download finishes → record to history.json → send desktop notification
 ```
 
 ## Threading Model

@@ -31,6 +31,7 @@ class DownloadProgress:
     failed: int
     skipped: int
     current_file: str
+    total_bytes: int = 0
 
 
 # Type alias for progress callback
@@ -63,6 +64,7 @@ class Downloader:
         self._client = client
         self._output_dir = output_dir or CONFIG.download.default_output_dir
         self._on_progress = on_progress
+        self.bytes_downloaded: int = 0
 
     def is_chapter_complete(self, title: str, chapter: str) -> bool:
         """Check whether a chapter has already been downloaded."""
@@ -138,6 +140,7 @@ class Downloader:
                             failed=failed,
                             skipped=skipped,
                             current_file=filename,
+                            total_bytes=self.bytes_downloaded,
                         ))
                     return True
 
@@ -156,6 +159,7 @@ class Downloader:
                             failed=failed,
                             skipped=skipped,
                             current_file=filename,
+                            total_bytes=self.bytes_downloaded,
                         )
                     )
                 return success
@@ -208,6 +212,7 @@ class Downloader:
         for attempt in range(max_retries + 1):
             try:
                 data = await self._client.get_bytes(url, referer=referer)
+                self.bytes_downloaded += len(data)
 
                 # Determine extension from URL or content
                 ext = self._guess_extension(url, data)

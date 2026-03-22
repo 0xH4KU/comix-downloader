@@ -7,8 +7,12 @@
 #   # or
 #   wget -qO- https://raw.githubusercontent.com/0xH4KU/comix-downloader/main/install.sh | bash
 #
+# Options:
+#   --uninstall    Remove comix-dl completely
+#   -y             Non-interactive mode (skip confirmations)
+#
 # After install:  comix-dl
-# Uninstall:      comix-dl-uninstall
+# Uninstall:      comix-dl-uninstall  (or: install.sh --uninstall)
 # ============================================================================
 
 set -euo pipefail
@@ -19,12 +23,14 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
 
 info()    { echo -e "${CYAN}[INFO]${NC} $*"; }
-success() { echo -e "${GREEN}[OK]${NC} $*"; }
+success() { echo -e "${GREEN}[ OK ]${NC} $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
+step()    { echo -e "\n${BOLD}${CYAN}[$1/$TOTAL_STEPS]${NC} ${BOLD}$2${NC}"; }
 
 # -- Config -------------------------------------------------------------------
 REPO="https://github.com/0xH4KU/comix-downloader.git"
@@ -32,8 +38,52 @@ INSTALL_DIR="${COMIX_INSTALL_DIR:-$HOME/.local/share/comix-dl}"
 BIN_DIR="${COMIX_BIN_DIR:-$HOME/.local/bin}"
 VENV_DIR="$INSTALL_DIR/.venv"
 MIN_PYTHON="3.11"
+TOTAL_STEPS=5
+INSTALL_COMPLETE=false
+AUTO_YES=false
 
-# -- Pre-flight checks -------------------------------------------------------
+# -- Parse flags --------------------------------------------------------------
+for arg in "$@"; do
+    case "$arg" in
+        --uninstall)
+            echo -e "${BOLD}Uninstalling comix-dl…${NC}"
+            rm -rf "$INSTALL_DIR"
+            rm -f "$BIN_DIR/comix-dl"
+            rm -f "$BIN_DIR/comix-dl-uninstall"
+            echo -e "${GREEN}✓ Uninstalled.${NC}"
+            echo -e "  Config at ~/.config/comix-dl/ was preserved."
+            echo -e "  To remove config too: rm -rf ~/.config/comix-dl/"
+            exit 0
+            ;;
+        -y|--yes)
+            AUTO_YES=true
+            ;;
+        --help|-h)
+            echo "Usage: install.sh [--uninstall] [-y] [-h]"
+            echo ""
+            echo "Options:"
+            echo "  --uninstall    Remove comix-dl completely"
+            echo "  -y, --yes      Non-interactive mode (skip confirmations)"
+            echo "  -h, --help     Show this help"
+            exit 0
+            ;;
+    esac
+done
+
+# -- Rollback on failure -----------------------------------------------------
+cleanup() {
+    if [[ "$INSTALL_COMPLETE" != "true" ]]; then
+        echo ""
+        warn "Installation did not complete successfully."
+        warn "Cleaning up partial install at $INSTALL_DIR …"
+        rm -rf "$INSTALL_DIR"
+        rm -f "$BIN_DIR/comix-dl" "$BIN_DIR/comix-dl-uninstall"
+        error "Install aborted. Fix the issue above and try again."
+    fi
+}
+trap cleanup EXIT
+
+# -- Banner -------------------------------------------------------------------
 
 echo -e "\n${BOLD}${CYAN}"
 echo '  ██████╗ ██████╗ ███╗   ███╗██╗██╗  ██╗'
@@ -44,6 +94,8 @@ echo ' ╚██████╗╚██████╔╝██║ ╚═╝ �
 echo '  ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚═╝╚═╝  ╚═╝'
 echo -e "${NC}"
 echo -e "${BOLD}One-click installer${NC}\n"
+
+# -- Pre-flight checks -------------------------------------------------------
 
 # Detect OS
 OS="$(uname -s)"
@@ -98,18 +150,27 @@ CHROME_PATH=$(find_chrome) || {
     else
         warn "Install: https://www.google.com/chrome/"
     fi
-    echo ""
-    read -rp "Continue without Chrome? [y/N] " ans
-    [[ "$ans" =~ ^[Yy]$ ]] || exit 1
+    if [[ "$AUTO_YES" == "true" ]]; then
+        info "Continuing without Chrome (-y mode)…"
+    else
+        echo ""
+        read -rp "Continue without Chrome? [y/N] " ans
+        [[ "$ans" =~ ^[Yy]$ ]] || exit 1
+    fi
     CHROME_PATH="(not found)"
 }
 success "Chrome: $CHROME_PATH"
 
 # -- Install ------------------------------------------------------------------
 
-info "Installing to: $INSTALL_DIR"
+# Capture old version for upgrade notification
+OLD_VERSION=""
+if [[ -f "$INSTALL_DIR/pyproject.toml" ]]; then
+    OLD_VERSION=$(grep -oP 'version\s*=\s*"\K[^"]+' "$INSTALL_DIR/pyproject.toml" 2>/dev/null || echo "")
+fi
 
-# Clone or update
+# Step 1: Source code
+step 1 "Fetching source code…"
 if [[ -d "$INSTALL_DIR/.git" ]]; then
     info "Existing installation found, updating…"
     git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || {
@@ -123,20 +184,20 @@ else
 fi
 success "Source code ready"
 
-# Create venv
-info "Creating virtual environment…"
+# Step 2: Virtual environment
+step 2 "Creating virtual environment…"
 "$PYTHON_CMD" -m venv "$VENV_DIR" --clear
 source "$VENV_DIR/bin/activate"
 success "Virtual environment created"
 
-# Install dependencies
-info "Installing dependencies…"
-pip install --upgrade pip setuptools wheel -q
-pip install -e "$INSTALL_DIR" -q
+# Step 3: Dependencies
+step 3 "Installing dependencies…"
+pip install --upgrade pip setuptools wheel -q 2>&1 | tail -1
+pip install -e "$INSTALL_DIR" -q 2>&1 | tail -1
 success "Dependencies installed"
 
-# Install Playwright Chromium
-info "Installing Playwright Chromium (this may take a moment)…"
+# Step 4: Playwright
+step 4 "Installing Playwright Chromium (this may take a moment)…"
 playwright install chromium 2>/dev/null || {
     "$VENV_DIR/bin/python" -m playwright install chromium
 }
@@ -144,7 +205,8 @@ success "Playwright Chromium installed"
 
 deactivate
 
-# -- Create global commands ---------------------------------------------------
+# Step 5: Create global commands
+step 5 "Creating global commands…"
 
 mkdir -p "$BIN_DIR"
 
@@ -183,20 +245,26 @@ ensure_path() {
     if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
         warn "$BIN_DIR is not in your PATH."
 
+        local shell_name
+        shell_name="$(basename "$SHELL")"
         local shell_rc=""
-        case "$(basename "$SHELL")" in
+
+        case "$shell_name" in
             zsh)  shell_rc="$HOME/.zshrc" ;;
             bash) shell_rc="$HOME/.bashrc" ;;
             fish) shell_rc="$HOME/.config/fish/config.fish" ;;
             *)    shell_rc="$HOME/.profile" ;;
         esac
 
-        local path_line='export PATH="$HOME/.local/bin:$PATH"'
         if [[ -n "$shell_rc" ]]; then
             if ! grep -qF '.local/bin' "$shell_rc" 2>/dev/null; then
                 echo "" >> "$shell_rc"
                 echo "# Added by comix-dl installer" >> "$shell_rc"
-                echo "$path_line" >> "$shell_rc"
+                if [[ "$shell_name" == "fish" ]]; then
+                    echo "fish_add_path $HOME/.local/bin" >> "$shell_rc"
+                else
+                    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$shell_rc"
+                fi
                 success "Added $BIN_DIR to PATH in $shell_rc"
                 warn "Run: source $shell_rc  (or open a new terminal)"
             else
@@ -208,6 +276,27 @@ ensure_path() {
 
 ensure_path
 
+# -- Verify installation ------------------------------------------------------
+
+if "$BIN_DIR/comix-dl" --version &>/dev/null; then
+    INSTALLED_VER=$("$BIN_DIR/comix-dl" --version 2>&1)
+    success "Verified: $INSTALLED_VER"
+else
+    warn "Installation verification failed — comix-dl may not be on PATH yet."
+fi
+
+# Version upgrade notification
+if [[ -n "$OLD_VERSION" ]]; then
+    NEW_VERSION=$(grep -oP 'version\s*=\s*"\K[^"]+' "$INSTALL_DIR/pyproject.toml" 2>/dev/null || echo "")
+    if [[ -n "$NEW_VERSION" && "$OLD_VERSION" != "$NEW_VERSION" ]]; then
+        echo ""
+        echo -e "  ${GREEN}${BOLD}⬆ Upgraded: v${OLD_VERSION} → v${NEW_VERSION}${NC}"
+    fi
+fi
+
+# Mark install complete (disables rollback)
+INSTALL_COMPLETE=true
+
 # -- Done! --------------------------------------------------------------------
 
 echo ""
@@ -217,6 +306,7 @@ echo -e "  ${BOLD}Usage:${NC}"
 echo -e "    ${CYAN}comix-dl${NC}                  # Interactive menu"
 echo -e "    ${CYAN}comix-dl \"manga name\"${NC}     # Quick search"
 echo -e "    ${CYAN}comix-dl download URL${NC}     # Non-interactive download"
+echo -e "    ${CYAN}comix-dl info URL${NC}         # Show manga info"
 echo -e "    ${CYAN}comix-dl doctor${NC}           # Check environment"
 echo ""
 echo -e "  ${BOLD}Paths:${NC}"
