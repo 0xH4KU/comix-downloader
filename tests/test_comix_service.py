@@ -1,0 +1,266 @@
+"""Tests for comix_dl.comix_service — data parsing, dedup, and API response handling."""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock
+
+import pytest
+
+from comix_dl.comix_service import ChapterImages, ChapterInfo, ComixService, SearchResult, SeriesInfo
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_chapter(number: float, chapter_id: int = 0, name: str = "", image_count: int = 0) -> ChapterInfo:
+    label = f"Chapter {number}"
+    if name:
+        label += f" - {name}"
+    return ChapterInfo(
+        title=label,
+        chapter_id=chapter_id or int(number * 100),
+        number=number,
+        name=name,
+        image_count=image_count,
+    )
+
+
+def _make_service(mock_browser: AsyncMock) -> ComixService:
+    return ComixService(mock_browser)
+
+
+# ---------------------------------------------------------------------------
+# _parse_chapter_items
+# ---------------------------------------------------------------------------
+
+class TestParseChapterItems:
+    def test_basic_parsing(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        items = [
+            {"chapter_id": 100, "number": 1, "name": "Intro", "language": "en", "pages_count": 20},
+            {"chapter_id": 200, "number": 2, "name": "", "language": "en", "pages_count": 15},
+        ]
+        result = svc._parse_chapter_items(items)
+        assert len(result) == 2
+        assert result[0].chapter_id == 100
+        assert result[0].number == 1
+        assert result[0].name == "Intro"
+        assert result[0].image_count == 20
+        assert result[0].title == "Chapter 1 - Intro"
+        assert result[1].title == "Chapter 2"
+
+    def test_empty_list(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        assert svc._parse_chapter_items([]) == []
+
+    def test_non_dict_items_skipped(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        items = ["not a dict", 42, None]  # type: ignore[list-item]
+        assert svc._parse_chapter_items(items) == []
+
+    def test_missing_chapter_id_skipped(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        items = [{"number": 1, "name": "test"}]  # no chapter_id → defaults to 0 → skipped
+        assert svc._parse_chapter_items(items) == []
+
+    def test_non_int_pages_count(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        items = [{"chapter_id": 1, "number": 1, "pages_count": "invalid"}]
+        result = svc._parse_chapter_items(items)
+        assert len(result) == 1
+        assert result[0].image_count == 0  # non-int treated as 0
+
+
+# ---------------------------------------------------------------------------
+# _deduplicate_chapters
+# ---------------------------------------------------------------------------
+
+class TestDeduplicateChapters:
+    async def test_no_duplicates_unchanged(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        chapters = [_make_chapter(1, 100), _make_chapter(2, 200), _make_chapter(3, 300)]
+        result = await svc._deduplicate_chapters(chapters)
+        assert len(result) == 3
+
+    async def test_empty_list(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        result = await svc._deduplicate_chapters([])
+        assert result == []
+
+    async def test_same_number_different_name_kept(self, mock_browser: AsyncMock):
+        """Chapters 0 - Volume 11 and 0 - Volume 12 are different content."""
+        svc = _make_service(mock_browser)
+        chapters = [
+            _make_chapter(0, 100, name="Volume 11", image_count=20),
+            _make_chapter(0, 200, name="Volume 12", image_count=25),
+        ]
+        result = await svc._deduplicate_chapters(chapters)
+        assert len(result) == 2
+
+    async def test_true_duplicates_keeps_most_images(self, mock_browser: AsyncMock):
+        """Same number, no name → true duplicate, keep the one with more images."""
+        svc = _make_service(mock_browser)
+        chapters = [
+            _make_chapter(5, 100, image_count=10),
+            _make_chapter(5, 200, image_count=25),
+            _make_chapter(5, 300, image_count=15),
+        ]
+        result = await svc._deduplicate_chapters(chapters)
+        assert len(result) == 1
+        assert result[0].chapter_id == 200  # most images
+
+    async def test_result_sorted_by_number(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        chapters = [
+            _make_chapter(3, 300),
+            _make_chapter(1, 100),
+            _make_chapter(2, 200),
+        ]
+        result = await svc._deduplicate_chapters(chapters)
+        assert [ch.number for ch in result] == [1, 2, 3]
+
+
+# ---------------------------------------------------------------------------
+# search
+# ---------------------------------------------------------------------------
+
+class TestSearch:
+    async def test_parses_search_response(self, mock_browser: AsyncMock):
+        mock_browser.get_json.return_value = {
+            "result": {
+                "items": [
+                    {"title": "One Piece", "slug": "one-piece", "hash_id": "abc123"},
+                    {"title": "Naruto", "slug": "naruto", "hash_id": "def456"},
+                ]
+            }
+        }
+        svc = _make_service(mock_browser)
+        results = await svc.search("test")
+        assert len(results) == 2
+        assert results[0].title == "One Piece"
+        assert results[0].hash_id == "abc123"
+        assert results[0].slug == "one-piece"
+        assert "one-piece" in results[0].url
+
+    async def test_empty_result(self, mock_browser: AsyncMock):
+        mock_browser.get_json.return_value = {"result": {"items": []}}
+        svc = _make_service(mock_browser)
+        results = await svc.search("nonexistent")
+        assert results == []
+
+    async def test_missing_hash_id_skipped(self, mock_browser: AsyncMock):
+        mock_browser.get_json.return_value = {
+            "result": {
+                "items": [
+                    {"title": "No Hash", "slug": "no-hash"},  # no hash_id
+                    {"title": "Has Hash", "slug": "has-hash", "hash_id": "abc"},
+                ]
+            }
+        }
+        svc = _make_service(mock_browser)
+        results = await svc.search("test")
+        assert len(results) == 1
+        assert results[0].title == "Has Hash"
+
+    async def test_api_error_returns_empty(self, mock_browser: AsyncMock):
+        mock_browser.get_json.side_effect = Exception("Network error")
+        svc = _make_service(mock_browser)
+        results = await svc.search("test")
+        assert results == []
+
+    async def test_403_error_returns_empty(self, mock_browser: AsyncMock):
+        mock_browser.get_json.side_effect = Exception("HTTP 403 Forbidden")
+        svc = _make_service(mock_browser)
+        results = await svc.search("test")
+        assert results == []
+
+
+# ---------------------------------------------------------------------------
+# get_chapter_images
+# ---------------------------------------------------------------------------
+
+class TestGetChapterImages:
+    async def test_parses_image_urls(self, mock_browser: AsyncMock):
+        mock_browser.get_json.return_value = {
+            "result": {
+                "number": 5,
+                "name": "The Beginning",
+                "images": [
+                    {"url": "https://cdn.example.com/img1.webp"},
+                    {"url": "https://cdn.example.com/img2.webp"},
+                    {"url": "https://cdn.example.com/img3.webp"},
+                ],
+            }
+        }
+        svc = _make_service(mock_browser)
+        result = await svc.get_chapter_images(12345)
+        assert result is not None
+        assert len(result.image_urls) == 3
+        assert result.chapter_label == "Chapter 5 - The Beginning"
+
+    async def test_empty_images_returns_none(self, mock_browser: AsyncMock):
+        mock_browser.get_json.return_value = {
+            "result": {"number": 1, "name": "", "images": []}
+        }
+        svc = _make_service(mock_browser)
+        result = await svc.get_chapter_images(12345)
+        assert result is None
+
+    async def test_invalid_image_entries_filtered(self, mock_browser: AsyncMock):
+        mock_browser.get_json.return_value = {
+            "result": {
+                "number": 1,
+                "name": "",
+                "images": [
+                    {"url": "https://valid.com/img.webp"},
+                    {"not_url": "missing"},  # no "url" key
+                    "not_a_dict",  # not a dict
+                    {"url": ""},  # empty url
+                ],
+            }
+        }
+        svc = _make_service(mock_browser)
+        result = await svc.get_chapter_images(12345)
+        assert result is not None
+        assert len(result.image_urls) == 1
+
+    async def test_api_error_returns_none(self, mock_browser: AsyncMock):
+        mock_browser.get_json.side_effect = Exception("timeout")
+        svc = _make_service(mock_browser)
+        result = await svc.get_chapter_images(12345)
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
+class TestDataClasses:
+    def test_search_result(self):
+        r = SearchResult(title="Test", url="https://example.com", slug="test", hash_id="abc")
+        assert r.title == "Test"
+        assert r.hash_id == "abc"
+
+    def test_chapter_info_defaults(self):
+        ch = ChapterInfo(title="Ch 1", chapter_id=100, number=1.0)
+        assert ch.name == ""
+        assert ch.language == "en"
+        assert ch.image_count == 0
+
+    def test_chapter_images(self):
+        ci = ChapterImages(title="Ch 1", chapter_label="Chapter 1", image_urls=["a", "b"])
+        assert len(ci.image_urls) == 2
+
+    def test_series_info(self):
+        si = SeriesInfo(
+            title="Test Manga",
+            authors=["Author"],
+            genres=["Action"],
+            description="Desc",
+            chapters=[],
+            url="https://example.com",
+            hash_id="abc",
+        )
+        assert si.title == "Test Manga"
+        assert si.chapters == []
