@@ -202,6 +202,9 @@ Write-Host "    comix-dl                   # Interactive menu" -ForegroundColor 
 Write-Host "    comix-dl `"manga name`"      # Quick search" -ForegroundColor Cyan
 Write-Host "    comix-dl download URL      # Non-interactive download" -ForegroundColor Cyan
 Write-Host "    comix-dl info URL          # Show manga info" -ForegroundColor Cyan
+Write-Host "    comix-dl list              # List downloaded manga" -ForegroundColor Cyan
+Write-Host "    comix-dl history           # Download history" -ForegroundColor Cyan
+Write-Host "    comix-dl clean             # Clean up raw images" -ForegroundColor Cyan
 Write-Host "    comix-dl doctor            # Check environment" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Paths:" -ForegroundColor White
