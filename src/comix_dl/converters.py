@@ -194,7 +194,7 @@ def optimize_images(image_dir: Path, *, quality: int = 85) -> OptimizeResult:
             continue
 
         try:
-            img = Image.open(img_path)
+            img: Image.Image = Image.open(img_path)
             if img.mode in ("RGBA", "P", "LA"):
                 img = img.convert("RGB")
 

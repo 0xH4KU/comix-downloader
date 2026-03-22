@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def record_download(
 ) -> None:
     """Append a download record to history, auto-trimming old entries."""
     entry = HistoryEntry(
-        timestamp=datetime.now(datetime.UTC).isoformat(),
+        timestamp=datetime.now(UTC).isoformat(),
         title=title,
         chapters_count=chapters_count,
         format=fmt,
@@ -72,7 +72,7 @@ def list_history() -> list[HistoryEntry]:
     result = []
     for data in reversed(entries):
         try:
-            result.append(HistoryEntry(**{
+            result.append(HistoryEntry(**{  # type: ignore[arg-type]
                 k: v for k, v in data.items() if k in HistoryEntry.__dataclass_fields__
             }))
         except (TypeError, KeyError):

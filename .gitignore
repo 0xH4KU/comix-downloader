@@ -1,9 +1,30 @@
-.venv/
+# Python
 __pycache__/
+*.pyc
+*.pyo
 *.egg-info/
 dist/
 build/
-*.pyc
+.venv/
+
+# Testing & coverage
+.pytest_cache/
+coverage.xml
+htmlcov/
+.coverage
+.coverage.*
+
+# Linting & type checking
 .mypy_cache/
 .ruff_cache/
-.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
