@@ -268,6 +268,15 @@ async def _flow_search(query: str) -> int:
             console.print("[red]No valid chapters selected.[/red]")
             return 1
 
+        # Confirm selection
+        console.print(
+            f"\n[bold]Selected {len(to_download)} chapter(s):[/bold]"
+        )
+        for ch in to_download[:10]:
+            console.print(f"  • {ch.title}")
+        if len(to_download) > 10:
+            console.print(f"  [dim]… and {len(to_download) - 10} more[/dim]")
+
         # 5. Format
         fmt = Prompt.ask(
             "[bold]Output format[/bold]",
@@ -336,6 +345,14 @@ async def _flow_url_download(url: str) -> int:
         if not to_download:
             console.print("[red]No valid chapters selected.[/red]")
             return 1
+
+        console.print(
+            f"\n[bold]Selected {len(to_download)} chapter(s):[/bold]"
+        )
+        for ch in to_download[:10]:
+            console.print(f"  • {ch.title}")
+        if len(to_download) > 10:
+            console.print(f"  [dim]… and {len(to_download) - 10} more[/dim]")
 
         fmt = Prompt.ask(
             "[bold]Output format[/bold]",
