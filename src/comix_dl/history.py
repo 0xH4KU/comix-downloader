@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def record_download(
 ) -> None:
     """Append a download record to history, auto-trimming old entries."""
     entry = HistoryEntry(
-        timestamp=datetime.now(timezone.utc).isoformat(),
+        timestamp=datetime.now(datetime.UTC).isoformat(),
         title=title,
         chapters_count=chapters_count,
         format=fmt,
