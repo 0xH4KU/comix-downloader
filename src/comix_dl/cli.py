@@ -524,8 +524,8 @@ async def _download_chapters(
             total = len(chapter_data.image_urls)
             progress.update(task_id, total=total, completed=0)
 
-            def on_img(p: DownloadProgress, _tid: int = task_id) -> None:
-                progress.update(_tid, completed=p.completed)
+            def on_img(p: DownloadProgress, _tid: object = task_id) -> None:
+                progress.update(_tid, completed=p.completed)  # type: ignore[arg-type]
 
             downloader._on_progress = on_img
             try:

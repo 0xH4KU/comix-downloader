@@ -81,7 +81,7 @@ def to_pdf(image_dir: Path, output_path: Path | None = None) -> Path:
 
     for _, img_path in enumerate(images):
         try:
-            img = Image.open(img_path)
+            img: Image.Image = Image.open(img_path)
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
 
@@ -121,7 +121,7 @@ def _build_pdf_batched(
     loaded: list[Image.Image] = []
     for img_path in image_paths:
         try:
-            img = Image.open(img_path)
+            img: Image.Image = Image.open(img_path)
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
             loaded.append(img)

@@ -48,8 +48,8 @@ class TestParseChapterItems:
         assert result[0].number == 1
         assert result[0].name == "Intro"
         assert result[0].image_count == 20
-        assert result[0].title == "Chapter 1 - Intro"
-        assert result[1].title == "Chapter 2"
+        assert result[0].title == "Chapter 1.0 - Intro"
+        assert result[1].title == "Chapter 2.0"
 
     def test_empty_list(self, mock_browser: AsyncMock):
         svc = _make_service(mock_browser)

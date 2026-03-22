@@ -210,10 +210,12 @@ class ComixService:
         for item in items:
             if not isinstance(item, dict):
                 continue
-            chapter_id = item.get("chapter_id", 0)
-            number = item.get("number", 0)
-            name = item.get("name", "")
-            lang = item.get("language", "en")
+            raw_id = item.get("chapter_id", 0)
+            chapter_id = int(raw_id) if isinstance(raw_id, (int, float, str)) else 0
+            raw_num = item.get("number", 0)
+            number = float(raw_num) if isinstance(raw_num, (int, float, str)) else 0.0
+            name = str(item.get("name", "") or "")
+            lang = str(item.get("language", "en") or "en")
             pages_count = item.get("pages_count", 0)
 
             if chapter_id:
