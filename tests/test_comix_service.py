@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
-import pytest
+from typing import TYPE_CHECKING
 
 from comix_dl.comix_service import ChapterImages, ChapterInfo, ComixService, SearchResult, SeriesInfo
+
+if TYPE_CHECKING:
+    from unittest.mock import AsyncMock
 
 
 # ---------------------------------------------------------------------------

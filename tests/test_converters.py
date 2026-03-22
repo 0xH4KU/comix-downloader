@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import zipfile
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from comix_dl.converters import collect_images, convert, to_cbz, to_pdf
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 # ---------------------------------------------------------------------------

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from comix_dl.downloader import DownloadProgress, Downloader, sanitize_dirname
+from comix_dl.downloader import Downloader, DownloadProgress, sanitize_dirname
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -146,13 +148,15 @@ class TestDownloadChapter:
         dl = Downloader(mock_browser, output_dir=tmp_path)
 
         # Disable retry delays for test speed
-        with patch.object(dl, "_download_image", return_value=False):
-            with pytest.raises(RuntimeError, match="All .* downloads failed"):
-                await dl.download_chapter(
-                    ["https://cdn.com/1.jpg"],
-                    "Test Manga",
-                    "Chapter 1",
-                )
+        with (
+            patch.object(dl, "_download_image", return_value=False),
+            pytest.raises(RuntimeError, match=r"All .* downloads failed"),
+        ):
+            await dl.download_chapter(
+                ["https://cdn.com/1.jpg"],
+                "Test Manga",
+                "Chapter 1",
+            )
 
     async def test_successful_download_creates_marker(self, tmp_path: Path, mock_browser: AsyncMock):
         """Successful download should create .complete marker."""

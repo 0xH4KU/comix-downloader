@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from comix_dl.config import CONFIG
 from comix_dl.settings import Settings, apply_settings_to_config, load_settings, save_settings
 

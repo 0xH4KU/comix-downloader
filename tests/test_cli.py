@@ -7,7 +7,6 @@ import pytest
 from comix_dl.cli import _build_parser, _parse_chapter_selection
 from comix_dl.comix_service import ChapterInfo
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
