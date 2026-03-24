@@ -1,5 +1,0 @@
-playwright>=1.40
-beautifulsoup4>=4.12
-Pillow>=10.0
-textual>=0.50
-rich>=13.0

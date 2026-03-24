@@ -7,21 +7,26 @@ import zipfile
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from comix_dl.config import CONFIG
+from comix_dl.config import CONFIG, AppConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_IMAGE_EXTENSIONS = frozenset(CONFIG.convert.supported_image_formats)
+
+def _get_image_extensions(config: AppConfig | None = None) -> frozenset[str]:
+    """Return supported image extensions (lazy, respects runtime config)."""
+    cfg = config or CONFIG
+    return frozenset(cfg.convert.supported_image_formats)
 
 
-def collect_images(directory: Path) -> list[Path]:
+def collect_images(directory: Path, config: AppConfig | None = None) -> list[Path]:
     """Return sorted image files in *directory*."""
+    extensions = _get_image_extensions(config)
     return [
         f for f in sorted(directory.iterdir())
-        if f.is_file() and f.suffix.lstrip(".").lower() in _IMAGE_EXTENSIONS
+        if f.is_file() and f.suffix.lstrip(".").lower() in extensions
     ]
 
 
@@ -53,7 +58,7 @@ def to_cbz(image_dir: Path, output_path: Path | None = None) -> Path:
     return out
 
 
-def to_pdf(image_dir: Path, output_path: Path | None = None) -> Path:
+def to_pdf(image_dir: Path, output_path: Path | None = None, config: AppConfig | None = None) -> Path:
     """Create a PDF from images in *image_dir*.
 
     Images are processed in batches to limit memory usage.
@@ -61,6 +66,7 @@ def to_pdf(image_dir: Path, output_path: Path | None = None) -> Path:
     Args:
         image_dir: Directory containing image files.
         output_path: Where to write the PDF. Defaults to ``image_dir.with_suffix('.pdf')``.
+        config: Optional AppConfig for DPI setting.
 
     Returns:
         Path to the created PDF file.
@@ -68,14 +74,15 @@ def to_pdf(image_dir: Path, output_path: Path | None = None) -> Path:
     Raises:
         RuntimeError: If no images are found.
     """
-    images = collect_images(image_dir)
+    cfg = config or CONFIG
+    images = collect_images(image_dir, config=cfg)
     if not images:
         raise RuntimeError(f"No images found in {image_dir}")
 
     out = output_path or (image_dir.parent / (image_dir.name + ".pdf"))
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    dpi = CONFIG.convert.pdf_dpi
+    dpi = cfg.convert.pdf_dpi
     _build_pdf_batched(images, out, dpi, batch_size=20)
 
     logger.info("Created PDF: %s (%d pages)", out.name, len(images))

@@ -14,9 +14,12 @@ import atexit
 import base64
 import contextlib
 import logging
+import os
+import signal
 import socket
 import subprocess
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from comix_dl.config import CONFIG
@@ -24,10 +27,73 @@ from comix_dl.config import CONFIG
 if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Page, Playwright
 
+    from comix_dl.config import AppConfig
+
 logger = logging.getLogger(__name__)
 
 # Module-level reference for atexit cleanup
 _active_chrome: subprocess.Popen[bytes] | None = None
+_PID_FILE: Path = Path.home() / ".config" / "comix-dl" / "chrome.pid"
+
+
+def _write_pid(pid: int) -> None:
+    """Write Chrome PID to disk for crash recovery."""
+    with contextlib.suppress(OSError):
+        _PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _PID_FILE.write_text(str(pid))
+
+
+def _remove_pid() -> None:
+    """Remove the PID file."""
+    with contextlib.suppress(OSError):
+        _PID_FILE.unlink(missing_ok=True)
+
+
+def _cleanup_stale_chrome() -> None:
+    """Kill orphaned Chrome from a previous crash (SIGKILL / OOM).
+
+    Reads the PID file left behind when Python couldn't run atexit,
+    checks if the process is still alive, and terminates it.
+    """
+    if not _PID_FILE.exists():
+        return
+    try:
+        pid = int(_PID_FILE.read_text().strip())
+    except (ValueError, OSError):
+        _remove_pid()
+        return
+
+    try:
+        # Check if process is alive (signal 0 = no-op probe)
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        # Already dead — just clean up the stale PID file
+        _remove_pid()
+        return
+    except PermissionError:
+        # Process exists but we can't signal it — leave it alone
+        _remove_pid()
+        return
+
+    # Process is alive — terminate it
+    logger.warning("Found orphaned Chrome (PID %d) from a previous crash, terminating", pid)
+    try:
+        os.kill(pid, signal.SIGTERM)
+        # Give it a moment to exit gracefully
+        for _ in range(10):
+            time.sleep(0.3)
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+        else:
+            # Still alive — force kill
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+    except Exception as exc:
+        logger.debug("Failed to clean up stale Chrome PID %d: %s", pid, exc)
+    finally:
+        _remove_pid()
 
 
 def _atexit_kill_chrome() -> None:
@@ -41,6 +107,7 @@ def _atexit_kill_chrome() -> None:
             with contextlib.suppress(Exception):
                 _active_chrome.kill()
         _active_chrome = None
+    _remove_pid()
 
 
 atexit.register(_atexit_kill_chrome)
@@ -79,7 +146,8 @@ class CdpBrowser:
             json = await browser.get_json("https://example.com/api/data")
     """
 
-    def __init__(self, *, max_pages: int = 4) -> None:
+    def __init__(self, *, max_pages: int = 4, config: AppConfig | None = None) -> None:
+        self._config = config or CONFIG
         self._playwright: Playwright | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
@@ -87,7 +155,7 @@ class CdpBrowser:
         self._started = False
         self._cf_cleared = False
         self._cf_lock = asyncio.Lock()
-        self._user_data_dir = CONFIG.browser.cookie_dir / "chrome-profile"
+        self._user_data_dir = self._config.browser.cookie_dir / "chrome-profile"
         self._cdp_port: int = 0
         self._max_pages = max_pages
         self._page_pool: asyncio.Queue[Page] = asyncio.Queue()
@@ -99,6 +167,9 @@ class CdpBrowser:
         """Launch Chrome and connect via CDP."""
         if self._started:
             return
+
+        # Clean up any orphaned Chrome from a previous crash
+        _cleanup_stale_chrome()
 
         self._user_data_dir.mkdir(parents=True, exist_ok=True)
         self._launch_chrome()
@@ -173,6 +244,7 @@ class CdpBrowser:
                 stderr=subprocess.DEVNULL,
             )
             _active_chrome = self._chrome_process
+            _write_pid(self._chrome_process.pid)
             self._wait_for_cdp_ready()
         except FileNotFoundError:
             raise RuntimeError(
@@ -233,6 +305,7 @@ class CdpBrowser:
         _active_chrome = None
         self._started = False
         self._cf_cleared = False
+        _remove_pid()
         logger.info("Browser session closed")
 
     async def __aenter__(self) -> CdpBrowser:
@@ -257,6 +330,29 @@ class CdpBrowser:
         if page in self._all_pages:
             with contextlib.suppress(asyncio.QueueFull):
                 self._page_pool.put_nowait(page)
+
+    async def _replace_dead_page(self, dead_page: Page) -> None:
+        """Remove a crashed page from the pool and try to create a replacement."""
+        if dead_page in self._all_pages:
+            self._all_pages.remove(dead_page)
+            logger.warning("Removed dead page from pool (%d remaining)", len(self._all_pages))
+
+        with contextlib.suppress(Exception):
+            await dead_page.close()
+
+        # Try to create a replacement
+        if self._context is not None:
+            try:
+                new_page = await self._context.new_page()
+                # Navigate to the correct origin so fetch() works
+                base = self._config.service.base_url
+                with contextlib.suppress(Exception):
+                    await new_page.goto(base, wait_until="domcontentloaded")
+                self._all_pages.append(new_page)
+                self._page_pool.put_nowait(new_page)
+                logger.info("Replaced dead page with new one (%d pool pages)", self._page_pool.qsize())
+            except Exception as exc:
+                logger.warning("Failed to create replacement page: %s", exc)
 
     async def _init_pool_pages(self, url: str) -> None:
         """Navigate all pool pages to *url* so they share the correct origin.
@@ -297,7 +393,7 @@ class CdpBrowser:
             if self._cf_cleared:
                 return
 
-            url = CONFIG.service.base_url
+            url = self._config.service.base_url
             logger.info("Checking CF clearance at %s", url)
             page = await self._ensure_page()
 
@@ -334,6 +430,8 @@ class CdpBrowser:
         """Download binary content via page.evaluate(fetch()) with base64 encoding.
 
         Uses base64 instead of JSON array for ~3-4x less overhead.
+        If the page crashes during evaluation, it is removed from the pool
+        and a replacement is created.
         """
         if not self._started:
             await self.start()
@@ -356,9 +454,13 @@ class CdpBrowser:
                 }""",
                 [url, {"Referer": referer} if referer else {}],
             )
-            return base64.b64decode(result)
-        finally:
+        except Exception:
+            # Page may be corrupted — don't return it to the pool
+            await self._replace_dead_page(page)
+            raise
+        else:
             self.release_page(page)
+        return base64.b64decode(result)
 
     async def post_json(self, url: str, payload: dict[str, object]) -> dict[str, object]:
         """POST JSON via page.evaluate(fetch())."""
@@ -384,7 +486,8 @@ class CdpBrowser:
     async def get_json(self, url: str) -> dict[str, object]:
         """GET JSON via page.evaluate(fetch()).
 
-        Uses page pool for parallel requests.
+        Uses page pool for parallel requests.  If the page crashes,
+        it is replaced rather than returned to the pool.
         """
         if not self._started:
             await self.start()
@@ -400,9 +503,12 @@ class CdpBrowser:
                 }""",
                 url,
             )
-            return result  # type: ignore[no-any-return]
-        finally:
+        except Exception:
+            await self._replace_dead_page(page)
+            raise
+        else:
             self.release_page(page)
+        return result  # type: ignore[no-any-return]
 
     # -- CF detection ---------------------------------------------------------
 
@@ -431,7 +537,7 @@ class CdpBrowser:
         return False
 
     async def _wait_for_cf_clearance(self, page: Page) -> None:
-        deadline = time.monotonic() + CONFIG.browser.cf_wait_seconds
+        deadline = time.monotonic() + self._config.browser.cf_wait_seconds
 
         while time.monotonic() < deadline:
             await asyncio.sleep(1.0)
@@ -448,7 +554,7 @@ class CdpBrowser:
                 return
 
         raise RuntimeError(
-            f"CF challenge did not resolve within {CONFIG.browser.cf_wait_seconds}s."
+            f"CF challenge did not resolve within {self._config.browser.cf_wait_seconds}s."
         )
 
     async def _ensure_page(self) -> Page:

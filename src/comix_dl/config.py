@@ -44,7 +44,6 @@ class ServiceConfig:
     """comix.to API settings."""
 
     base_url: str = "https://comix.to"
-    graphql_path: str = "/apo/"
     rate_limit_delay: float = 0.5
     max_search_pages: int = 3
 

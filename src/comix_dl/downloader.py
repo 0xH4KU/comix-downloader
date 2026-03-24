@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from comix_dl.config import CONFIG
+from comix_dl.config import CONFIG, AppConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -60,9 +60,11 @@ class Downloader:
         client: CdpBrowser,
         output_dir: Path | None = None,
         on_progress: ProgressCallback | None = None,
+        config: AppConfig | None = None,
     ) -> None:
         self._client = client
-        self._output_dir = output_dir or CONFIG.download.default_output_dir
+        self._config = config or CONFIG
+        self._output_dir = output_dir or self._config.download.default_output_dir
         self._on_progress = on_progress
         self.bytes_downloaded: int = 0
 
@@ -116,13 +118,13 @@ class Downloader:
         completed = 0
         failed = 0
         skipped = 0
-        semaphore = asyncio.Semaphore(CONFIG.download.max_concurrent_images)
+        semaphore = asyncio.Semaphore(self._config.download.max_concurrent_images)
 
         async def fetch_one(index: int, url: str) -> bool:
             nonlocal completed, failed, skipped
             async with semaphore:
                 # Random delay to avoid rate limits
-                delay = CONFIG.download.image_delay
+                delay = self._config.download.image_delay
                 if delay > 0:
                     await asyncio.sleep(random.uniform(delay * 0.3, delay * 1.7))
 
@@ -206,8 +208,8 @@ class Downloader:
         Returns:
             ``True`` on success, ``False`` on failure.
         """
-        max_retries = CONFIG.download.max_retries
-        retry_delay = CONFIG.download.retry_delay
+        max_retries = self._config.download.max_retries
+        retry_delay = self._config.download.retry_delay
 
         for attempt in range(max_retries + 1):
             try:

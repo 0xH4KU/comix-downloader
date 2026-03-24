@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-from comix_dl.config import CONFIG
+from comix_dl.config import CONFIG, AppConfig
 
 if TYPE_CHECKING:
     from comix_dl.cdp_browser import CdpBrowser
@@ -78,9 +78,10 @@ class SeriesInfo:
 class ComixService:
     """High-level API for interacting with comix.to."""
 
-    def __init__(self, client: CdpBrowser) -> None:
+    def __init__(self, client: CdpBrowser, config: AppConfig | None = None) -> None:
         self._client = client
-        self._base = CONFIG.service.base_url
+        self._config = config or CONFIG
+        self._base = self._config.service.base_url
 
     async def search(
         self,
