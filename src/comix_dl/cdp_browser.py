@@ -130,6 +130,46 @@ def _is_port_in_use(port: int) -> bool:
             return False
 
 
+def _find_chrome(system: str) -> str:
+    """Auto-detect Chrome executable path for the current platform."""
+    import shutil
+
+    if system == "Darwin":
+        candidates = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            str(Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            # Homebrew cask
+            "/opt/homebrew/bin/chromium",
+        ]
+        for c in candidates:
+            if Path(c).exists():
+                return c
+        return candidates[0]  # Fallback to standard path for error message
+
+    if system == "Linux":
+        for name in ("google-chrome", "google-chrome-stable", "chromium-browser", "chromium"):
+            found = shutil.which(name)
+            if found:
+                return found
+        return "google-chrome"
+
+    # Windows
+    env_candidates: list[Path] = []
+    for env_var in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+        base = os.environ.get(env_var)
+        if base:
+            env_candidates.append(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe")
+
+    for candidate in env_candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    found = shutil.which("chrome") or shutil.which("chrome.exe")
+    if found:
+        return found
+    return "chrome.exe"
+
+
 class CdpBrowser:
     """Connect to a user-launched Chrome via CDP for Cloudflare bypass.
 
@@ -207,16 +247,13 @@ class CdpBrowser:
         """Launch Chrome subprocess with remote debugging enabled."""
         global _active_chrome
         import platform
-        import shutil
 
         system = platform.system()
 
-        if system == "Darwin":
-            chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        elif system == "Linux":
-            chrome_path = shutil.which("google-chrome") or shutil.which("chromium-browser") or "google-chrome"
-        else:
-            chrome_path = shutil.which("chrome") or "chrome"
+        # User override from config takes priority
+        chrome_path = self._config.browser.chrome_path
+        if not chrome_path:
+            chrome_path = _find_chrome(system)
 
         # Pick port — use 9222 if free, otherwise find a random one
         if _is_port_in_use(9222):
@@ -513,21 +550,23 @@ class CdpBrowser:
     # -- CF detection ---------------------------------------------------------
 
     async def _is_cf_challenge(self, page: Page) -> bool:
+        # Primary signal: if cf_clearance cookie is set, we're through
+        try:
+            cookies = await page.context.cookies()
+            if any(c.get("name") == "cf_clearance" for c in cookies):
+                return False
+        except Exception:
+            pass
+
         try:
             title = await page.title()
         except Exception:
             return False
 
-        cf_titles = {"Just a moment...", "Attention Required!", "Verify you are human"}
-        if title in cf_titles:
+        if title in self._config.browser.cf_titles:
             return True
 
-        cf_selectors = [
-            "#challenge-running",
-            "#cf-challenge-running",
-            "iframe[src*='challenges.cloudflare.com']",
-        ]
-        for selector in cf_selectors:
+        for selector in self._config.browser.cf_selectors:
             try:
                 if await page.query_selector(selector):
                     return True

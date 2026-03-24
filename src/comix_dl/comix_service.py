@@ -129,6 +129,33 @@ class ComixService:
         logger.info("Search '%s': %d results", query, len(results))
         return results
 
+    async def get_series_by_slug(self, slug: str) -> SeriesInfo:
+        """Fetch series directly by slug or hash_id (no search roundtrip).
+
+        Tries ``GET /api/v2/manga/{slug}`` first.  If that fails (404),
+        falls back to a keyword search and matches the slug.
+
+        Raises:
+            RuntimeError: If the slug cannot be resolved.
+        """
+        # Try direct lookup
+        api_url = f"{self._base}/api/v2/manga/{slug}"
+        try:
+            resp = await self._client.get_json(api_url)
+            data = resp.get("result", {})
+            if isinstance(data, dict) and data.get("hash_id"):
+                return await self.get_series(data["hash_id"])
+        except Exception:
+            logger.debug("Direct slug lookup failed for '%s', trying search", slug)
+
+        # Fallback: search and match
+        results = await self.search(slug, limit=10)
+        matched = next((r for r in results if r.slug == slug), None)
+        if matched:
+            return await self.get_series(matched.hash_id)
+
+        raise RuntimeError(f"Could not find manga with slug '{slug}'")
+
     async def get_series(self, hash_id: str) -> SeriesInfo:
         """Fetch series info and chapter list by hash_id."""
         # Fetch manga details

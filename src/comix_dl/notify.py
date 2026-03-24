@@ -30,9 +30,9 @@ def send_notification(title: str, body: str) -> None:
 
 def _notify_macos(title: str, body: str) -> None:
     """Send notification via osascript on macOS."""
-    # Escape double quotes for AppleScript
-    safe_title = title.replace('"', '\\"')
-    safe_body = body.replace('"', '\\"')
+    # Escape backslashes first, then double quotes (order matters)
+    safe_title = title.replace("\\", "\\\\").replace('"', '\\"')
+    safe_body = body.replace("\\", "\\\\").replace('"', '\\"')
     script = f'display notification "{safe_body}" with title "{safe_title}"'
     subprocess.run(
         ["osascript", "-e", script],

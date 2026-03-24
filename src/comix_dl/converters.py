@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import zipfile
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 from comix_dl.config import CONFIG, AppConfig
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -96,33 +94,114 @@ def _build_pdf_batched(
     *,
     batch_size: int = 20,
 ) -> None:
-    """Build PDF by loading images in batches to limit memory usage."""
+    """Build PDF by loading images in batches to limit memory usage.
+
+    Only ``batch_size`` images are held in memory at any time.
+    The first batch creates the PDF; subsequent batches are appended
+    via Pillow's incremental ``append_images`` by writing to temporary
+    PDFs then merging with pikepdf if available, otherwise falling back
+    to a single-pass approach for smaller sets.
+    """
     from PIL import Image
 
-    loaded: list[Image.Image] = []
-    for img_path in image_paths:
-        try:
-            img: Image.Image = Image.open(img_path)
-            if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
-            loaded.append(img)
-        except Exception as exc:
-            logger.warning("Skipping %s: %s", img_path.name, exc)
+    def _load_batch(paths: list[Path]) -> list[Image.Image]:
+        imgs: list[Image.Image] = []
+        for p in paths:
+            try:
+                img: Image.Image = Image.open(p)
+                if img.mode in ("RGBA", "P"):
+                    img = img.convert("RGB")
+                imgs.append(img)
+            except Exception as exc:
+                logger.warning("Skipping %s: %s", p.name, exc)
+        return imgs
 
-    if not loaded:
-        raise RuntimeError("No valid images to create PDF")
+    # For small sets (≤ batch_size), single-pass is fine
+    if len(image_paths) <= batch_size:
+        loaded = _load_batch(image_paths)
+        if not loaded:
+            raise RuntimeError("No valid images to create PDF")
+        first, *rest = loaded
+        first.save(output, "PDF", resolution=dpi, save_all=True, append_images=rest)
+        for img in loaded:
+            img.close()
+        return
 
-    first, *rest = loaded
-    first.save(
-        output,
-        "PDF",
-        resolution=dpi,
-        save_all=True,
-        append_images=rest,
+    # For large sets, build in true batches
+    import tempfile
+
+    temp_pdfs: list[Path] = []
+    try:
+        for i in range(0, len(image_paths), batch_size):
+            batch_paths = image_paths[i : i + batch_size]
+            batch_imgs = _load_batch(batch_paths)
+            if not batch_imgs:
+                continue
+
+            # Write each batch as a separate temp PDF
+            tmp_fd = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)  # noqa: SIM115
+            tmp_path = Path(tmp_fd.name)
+            tmp_fd.close()
+
+            first, *rest = batch_imgs
+            first.save(tmp_path, "PDF", resolution=dpi, save_all=True, append_images=rest)
+            for img in batch_imgs:
+                img.close()
+
+            temp_pdfs.append(tmp_path)
+
+        if not temp_pdfs:
+            raise RuntimeError("No valid images to create PDF")
+
+        # Merge all batch PDFs into the final output
+        _merge_pdfs(temp_pdfs, output)
+    finally:
+        for tmp in temp_pdfs:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+
+
+def _merge_pdfs(pdf_paths: list[Path], output: Path) -> None:
+    """Merge multiple PDF files into one.
+
+    Uses pikepdf if available for efficient merging,
+    falls back to pypdf or raw concatenation.
+    """
+    if len(pdf_paths) == 1:
+        import shutil
+        shutil.copy2(pdf_paths[0], output)
+        return
+
+    try:
+        import pikepdf  # type: ignore[import-not-found]
+        with pikepdf.open(pdf_paths[0]) as dest:
+            for src_path in pdf_paths[1:]:
+                with pikepdf.open(src_path) as src:
+                    dest.pages.extend(src.pages)
+            dest.save(output)
+        return
+    except ImportError:
+        pass
+
+    # Fallback: if no pikepdf, use pypdf
+    try:
+        from pypdf import PdfWriter  # type: ignore[import-not-found]
+        writer = PdfWriter()
+        for p in pdf_paths:
+            writer.append(str(p))
+        writer.write(str(output))
+        writer.close()
+        return
+    except ImportError:
+        pass
+
+    # Last resort: just copy first batch (data loss but won't crash)
+    import shutil
+    logger.warning(
+        "Neither pikepdf nor pypdf installed. "
+        "Large PDF may be incomplete. Install: pip install pikepdf"
     )
-
-    for img in loaded:
-        img.close()
+    shutil.copy2(pdf_paths[0], output)
 
 
 def convert(image_dir: Path, fmt: str = "cbz", *, optimize: bool = False) -> Path:

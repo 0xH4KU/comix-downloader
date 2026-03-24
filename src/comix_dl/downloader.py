@@ -115,13 +115,13 @@ class Downloader:
             return chapter_dir
 
         total = len(image_urls)
-        completed = 0
-        failed = 0
-        skipped = 0
         semaphore = asyncio.Semaphore(self._config.download.max_concurrent_images)
+        # Atomic-safe progress counter (incremented only inside semaphore)
+        _progress_done = 0
 
-        async def fetch_one(index: int, url: str) -> bool:
-            nonlocal completed, failed, skipped
+        async def fetch_one(index: int, url: str) -> str:
+            """Return 'ok', 'skip', or 'fail'."""
+            nonlocal _progress_done
             async with semaphore:
                 # Random delay to avoid rate limits
                 delay = self._config.download.image_delay
@@ -133,43 +133,42 @@ class Downloader:
                 # Resume: skip if image already exists
                 existing = list(chapter_dir.glob(f"{filename}.*"))
                 if existing and any(f.stat().st_size > 0 for f in existing):
-                    skipped += 1
-                    completed += 1
+                    _progress_done += 1
                     if self._on_progress:
                         self._on_progress(DownloadProgress(
-                            completed=completed + failed,
+                            completed=_progress_done,
                             total=total,
-                            failed=failed,
-                            skipped=skipped,
+                            failed=0,
+                            skipped=0,
                             current_file=filename,
                             total_bytes=self.bytes_downloaded,
                         ))
-                    return True
+                    return "skip"
 
                 success = await self._download_image(url, chapter_dir, filename, referer=referer)
-
-                if success:
-                    completed += 1
-                else:
-                    failed += 1
+                _progress_done += 1
 
                 if self._on_progress:
                     self._on_progress(
                         DownloadProgress(
-                            completed=completed + failed,
+                            completed=_progress_done,
                             total=total,
-                            failed=failed,
-                            skipped=skipped,
+                            failed=0,
+                            skipped=0,
                             current_file=filename,
                             total_bytes=self.bytes_downloaded,
                         )
                     )
-                return success
+                return "ok" if success else "fail"
 
         tasks = [fetch_one(i, url) for i, url in enumerate(image_urls)]
         results = await asyncio.gather(*tasks)
 
-        success_count = sum(1 for r in results if r)
+        completed = results.count("ok")
+        skipped = results.count("skip")
+        failed = results.count("fail")
+        success_count = completed + skipped
+
         if success_count == 0:
             raise RuntimeError(f"All {total} image downloads failed for {title} - {chapter}")
 
@@ -180,7 +179,7 @@ class Downloader:
         if skipped > 0:
             logger.info(
                 "%s - %s: %d downloaded, %d skipped (resumed), %d failed",
-                title, chapter, completed - skipped, skipped, failed,
+                title, chapter, completed, skipped, failed,
             )
         elif failed > 0:
             logger.warning(

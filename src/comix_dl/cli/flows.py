@@ -183,8 +183,10 @@ async def flow_url_download(url: str) -> int:
 
         with console.status("[bold cyan]Fetching series info…"):
             try:
+                info = await service.get_series_by_slug(slug)
+            except RuntimeError:
+                # Direct lookup failed — try search as fallback
                 results = await service.search(slug, limit=10)
-                # Try exact slug match first, then partial title match
                 matched = next((r for r in results if r.slug == slug), None)
                 if not matched and results:
                     console.print(f"[yellow]Exact match not found for '{slug}'. Did you mean:[/yellow]\n")
@@ -206,9 +208,6 @@ async def flow_url_download(url: str) -> int:
                     return 1
 
                 info = await service.get_series(matched.hash_id)
-            except RuntimeError as exc:
-                console.print(f"[red]{exc}[/red]")
-                return 1
 
         print_series_header(info)
         print_chapters_table(info.chapters)
@@ -255,16 +254,14 @@ async def flow_noninteractive_download(
     async with CdpBrowser() as browser:
         service = ComixService(browser)
 
-        console.print(f"[bold]Searching for '{slug}'…[/bold]")
-        results = await service.search(slug, limit=10)
-        matched = next((r for r in results if r.slug == slug), results[0] if results else None)
-
-        if not matched:
+        console.print(f"[bold]Looking up '{slug}'…[/bold]")
+        try:
+            info = await service.get_series_by_slug(slug)
+        except RuntimeError:
             console.print("[red]Manga not found.[/red]")
             return 1
 
-        console.print(f"[bold cyan]→ {matched.title}[/bold cyan]")
-        info = await service.get_series(matched.hash_id)
+        console.print(f"[bold cyan]→ {info.title}[/bold cyan]")
 
         if not info.chapters:
             console.print("[yellow]No chapters found.[/yellow]")
@@ -296,15 +293,11 @@ async def flow_info(url: str) -> int:
         service = ComixService(browser)
 
         with console.status("[bold cyan]Fetching info…"):
-            results = await service.search(slug, limit=10)
-            matched = next((r for r in results if r.slug == slug), results[0] if results else None)
-
-        if not matched:
-            console.print("[red]Manga not found.[/red]")
-            return 1
-
-        with console.status("[bold cyan]Loading details…"):
-            info = await service.get_series(matched.hash_id)
+            try:
+                info = await service.get_series_by_slug(slug)
+            except RuntimeError:
+                console.print("[red]Manga not found.[/red]")
+                return 1
 
         # Metadata panel
         meta_lines = [f"[bold]{info.title}[/bold]"]

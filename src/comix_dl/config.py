@@ -22,6 +22,13 @@ class BrowserConfig:
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     )
+    chrome_path: str | None = None  # User override; auto-detect if None
+    cf_titles: tuple[str, ...] = ("Just a moment...", "Attention Required!", "Verify you are human")
+    cf_selectors: tuple[str, ...] = (
+        "#challenge-running",
+        "#cf-challenge-running",
+        "iframe[src*='challenges.cloudflare.com']",
+    )
 
 
 @dataclass
