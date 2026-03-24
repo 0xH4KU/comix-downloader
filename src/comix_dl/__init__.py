@@ -2,4 +2,10 @@
 
 from __future__ import annotations
 
-__version__ = "0.3.2"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("comix-downloader")
+except PackageNotFoundError:
+    # Fallback for editable installs or running from source
+    __version__ = "0.3.3"
