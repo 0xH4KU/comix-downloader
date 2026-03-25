@@ -68,6 +68,8 @@ Key identifiers:
 - Concurrency controlled by `asyncio.Semaphore` (default: 8 images at once)
 - Automatic retry with exponential backoff
 - **Resume support** — skips existing images, writes `.complete` marker only when every page succeeds
+- **Atomic image writes** — downloaded pages are written via temp files and `os.replace()`
+- **Resume validation** — existing image files must pass a magic-byte check before they are trusted
 - File extension detection from URL or magic bytes (including AVIF)
 
 ### `converters.py` — PDF / CBZ

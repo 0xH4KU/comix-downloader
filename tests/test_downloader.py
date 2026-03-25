@@ -95,6 +95,18 @@ class TestGuessExtension:
         assert Downloader._guess_extension("https://cdn.com/IMG.PNG", b"") == ".png"
 
 
+class TestImageValidation:
+    def test_valid_jpeg_detected(self, tmp_path: Path):
+        path = tmp_path / "001.jpg"
+        path.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 10)
+        assert Downloader._is_valid_image_file(path) is True
+
+    def test_corrupt_jpeg_rejected(self, tmp_path: Path):
+        path = tmp_path / "001.jpg"
+        path.write_bytes(b"not-a-jpeg")
+        assert Downloader._is_valid_image_file(path) is False
+
+
 # ---------------------------------------------------------------------------
 # is_chapter_complete
 # ---------------------------------------------------------------------------
@@ -212,6 +224,52 @@ class TestDownloadChapter:
         assert result.status == "complete"
         # get_bytes should only be called once (for image 2)
         assert mock_browser.get_bytes.call_count == 1
+
+    async def test_resume_redownloads_corrupt_existing_image(self, tmp_path: Path, mock_browser: AsyncMock):
+        mock_browser.get_bytes.return_value = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+
+        dl = Downloader(mock_browser, output_dir=tmp_path)
+        chapter_dir = tmp_path / "Test Manga" / "Chapter 1"
+        chapter_dir.mkdir(parents=True)
+        (chapter_dir / "001.jpg").write_bytes(b"not-a-jpeg")
+
+        with (
+            patch("comix_dl.downloader.CONFIG.download.image_delay", 0),
+            patch("comix_dl.downloader.CONFIG.download.max_retries", 0),
+        ):
+            result = await dl.download_chapter(
+                ["https://cdn.com/1.jpg"],
+                "Test Manga",
+                "Chapter 1",
+            )
+
+        assert result.status == "complete"
+        assert mock_browser.get_bytes.call_count == 1
+        assert (chapter_dir / "001.jpg").read_bytes().startswith(b"\xff\xd8")
+
+    async def test_resume_removes_invalid_stale_extension_before_redownload(
+        self, tmp_path: Path, mock_browser: AsyncMock,
+    ):
+        mock_browser.get_bytes.return_value = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+
+        dl = Downloader(mock_browser, output_dir=tmp_path)
+        chapter_dir = tmp_path / "Test Manga" / "Chapter 1"
+        chapter_dir.mkdir(parents=True)
+        (chapter_dir / "001.png").write_bytes(b"bad-png")
+
+        with (
+            patch("comix_dl.downloader.CONFIG.download.image_delay", 0),
+            patch("comix_dl.downloader.CONFIG.download.max_retries", 0),
+        ):
+            result = await dl.download_chapter(
+                ["https://cdn.com/1.jpg"],
+                "Test Manga",
+                "Chapter 1",
+            )
+
+        assert result.status == "complete"
+        assert not (chapter_dir / "001.png").exists()
+        assert (chapter_dir / "001.jpg").exists()
 
     async def test_partial_failures_return_partial_status(self, tmp_path: Path, mock_browser: AsyncMock):
         dl = Downloader(mock_browser, output_dir=tmp_path)

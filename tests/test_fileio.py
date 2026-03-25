@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from comix_dl.fileio import atomic_write_text
+from comix_dl.fileio import atomic_write_bytes, atomic_write_text
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -25,4 +25,22 @@ class TestAtomicWriteText:
         atomic_write_text(target, "new\n")
 
         assert target.read_text(encoding="utf-8") == "new\n"
-        assert not list(tmp_path.glob("*.tmp"))
+        assert not [p for p in tmp_path.iterdir() if p.suffix == ".tmp"]
+
+
+class TestAtomicWriteBytes:
+    def test_creates_file(self, tmp_path: Path):
+        target = tmp_path / "image.bin"
+
+        atomic_write_bytes(target, b"\x00\x01\x02")
+
+        assert target.read_bytes() == b"\x00\x01\x02"
+
+    def test_overwrites_existing_file(self, tmp_path: Path):
+        target = tmp_path / "image.bin"
+        target.write_bytes(b"old")
+
+        atomic_write_bytes(target, b"new")
+
+        assert target.read_bytes() == b"new"
+        assert not [p for p in tmp_path.iterdir() if p.suffix == ".tmp"]

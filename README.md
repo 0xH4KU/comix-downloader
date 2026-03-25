@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.7-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.8-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -16,6 +16,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Interactive & non-interactive CLI** — main menu, quick search, or full CLI flags
 - **Parallel downloads** — concurrent chapter and image downloads with page pool
 - **Resume / skip** — automatically skips already-downloaded chapters and images
+- **Corrupt-page recovery** — invalid existing image files are discarded and re-downloaded instead of being trusted by resume
 - **No false-success conversion** — chapters with failed page downloads stay unconverted and are reported as partial instead of completed
 - **Smart dedup** — auto-detects duplicate chapter uploads, keeps the best version by image count
 - **Rate limiting** — randomized download delays to avoid triggering anti-scraping (toggleable)
@@ -213,7 +214,7 @@ Checks Python version, dependencies, Chrome availability, and output directory.
 
 5. **Download** — image URLs are fetched via `page.evaluate(fetch())` inside Chrome's page context. A **page pool** (4 browser pages) enables true parallel downloads. Binary data uses **base64 encoding** (3-4x less overhead than JSON arrays). Random delays between requests avoid rate limiting.
 
-6. **Resume** — each chapter directory gets a `.complete` marker only after every page succeeds. Re-running the same download skips completed chapters and resumes partially-downloaded ones.
+6. **Resume** — each chapter directory gets a `.complete` marker only after every page succeeds. Re-running the same download skips completed chapters and resumes partially-downloaded ones. Existing image files are validated before reuse, and invalid files are re-downloaded.
 
 7. **Convert** — only fully successful chapters are packaged into PDF or CBZ. Multi-batch PDF conversion now fails fast if no merge backend is available, instead of emitting a truncated file.
 

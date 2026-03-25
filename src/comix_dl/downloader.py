@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import random
 import re
@@ -11,6 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from comix_dl.config import CONFIG, AppConfig
+from comix_dl.fileio import atomic_write_bytes
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -158,9 +160,9 @@ class Downloader:
 
                 filename = f"{index + 1:03d}"
 
-                # Resume: skip if image already exists
+                # Resume: only trust existing files that still look like valid images.
                 existing = list(chapter_dir.glob(f"{filename}.*"))
-                if existing and any(f.stat().st_size > 0 for f in existing):
+                if existing and any(self._is_valid_image_file(f) for f in existing):
                     _progress_done += 1
                     if self._on_progress:
                         self._on_progress(DownloadProgress(
@@ -172,6 +174,10 @@ class Downloader:
                             total_bytes=self.bytes_downloaded,
                         ))
                     return "skip"
+                if existing:
+                    for stale in existing:
+                        with contextlib.suppress(OSError):
+                            stale.unlink()
 
                 success = await self._download_image(url, chapter_dir, filename, referer=referer)
                 _progress_done += 1
@@ -251,12 +257,12 @@ class Downloader:
         for attempt in range(max_retries + 1):
             try:
                 data = await self._client.get_bytes(url, referer=referer)
-                self.bytes_downloaded += len(data)
 
                 # Determine extension from URL or content
                 ext = self._guess_extension(url, data)
                 filepath = output_dir / f"{filename}{ext}"
-                filepath.write_bytes(data)
+                atomic_write_bytes(filepath, data)
+                self.bytes_downloaded += len(data)
                 return True
 
             except Exception as exc:
@@ -292,5 +298,34 @@ class Downloader:
             return ".gif"
         if len(data) >= 12 and data[4:12] == b"ftypavif":
             return ".avif"
+        if data[:2] == b"BM":
+            return ".bmp"
 
         return ".jpg"  # default fallback
+
+    @staticmethod
+    def _is_valid_image_file(path: Path) -> bool:
+        """Best-effort validation for a previously downloaded image file."""
+        try:
+            with path.open("rb") as fh:
+                header = fh.read(16)
+        except OSError:
+            return False
+
+        if not header:
+            return False
+
+        suffix = path.suffix.lower()
+        if suffix == ".webp":
+            return header[:4] == b"RIFF" and header[8:12] == b"WEBP"
+        if suffix == ".png":
+            return header[:8] == b"\x89PNG\r\n\x1a\n"
+        if suffix in {".jpg", ".jpeg"}:
+            return header[:2] == b"\xff\xd8"
+        if suffix == ".gif":
+            return header[:4] == b"GIF8"
+        if suffix == ".bmp":
+            return header[:2] == b"BM"
+        if suffix == ".avif":
+            return len(header) >= 12 and header[4:12] == b"ftypavif"
+        return False
