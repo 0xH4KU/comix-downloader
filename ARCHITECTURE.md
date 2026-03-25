@@ -2,158 +2,222 @@
 
 ## Overview
 
-comix-downloader uses a Chrome CDP connection to bypass Cloudflare protection on comix.to, then interacts with the site's REST API v2 to search, list chapters, and fetch image URLs. `browser_session.py` owns Chrome lifecycle, lock handling, timeouts, and pooled pages; `cdp_browser.py` layers Cloudflare detection and request retry logic on top. Images are downloaded concurrently via that page pool and packaged into PDF or CBZ.
+comix-downloader is a desktop-first manga downloader for `comix.to`. It uses a real Chrome instance over CDP to survive Cloudflare, then fetches API metadata and image bytes through that browser session. The current codebase is split across four practical layers:
 
-## Component Diagram
+1. Presentation: `cli/__init__.py`, `cli/interactive.py`, `cli/display.py`
+2. Workflow orchestration: `cli/flows.py`
+3. Domain/service logic: `comix_service.py`, `downloader.py`, `converters.py`
+4. Infrastructure: `browser_session.py`, `cdp_browser.py`, `settings.py`, `history.py`, `fileio.py`, `notify.py`
 
+This is the real structure today, not the target end-state. There is still no dedicated application layer, and `cli/flows.py` remains the main orchestration hotspot.
+
+## Runtime Topology
+
+```text
+User
+  |
+  v
+cli/__init__.py
+  |
+  +--> cli/interactive.py
+  +--> cli/display.py
+  +--> cli/flows.py
+           |
+           +--> comix_service.py
+           +--> downloader.py
+           +--> converters.py
+           +--> history.py
+           +--> notify.py
+           |
+           +--> cdp_browser.py
+                    |
+                    v
+             browser_session.py
+                    |
+                    v
+           Chrome subprocess + Playwright CDP
+                    |
+                    v
+                 comix.to
 ```
-                    User
-                      |
-                 [cli.py] ---- argparse + Interactive menu
-                      |
-         +-----------+-----------+-----------+
-         |           |           |           |
-   [settings.py] [comix_service] [converters.py] [history.py]
-         |           |           |           |
-         |     [cdp_browser.py]  [Pillow]   history.json
-         |           |
-         |    [browser_session.py]
-         |           |
-     settings.json  Chrome (subprocess)
-                     |              [notify.py]
-              Playwright (CDP)       |
-                     |          osascript /
-               comix.to API     notify-send
-```
 
-## Key Components
+## Browser Stack
 
-### `browser_session.py` — Chrome Session Lifecycle
+### `browser_session.py`
 
-This layer owns the state that was previously packed into one monolithic browser client:
+`BrowserSessionManager` owns Chrome lifecycle and pooled browser resources:
 
-1. Launches Google Chrome as a **subprocess** with `--remote-debugging-port` (dynamic port selection)
-2. Applies the **single-instance lock** so only one comix-dl process can reuse the persisted Chrome profile at a time
-3. Connects Playwright via `connect_over_cdp()` and owns the main page plus the pooled download pages
-4. Wraps CDP connect, page creation, navigation, and `page.evaluate()` in **explicit timeout boundaries**
-5. Replaces dead pooled pages instead of silently re-queuing them
-6. Handles **graceful shutdown** and `atexit` cleanup for the Chrome started by the current Python process only
+- Launches Chrome with `--remote-debugging-port`
+- Applies a single-instance lock file under the config directory
+- Connects Playwright over CDP
+- Owns the main page plus the pooled download pages
+- Applies timeout boundaries to connect, page creation, navigation, and `page.evaluate()`
+- Replaces dead pooled pages instead of re-queuing broken objects
+- Cleans up only the Chrome started by the current Python process
 
-### `cdp_browser.py` — Cloudflare-Aware Request Client
+This separation matters because lifecycle logic is stateful and failure-prone. Keeping it isolated reduces the blast radius when changing Cloudflare handling or request logic.
 
-This layer now focuses on Cloudflare-sensitive behavior and browser-side request orchestration:
+### `cdp_browser.py`
 
-1. Does NOT use `--enable-automation` — Chrome appears as a normal user browser
-2. Chrome starts **hidden** (`--window-position=-32000,-32000`); only brought forward if CF challenge needs manual solving
-3. All network requests go through `page.evaluate(fetch())`, inheriting Chrome's real TLS fingerprint, cookies, and headers
-4. **Binary data** (images) transferred as **base64** for 3-4x less overhead than JSON arrays
-5. **Clearance self-healing** — if API/image requests start returning HTTP 403 or a challenge page reappears, cached clearance is reset, reacquired once, and the request is retried once
-6. Keeps Cloudflare logic separate from Chrome startup/page-pool lifecycle so the session layer stays testable and smaller
+`CdpBrowser` now sits above `BrowserSessionManager` and focuses on Cloudflare-aware request flow:
 
-This defeats CF's multi-layer detection:
-- **JS challenge** — Chrome executes it natively
-- **TLS fingerprint (JA3/JA4)** — real Chrome TLS stack, not httpx/curl
-- **Automation detection** — no `navigator.webdriver` flag, no automation banner
+- Ensures clearance before browser-backed API/image requests
+- Detects renewed challenges and HTTP 403 responses
+- Resets cached clearance once and retries once
+- Fetches bytes/JSON via `page.evaluate(fetch())`
+- Keeps Cloudflare heuristics separate from Chrome startup and shutdown
 
-A persistent Chrome profile at `~/.config/comix-dl/chrome-profile/` preserves CF clearance cookies across runs, while the browser client can invalidate its cached `_cf_cleared` state and reacquire clearance if the session expires mid-run.
+This layering makes the browser subsystem testable in two slices:
 
-### `comix_service.py` — REST API Client
+- Session tests: locks, page pool, dead-page replacement, timeout wiring
+- Cloudflare/request tests: challenge detection, retry behavior, request orchestration
 
-Communicates with comix.to's v2 REST API:
+## Service and Download Layer
 
-| Endpoint                                  | Method | Purpose          |
-| ----------------------------------------- | ------ | ---------------- |
-| `/api/v2/manga?keyword=...`               | GET    | Search           |
-| `/api/v2/manga/{hash_id}`                 | GET    | Manga details    |
-| `/api/v2/manga/{hash_id}/chapters`        | GET    | Chapter list     |
-| `/api/v2/chapters/{chapter_id}`           | GET    | Chapter images   |
+### `comix_service.py`
 
-Key identifiers:
-- `hash_id` (e.g. `a1b2`) — used for manga lookups (NOT the slug)
-- `chapter_id` (e.g. `5678901`) — used for chapter image retrieval
-- `slug` (e.g. `some-manga`) — used only for user-facing URLs
+The service client talks to the `comix.to` v2 REST API and normalizes chapter metadata:
 
-Deduplication rules:
-- Chapters are grouped by chapter number first, then by language and subtitle.
-- Same-number chapters with different subtitles or different languages are preserved as distinct content.
-- Only same-language duplicates compete on `image_count`, with the largest upload kept.
+- Search and series detail lookup use `hash_id`, not slug
+- Chapter image lookup uses `chapter_id`
+- Deduplication keeps language variants distinct
+- Same-language duplicates compete on `image_count`
 
-### `downloader.py` — Concurrent Image Downloader
+### `downloader.py`
 
-- Downloads images via `CdpBrowser.get_bytes()` (fetch inside Chrome page, base64 encoded)
-- Concurrency controlled by `asyncio.Semaphore` (default: 8 images at once)
-- Automatic retry with exponential backoff
-- **Resume support** — skips existing images, writes `.complete` marker only when every page succeeds
-- **Atomic image writes** — downloaded pages are written via temp files and `os.replace()`
-- **Resume validation** — existing image files must pass a magic-byte check before they are trusted
-- **Partial-state manifest** — partial / failed chapters write `chapter.state.json` with failed pages
-- **Temp-artifact cleanup** — stale `.part` and atomic hidden `.tmp` files are discarded on rerun before resume indexing
-- **Single-pass resume index** — chapter directories are scanned once to index existing page files
-- File extension detection from URL or magic bytes (including AVIF)
+`Downloader` is responsible for safe image persistence and resumable chapter state:
 
-### `converters.py` — PDF / CBZ
+- Image bytes are fetched through `CdpBrowser.get_bytes()`
+- Per-image concurrency is limited by `download.max_concurrent_images`
+- Existing chapter files are indexed once up front for O(1) resume checks
+- Existing files are validated by magic bytes before reuse
+- Image writes are atomic via temp files and `os.replace()`
+- Partial/failed chapters write `chapter.state.json`
+- Only fully successful chapters get a `.complete` marker
 
-- **PDF**: Pillow-based, processes images in batches to limit memory usage; fails fast if no PDF merge backend is available for multi-batch output
-- **CBZ**: ZIP archive with no compression (standard comic book format)
+## Download State Model
 
-### `settings.py` — Persistent Configuration
+The downloader now has an explicit result model instead of inferring success from scattered counters.
 
-- Settings stored as JSON at `~/.config/comix-dl/settings.json`
-- Writes use atomic replace to reduce config corruption on interruption
-- Loaded at startup and **synced to CONFIG** so all modules use user's values
-- Controls: output directory, default format, concurrency, retry count, image optimization
+### `ChapterDownloadResult`
 
-### `history.py` — Download History
+Each chapter ends in exactly one of four states:
 
-- JSON storage at `~/.config/comix-dl/history.json`
-- Writes use atomic replace to reduce history corruption on interruption
-- Records each download session (title, chapter count, format, size, status)
-- Auto-trims oldest entries at 500 max
-- Accessed via `comix-dl history` / `comix-dl history clear`
+- `complete`
+- `partial`
+- `failed`
+- `skipped`
 
-### `notify.py` — Desktop Notifications
+The result carries:
 
-- Platform-aware: `osascript` on macOS, `notify-send` on Linux
-- Best-effort, never raises — silently no-ops if tools unavailable
-- Triggered after download completion
+- total pages
+- downloaded pages
+- skipped pages
+- failed pages
+- failed filenames
 
-### `cli.py` — CLI Interface
+That result is the contract used by the orchestration layer to decide what is safe to do next.
 
-- **argparse-based** with subcommands: `search`, `download`, `info`, `list`, `clean`, `history`, `doctor`, `settings`
-- Interactive main menu loop with Rich TUI elements
-- Non-interactive mode: `comix-dl download URL --chapters 1-5 --format cbz`
-- Quick search: `comix-dl "query"` (no subcommand needed)
-- **`--quiet` mode** — suppress all output for scripting
-- **`--no-optimize`** — disable WebP image optimization
-- **Ctrl+C handling** — graceful shutdown, finishes current downloads then stops
-- Download summary panel with speed stats, size, and success/skip/fail counts
+### Recovery Artifacts
+
+`chapter.state.json` records the last known partial state:
+
+- timestamp
+- title / chapter label
+- final chapter status
+- counts for downloaded, skipped, and failed pages
+- failed page filename, source URL, and last error
+
+This file is the source of truth for interrupted or degraded runs. It prevents the old failure mode where a chapter looked successful simply because some files existed on disk.
+
+## Workflow Orchestration
+
+### `cli/flows.py`
+
+`cli/flows.py` is currently the orchestration center. It still does too much:
+
+- browser/session creation
+- service calls
+- chapter download coordination
+- conversion
+- history recording
+- notifications
+- cleanup prompts
+- Rich progress rendering
+
+This is the main architecture debt left in the project. The code works, but maintenance cost remains high because presentation concerns and business workflow are still tangled together.
+
+## Persistence
+
+### `settings.py`
+
+Settings are stored in `~/.config/comix-dl/settings.json` and written atomically. The current implementation still mutates the global `CONFIG` singleton at startup and save time. That matches the code today, but it is also a known design debt scheduled for removal.
+
+### `history.py`
+
+Download history is stored in `~/.config/comix-dl/history.json` and written atomically. Entries record:
+
+- title
+- chapter count
+- output format
+- total bytes
+- counts for completed / partial / failed / skipped chapters
+
+History records only the final workflow summary, not raw per-image diagnostics.
+
+### `fileio.py`
+
+`fileio.py` provides the atomic write primitives used by settings, history, and partial chapter state files. That consolidation is important because corruption prevention is an infrastructure concern, not a per-feature detail.
 
 ## Data Flow
 
+```text
+Search
+  user query
+    -> comix_service.search()
+    -> SearchResult list
+    -> user selection
+
+Download
+  selected series
+    -> comix_service.get_chapters()
+    -> cli/flows.py schedules chapter tasks
+    -> downloader.download_chapter()
+    -> ChapterDownloadResult
+    -> complete only: converters.convert()
+    -> workflow summary
+    -> history.record_download()
+    -> notify.send_notification()
+
+Resume / Recovery
+  chapter dir
+    -> .complete present -> skip safely
+    -> chapter.state.json present -> inspect partial state
+    -> existing files -> validate magic bytes
+    -> missing/corrupt pages -> re-download
 ```
-Search: User query → API search → SearchResult list → user selects
 
-Download: hash_id → API chapters → user selects → for each chapter:
-            chapter_id → API images → image URLs → parallel fetch (page pool) → disk
+## Availability Boundaries
 
-Resume:  chapter_dir/.complete exists? → skip
-         image file already exists?    → skip
-         chapter.state.json            → inspect incomplete pages / errors
+The current implementation has several explicit high-availability boundaries:
 
-Convert: fully-complete image directory → (optional: optimize to WebP) → PDF/CBZ → output file
+- Single-instance Chrome profile lock prevents cross-process profile corruption
+- Page pool size is bounded and tied to configured image concurrency
+- Browser operations fail with explicit timeouts instead of hanging forever
+- Cloudflare expiry is retried once through a clearance reset path
+- Dead pooled pages are evicted and replaced
+- Atomic writes prevent half-written settings, history, and image files from being treated as valid state
 
-History: download finishes → record to history.json → send desktop notification
-```
+These boundaries are the difference between a recoverable run and silent damage.
 
-## Threading Model
+## Known Debt
 
-All operations are async (`asyncio`). The only subprocess is Chrome itself. Image downloads run as concurrent async tasks limited by semaphore, using a browser page pool sized to `download.max_concurrent_images`. When all pooled pages are busy, requests wait for a pooled page rather than falling back to the shared main page. Chapter downloads are also parallelized (default: 2 concurrent). Browser-facing await points are wrapped in explicit timeout boundaries so stuck CDP connects, navigations, and `page.evaluate(fetch())` calls fail predictably.
+The following debts remain real and are intentionally documented here:
 
-## Why Not httpx / curl_cffi?
+- `cli/flows.py` still mixes orchestration, UI, and infrastructure calls
+- Global mutable `CONFIG` is still the configuration distribution mechanism
+- Settings and history do not yet have dedicated repository abstractions
+- Domain errors are still too generic in several flows
+- Overall test coverage is still below the desired long-term threshold
 
-Cloudflare ties `cf_clearance` cookies to:
-1. User-Agent string
-2. TLS fingerprint (JA3/JA4 hash)
-3. Browser fingerprint
-
-External HTTP clients (httpx, curl, curl_cffi) have different TLS fingerprints than Chrome, even when impersonating Chrome's UA. The only reliable bypass is using the actual Chrome TLS stack via CDP.
+The point of this document is to describe the current system honestly so the next refactor slices have a stable reference point.

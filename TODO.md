@@ -191,7 +191,7 @@
 
 ## P2 文件與專案衛生
 
-- [ ] 更新 `ARCHITECTURE.md`
+- [x] 更新 `ARCHITECTURE.md`
 完成標準：文件描述與實作一致，包含新的分層、狀態模型、瀏覽器會話策略、恢復機制。
 
 - [x] 修正 `DEVELOPMENT.md` 中的過期內容
