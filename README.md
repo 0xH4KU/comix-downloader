@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.34-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.35-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -22,6 +22,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Lifecycle split** — `BrowserSessionManager` owns Chrome startup, page pooling, and cleanup while `CdpBrowser` focuses on Cloudflare-aware request flow
 - **Explicit runtime config** — user settings are normalized into a per-run `AppConfig` and injected into runtime components instead of mutating process-global state
 - **Application use cases** — query resolution, download orchestration, and cleanup planning now live in `application/`, keeping the CLI focused on prompts, progress, and output rendering
+- **Consistent result reporting** — CLI summaries, desktop notifications, and persisted history now derive from the same download report, and failure reasons are retained in history
 - **Resume / skip** — automatically skips already-downloaded chapters and images
 - **Corrupt-page recovery** — invalid existing image files are discarded and re-downloaded instead of being trusted by resume
 - **No false-success conversion** — chapters with failed page downloads stay unconverted and are reported as partial instead of completed
@@ -246,6 +247,7 @@ src/comix_dl/
   __init__.py         # Package version
   __main__.py         # python -m comix_dl entry point
   application/        # Query, download, and cleanup use cases
+  application/download_reporting.py  # Shared summary and issue formatting
   cli/__init__.py     # CLI entry, parser, signal handling
   cli/flows.py        # CLI interaction flows delegating to application use cases
   cli/interactive.py  # Settings, history, chapter selection UI

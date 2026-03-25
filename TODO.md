@@ -183,7 +183,7 @@
 說明：目前 log 雜訊多，但關鍵欄位少。
 完成標準：至少包含 series、chapter_id、chapter_title、retry_count、status、bytes、elapsed。
 
-- [ ] 為下載摘要與失敗原因建立一致格式
+- [x] 為下載摘要與失敗原因建立一致格式
 完成標準：CLI summary、history、notification 使用同一套結果來源，不再各自拼湊。
 
 - [x] 為關鍵失敗情境增加明確訊息

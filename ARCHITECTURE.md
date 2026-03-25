@@ -5,7 +5,7 @@
 comix-downloader is a desktop-first manga downloader for `comix.to`. It uses a real Chrome instance over CDP to survive Cloudflare, then fetches API metadata and image bytes through that browser session. The current codebase is split across four practical layers:
 
 1. Presentation: `cli/__init__.py`, `cli/interactive.py`, `cli/display.py`
-2. Application use cases: `application/query_usecase.py`, `application/download_usecase.py`, `application/cleanup_usecase.py`
+2. Application use cases: `application/query_usecase.py`, `application/download_usecase.py`, `application/cleanup_usecase.py`, `application/download_reporting.py`
 3. Workflow/presentation glue: `cli/flows.py`
 4. Domain/service logic and infrastructure: `comix_service.py`, `downloader.py`, `converters.py`, `browser_session.py`, `cdp_browser.py`, `settings.py`, `history.py`, `fileio.py`, `notify.py`, `errors.py`
 
@@ -185,6 +185,17 @@ The download use case owns the batch chapter workflow:
 
 The key boundary is the event callback. The use case no longer needs Rich progress objects, but the CLI can still render a detailed progress view.
 
+### `application/download_reporting.py`
+
+Download reporting now has a dedicated formatting layer built on top of the canonical `DownloadSummary` result:
+
+- stable count ordering for summary text
+- shared byte-size formatting
+- normalized issue lines
+- a notification body derived from the same summary data
+
+This matters because CLI panels, persisted history, and desktop notifications no longer drift independently when result wording changes.
+
 ### `application/cleanup_usecase.py`
 
 Cleanup planning is now separated from the CLI:
@@ -235,6 +246,7 @@ Download history is stored in `~/.config/comix-dl/history.json` and written atom
 - counts for completed / partial / failed / skipped chapters
 
 History records only the final workflow summary, not raw per-image diagnostics.
+They now also persist normalized summary text and chapter-level issue lines derived from the shared download report.
 
 ### `fileio.py`
 
@@ -294,7 +306,6 @@ The following debts remain real and are intentionally documented here:
 
 - `cli/flows.py` still mixes orchestration, UI, and infrastructure calls
 - `application/download_usecase.py` still talks to history and notification infrastructure directly instead of going through abstract ports
-- CLI and notification summaries are still assembled in separate places rather than a single shared formatter
 - CLI still renders several failures with generic text instead of a single centralized error presenter
 - Overall test coverage is still below the desired long-term threshold
 

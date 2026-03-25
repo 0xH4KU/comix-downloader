@@ -108,6 +108,7 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
     assert summary.partial == 0
     assert summary.failed == 0
     assert summary.total_bytes == 2048
+    assert summary.issues == ()
     assert [event.kind for event in events] == ["started", "planned", "progress", "progress", "converted"]
     assert history.calls == [{
         "title": "Series A",
@@ -118,6 +119,8 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
         "partial": 0,
         "failed": 0,
         "skipped": 0,
+        "summary_text": "1 downloaded",
+        "issues": [],
     }]
     assert notifications == [("comix-dl: Series A", "1 downloaded (2.0 KB)")]
 
@@ -205,6 +208,10 @@ async def test_download_chapters_counts_skipped_partial_and_missing_images(
     assert summary.partial == 1
     assert summary.failed == 1
     assert summary.total_bytes == 1000
+    assert [issue.message for issue in summary.issues] == [
+        "Chapter 2 is incomplete: 1/2 pages failed.",
+        "no images available from remote API",
+    ]
     assert len(created_downloaders) == 3
     assert history.calls == [{
         "title": "Series B",
@@ -215,5 +222,16 @@ async def test_download_chapters_counts_skipped_partial_and_missing_images(
         "partial": 1,
         "failed": 1,
         "skipped": 1,
+        "summary_text": "1 skipped, 1 partial, 1 failed",
+        "issues": [
+            "Chapter 2: Chapter 2 is incomplete: 1/2 pages failed.",
+            "Chapter 3: no images available from remote API",
+        ],
     }]
-    assert notifications == [("comix-dl: Series B", "0 downloaded, 1 skipped, 1 partial, 1 failed (1000.0 B)")]
+    assert notifications == [
+        (
+            "comix-dl: Series B",
+            "1 skipped, 1 partial, 1 failed (1000.0 B) | "
+            "Chapter 2: Chapter 2 is incomplete: 1/2 pages failed. | +1 more issue(s)",
+        )
+    ]

@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from comix_dl.application.download_reporting import build_download_report
 from comix_dl.converters import convert
 from comix_dl.downloader import Downloader, DownloadProgress, ensure_complete_download
 from comix_dl.errors import ConversionError, PartialDownloadError
@@ -37,16 +38,7 @@ DownloadEventKind = Literal[
 DownloadEventHandler = Callable[["DownloadChapterEvent"], None]
 ShutdownCheck = Callable[[], bool]
 Notifier = Callable[[str, str], None]
-
-
-def _format_bytes(n: int) -> str:
-    """Return a human-readable byte size for notifications."""
-    size = float(n)
-    for unit in ("B", "KB", "MB", "GB"):
-        if abs(size) < 1024:
-            return f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} TB"
+DownloadIssueKind = Literal["missing_images", "failed", "partial", "conversion_failed"]
 
 
 @dataclass
@@ -73,6 +65,16 @@ class DownloadSummary:
     failed: int
     total_bytes: int
     elapsed_seconds: float
+    issues: tuple[DownloadIssue, ...] = ()
+
+
+@dataclass(frozen=True)
+class DownloadIssue:
+    """A normalized chapter-level issue for summary/reporting output."""
+
+    chapter_title: str
+    kind: DownloadIssueKind
+    message: str
 
 
 def _emit(on_event: DownloadEventHandler | None, event: DownloadChapterEvent) -> None:
@@ -103,6 +105,7 @@ async def download_chapters(
     partial_count = 0
     failed_count = 0
     total_bytes = 0
+    issues: list[DownloadIssue] = []
     history = history_repository or HistoryRepository()
     notify = notifier or send_notification
 
@@ -149,6 +152,13 @@ async def download_chapters(
             chapter_data = await service.get_chapter_images(chapter.chapter_id)
             if chapter_data is None:
                 failed_count += 1
+                issues.append(
+                    DownloadIssue(
+                        chapter_title=chapter.title,
+                        kind="missing_images",
+                        message="no images available from remote API",
+                    )
+                )
                 _emit(
                     on_event,
                     DownloadChapterEvent(
@@ -192,6 +202,13 @@ async def download_chapters(
 
             if download_result.status == "failed":
                 failed_count += 1
+                issues.append(
+                    DownloadIssue(
+                        chapter_title=chapter.title,
+                        kind="failed",
+                        message="all image downloads failed",
+                    )
+                )
                 _emit(
                     on_event,
                     DownloadChapterEvent(
@@ -206,6 +223,13 @@ async def download_chapters(
                 ensure_complete_download(download_result, chapter_title=chapter.title)
             except PartialDownloadError as exc:
                 partial_count += 1
+                issues.append(
+                    DownloadIssue(
+                        chapter_title=chapter.title,
+                        kind="partial",
+                        message=str(exc),
+                    )
+                )
                 _emit(
                     on_event,
                     DownloadChapterEvent(
@@ -231,6 +255,13 @@ async def download_chapters(
                 )
             except ConversionError as exc:
                 failed_count += 1
+                issues.append(
+                    DownloadIssue(
+                        chapter_title=chapter.title,
+                        kind="conversion_failed",
+                        message=str(exc),
+                    )
+                )
                 _emit(
                     on_event,
                     DownloadChapterEvent(
@@ -256,7 +287,9 @@ async def download_chapters(
         failed=failed_count,
         total_bytes=total_bytes,
         elapsed_seconds=elapsed,
+        issues=tuple(sorted(issues, key=lambda issue: (issue.chapter_title, issue.kind, issue.message))),
     )
+    report = build_download_report(summary)
 
     history.record_download(
         title=series_title,
@@ -267,17 +300,11 @@ async def download_chapters(
         partial=summary.partial,
         failed=summary.failed,
         skipped=summary.skipped,
+        summary_text=report.summary_text,
+        issues=list(report.issue_lines),
     )
 
     if summary.total_chapters > 0:
-        body = f"{summary.completed} downloaded"
-        if summary.skipped:
-            body += f", {summary.skipped} skipped"
-        if summary.partial:
-            body += f", {summary.partial} partial"
-        if summary.failed:
-            body += f", {summary.failed} failed"
-        body += f" ({_format_bytes(summary.total_bytes)})"
-        notify(f"comix-dl: {series_title}", body)
+        notify(f"comix-dl: {series_title}", report.notification_body)
 
     return summary

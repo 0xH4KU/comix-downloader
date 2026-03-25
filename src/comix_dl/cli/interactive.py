@@ -11,6 +11,7 @@ from rich.panel import Panel
 from rich.prompt import IntPrompt, Prompt
 from rich.table import Table
 
+from comix_dl.application.download_reporting import format_download_counts
 from comix_dl.cli.display import console, format_bytes, print_chapters_table
 from comix_dl.settings import SettingsRepository
 
@@ -104,7 +105,8 @@ def flow_history(*, action: str | None = None) -> int:
     table.add_column("Ch", style="cyan", justify="right", width=4)
     table.add_column("Format", style="dim", width=6)
     table.add_column("Size", style="dim", justify="right", width=10)
-    table.add_column("Status", width=20)
+    table.add_column("Status", width=24)
+    table.add_column("Issues", overflow="fold")
 
     for entry in entries[:50]:  # Show last 50
         # Parse timestamp
@@ -113,17 +115,15 @@ def flow_history(*, action: str | None = None) -> int:
         except Exception:
             dt = "?"
 
-        # Status
-        parts = []
-        if entry.completed:
-            parts.append(f"[green]{entry.completed} ok[/green]")
-        if entry.skipped:
-            parts.append(f"[dim]{entry.skipped} skip[/dim]")
-        if entry.partial:
-            parts.append(f"[yellow]{entry.partial} partial[/yellow]")
-        if entry.failed:
-            parts.append(f"[red]{entry.failed} fail[/red]")
-        status = " ".join(parts)
+        status = entry.summary_text or format_download_counts(
+            completed=entry.completed,
+            skipped=entry.skipped,
+            partial=entry.partial,
+            failed=entry.failed,
+        )
+        issues = entry.issues[0] if entry.issues else ""
+        if len(entry.issues) > 1:
+            issues += f" (+{len(entry.issues) - 1})"
 
         table.add_row(
             dt,
@@ -132,6 +132,7 @@ def flow_history(*, action: str | None = None) -> int:
             entry.format.upper(),
             format_bytes(entry.total_size_bytes),
             status,
+            issues,
         )
 
     console.print(table)

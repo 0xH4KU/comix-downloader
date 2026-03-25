@@ -18,6 +18,7 @@ from rich.progress import (
 from rich.prompt import Prompt
 
 from comix_dl.application.cleanup_usecase import apply_cleanup_plan, build_cleanup_plan, list_downloaded_series
+from comix_dl.application.download_reporting import build_download_report
 from comix_dl.application.download_usecase import (
     DownloadChapterEvent,
     DownloadSummary,
@@ -171,24 +172,16 @@ def _render_download_summary(summary: DownloadSummary, output_dir: Path) -> None
     """Print the final download summary panel."""
     console.print()
 
-    parts: list[str] = []
-    if summary.completed:
-        parts.append(f"[green]{summary.completed} downloaded[/green]")
-    if summary.skipped:
-        parts.append(f"[dim]{summary.skipped} skipped[/dim]")
-    if summary.partial:
-        parts.append(f"[yellow]{summary.partial} partial[/yellow]")
-    if summary.failed:
-        parts.append(f"[red]{summary.failed} failed[/red]")
-
-    size_str = format_bytes(summary.total_bytes)
+    report = build_download_report(summary)
     speed = summary.total_bytes / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0
     speed_str = format_bytes(int(speed)) + "/s"
-    summary_text = " · ".join(parts) if parts else "[green]Nothing to do[/green]"
     summary_line = (
-        f"{summary_text}  ·  {size_str}  ·  {speed_str}  ·  "
+        f"{report.summary_text}  ·  {report.size_text}  ·  {speed_str}  ·  "
         f"[dim]{summary.elapsed_seconds:.1f}s elapsed[/dim]  ·  {output_dir}"
     )
+    if report.issue_lines:
+        issue_block = "\n".join(f"- {line}" for line in report.preview_issue_lines())
+        summary_line += f"\n\n[bold]Issues[/bold]\n{issue_block}"
 
     console.print(Panel(
         summary_line,

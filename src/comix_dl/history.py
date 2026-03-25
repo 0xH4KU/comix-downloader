@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -31,6 +31,8 @@ class HistoryEntry:
     partial: int = 0
     failed: int = 0
     skipped: int = 0
+    summary_text: str = ""
+    issues: list[str] = field(default_factory=list)
 
 
 class HistoryRepository:
@@ -50,6 +52,8 @@ class HistoryRepository:
         partial: int = 0,
         failed: int = 0,
         skipped: int = 0,
+        summary_text: str = "",
+        issues: list[str] | None = None,
     ) -> None:
         """Append a download record and trim old entries."""
         entry = HistoryEntry(
@@ -62,6 +66,8 @@ class HistoryRepository:
             partial=partial,
             failed=failed,
             skipped=skipped,
+            summary_text=summary_text,
+            issues=list(issues or []),
         )
 
         entries = self._load_entries()
@@ -119,6 +125,8 @@ def record_download(
     partial: int = 0,
     failed: int = 0,
     skipped: int = 0,
+    summary_text: str = "",
+    issues: list[str] | None = None,
 ) -> None:
     """Compatibility wrapper around the default history repository."""
     HistoryRepository().record_download(
@@ -130,6 +138,8 @@ def record_download(
         partial=partial,
         failed=failed,
         skipped=skipped,
+        summary_text=summary_text,
+        issues=issues,
     )
 
 

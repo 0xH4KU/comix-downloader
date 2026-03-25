@@ -54,6 +54,22 @@ class TestRecordDownload:
         assert entry.failed == 1
         assert entry.skipped == 1
 
+    def test_record_persists_summary_text_and_issues(self, tmp_path):
+        record_download(
+            "Manga A",
+            10,
+            "both",
+            completed=7,
+            partial=1,
+            failed=1,
+            skipped=1,
+            summary_text="7 downloaded, 1 partial, 1 failed, 1 skipped",
+            issues=["Chapter 9: timeout", "Chapter 10: conversion failed"],
+        )
+        entry = list_history()[0]
+        assert entry.summary_text == "7 downloaded, 1 partial, 1 failed, 1 skipped"
+        assert entry.issues == ["Chapter 9: timeout", "Chapter 10: conversion failed"]
+
     def test_repository_records_download(self, tmp_path):
         repository = HistoryRepository(tmp_path / "history.json")
 
@@ -124,6 +140,9 @@ class TestHistoryEntry:
             partial=1,
             failed=1,
             skipped=0,
+            summary_text="4 downloaded, 1 partial, 1 failed",
+            issues=["Chapter 5: conversion failed"],
         )
         assert entry.title == "Test"
         assert entry.total_size_bytes == 2048
+        assert entry.issues == ["Chapter 5: conversion failed"]

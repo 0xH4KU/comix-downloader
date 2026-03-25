@@ -26,6 +26,7 @@ comix-downloader/
       query_usecase.py    # Slug/query resolution and lookup rules
       download_usecase.py # Download orchestration + event emission
       cleanup_usecase.py  # Listing and cleanup planning
+      download_reporting.py # Shared summary and issue formatting
     browser_session.py    # Chrome lifecycle, locks, CDP, page pool
     cdp_browser.py        # Cloudflare-aware browser request client
     comix_service.py      # REST API client
@@ -127,6 +128,7 @@ comix.to uses several identifiers:
 4. **New setting** — add field to `Settings` in `settings.py`
 5. **New user-meaningful failure mode** — add or reuse a domain error in `errors.py`, then catch/render it at the CLI boundary
 6. **New dedup rule** — update `ComixService` to emit `DedupDecision` entries and keep the CLI dedup report aligned with the actual rule
+7. **New download summary wording** — update `application/download_reporting.py` and keep CLI/history/notification tests aligned with the shared report output
 
 ## Commit Conventions
 
