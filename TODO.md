@@ -111,7 +111,7 @@
 
 ## P1 狀態管理與儲存
 
-- [ ] 移除全域 mutable `CONFIG`
+- [x] 移除全域 mutable `CONFIG`
 說明：目前 `load_settings()` 會直接修改全域 singleton，狀態來源不透明。
 完成標準：啟動時載入 immutable runtime config，透過 constructor 注入給 service/use case。
 

@@ -12,7 +12,18 @@ import pytest
 import comix_dl.browser_session as browser_session_module
 from comix_dl.browser_session import BrowserSessionManager
 from comix_dl.cdp_browser import CdpBrowser, _atexit_kill_chrome, _find_free_port, _is_port_in_use
-from comix_dl.config import AppConfig
+from comix_dl.config import AppConfig, BrowserConfig, DownloadConfig
+
+
+def _make_config(
+    *,
+    browser: BrowserConfig | None = None,
+    download: DownloadConfig | None = None,
+) -> AppConfig:
+    return AppConfig(
+        browser=browser or BrowserConfig(),
+        download=download or DownloadConfig(),
+    )
 
 
 def _can_bind_localhost() -> bool:
@@ -72,23 +83,20 @@ class TestIsPortInUse:
 
 class TestBrowserTimeouts:
     def test_default_pool_size_uses_configured_image_concurrency(self):
-        config = AppConfig()
-        config.download.max_concurrent_images = 6
+        config = _make_config(download=DownloadConfig(max_concurrent_images=6))
 
         browser = BrowserSessionManager(config=config)
 
         assert browser._max_pages == 6
 
     def test_rejects_zero_page_pool_size(self):
-        config = AppConfig()
-        config.download.max_concurrent_images = 0
+        config = _make_config(download=DownloadConfig(max_concurrent_images=0))
 
         with pytest.raises(ValueError, match=r"Browser page pool size must be at least 1\."):
             BrowserSessionManager(config=config)
 
     async def test_connect_over_cdp_uses_connect_timeout(self, monkeypatch: pytest.MonkeyPatch):
-        config = AppConfig()
-        config.download.connect_timeout_ms = 1234
+        config = _make_config(download=DownloadConfig(connect_timeout_ms=1234))
 
         browser = BrowserSessionManager(config=config)
         browser._cdp_port = 9444
@@ -112,8 +120,7 @@ class TestBrowserTimeouts:
         assert captured["timeout"] == pytest.approx(1.234)
 
     async def test_fetch_page_timeout_uses_browser_timeout(self):
-        config = AppConfig()
-        config.browser.timeout_ms = 20
+        config = _make_config(browser=BrowserConfig(timeout_ms=20))
 
         browser = CdpBrowser(config=config)
         browser._started = True
@@ -130,8 +137,7 @@ class TestBrowserTimeouts:
             await browser.fetch_page("https://example.com")
 
     async def test_get_json_timeout_replaces_dead_page(self):
-        config = AppConfig()
-        config.download.read_timeout_ms = 20
+        config = _make_config(download=DownloadConfig(read_timeout_ms=20))
 
         browser = CdpBrowser(config=config)
         browser._started = True
@@ -153,8 +159,7 @@ class TestBrowserTimeouts:
         browser.release_page.assert_not_called()
 
     def test_wait_for_cdp_ready_uses_configured_timeout(self, monkeypatch: pytest.MonkeyPatch):
-        config = AppConfig()
-        config.download.connect_timeout_ms = 600
+        config = _make_config(download=DownloadConfig(connect_timeout_ms=600))
 
         browser = BrowserSessionManager(config=config)
         browser._cdp_port = 9222
@@ -267,8 +272,7 @@ class TestBrowserTimeouts:
         assert browser_session_module._active_chrome is None
 
     def test_single_instance_lock_rejects_second_browser(self, tmp_path):
-        config = AppConfig()
-        config.browser.cookie_dir = tmp_path
+        config = _make_config(browser=BrowserConfig(cookie_dir=tmp_path))
 
         first = BrowserSessionManager(config=config)
         second = BrowserSessionManager(config=config)
@@ -284,8 +288,7 @@ class TestBrowserTimeouts:
             first._release_instance_lock()
 
     def test_releasing_instance_lock_allows_next_browser(self, tmp_path):
-        config = AppConfig()
-        config.browser.cookie_dir = tmp_path
+        config = _make_config(browser=BrowserConfig(cookie_dir=tmp_path))
 
         first = BrowserSessionManager(config=config)
         second = BrowserSessionManager(config=config)

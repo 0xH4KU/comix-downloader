@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.30-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.31-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -20,6 +20,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Dead-page eviction** — closed browser pages are discarded and replaced instead of being returned to the pool
 - **Single-instance browser lock** — a second comix-dl process is rejected cleanly instead of racing over the same Chrome profile
 - **Lifecycle split** — `BrowserSessionManager` owns Chrome startup, page pooling, and cleanup while `CdpBrowser` focuses on Cloudflare-aware request flow
+- **Explicit runtime config** — user settings are normalized into a per-run `AppConfig` and injected into runtime components instead of mutating process-global state
 - **Resume / skip** — automatically skips already-downloaded chapters and images
 - **Corrupt-page recovery** — invalid existing image files are discarded and re-downloaded instead of being trusted by resume
 - **No false-success conversion** — chapters with failed page downloads stay unconverted and are reported as partial instead of completed

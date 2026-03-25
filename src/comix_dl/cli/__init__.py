@@ -39,7 +39,7 @@ from comix_dl.cli.flows import (
     flow_url_download,
 )
 from comix_dl.cli.interactive import flow_history, flow_settings, parse_chapter_selection, run_doctor
-from comix_dl.settings import SettingsRepository
+from comix_dl.settings import SettingsRepository, build_runtime_config
 
 _shutdown_requested = False
 
@@ -127,10 +127,21 @@ def main() -> int:
 
     if args.command == "download":
         settings = SettingsRepository().load()
+        runtime_config = build_runtime_config(settings)
         fmt = args.format or settings.default_format
         output = args.output or settings.output_dir
         optimize = settings.optimize_images and not args.no_optimize
-        return _run_async(flow_noninteractive_download(args.url, args.chapters, fmt, output, optimize=optimize))
+        return _run_async(
+            flow_noninteractive_download(
+                args.url,
+                args.chapters,
+                fmt,
+                output,
+                optimize=optimize,
+                settings=settings,
+                config=runtime_config,
+            )
+        )
 
     if args.command == "info":
         return _run_async(flow_info(args.url))

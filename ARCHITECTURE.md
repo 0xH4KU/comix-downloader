@@ -11,6 +11,8 @@ comix-downloader is a desktop-first manga downloader for `comix.to`. It uses a r
 
 This is the real structure today, not the target end-state. There is still no dedicated application layer, and `cli/flows.py` remains the main orchestration hotspot.
 
+At process start, the CLI loads persisted settings once, builds a per-run `AppConfig`, and passes that config explicitly into the browser, service, downloader, and converter stack. Runtime behavior no longer depends on mutating a process-global config singleton.
+
 ## Runtime Topology
 
 ```text
@@ -162,7 +164,7 @@ This is the main architecture debt left in the project. The code works, but main
 
 ### `settings.py`
 
-Settings are stored in `~/.config/comix-dl/settings.json` and written atomically. `SettingsRepository` now owns load/save/default fallback behavior, schema-version handling, and basic value normalization. The current implementation still mutates the global `CONFIG` singleton at startup and save time. That matches the code today, but it is also a known design debt scheduled for removal.
+Settings are stored in `~/.config/comix-dl/settings.json` and written atomically. `SettingsRepository` owns load/save/default fallback behavior, schema-version handling, and value normalization. It also builds a per-run `AppConfig` from persisted settings so runtime components can receive configuration by constructor injection instead of reading hidden global state.
 
 Only active user-facing controls remain wired here:
 
@@ -194,12 +196,18 @@ History records only the final workflow summary, not raw per-image diagnostics.
 
 ```text
 Search
+  settings.json
+    -> SettingsRepository.load()
+    -> SettingsRepository.build_runtime_config()
   user query
     -> comix_service.search()
     -> SearchResult list
     -> user selection
 
 Download
+  settings.json
+    -> SettingsRepository.load()
+    -> SettingsRepository.build_runtime_config()
   selected series
     -> comix_service.get_chapters()
     -> cli/flows.py schedules chapter tasks
@@ -237,7 +245,7 @@ These boundaries are the difference between a recoverable run and silent damage.
 The following debts remain real and are intentionally documented here:
 
 - `cli/flows.py` still mixes orchestration, UI, and infrastructure calls
-- Global mutable `CONFIG` is still the configuration distribution mechanism
+- Runtime config is still threaded manually through `cli/flows.py` instead of dedicated application/use-case boundaries
 - Domain errors are still too generic in several flows
 - Overall test coverage is still below the desired long-term threshold
 

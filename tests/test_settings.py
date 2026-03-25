@@ -6,11 +6,12 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from comix_dl.config import CONFIG
+from comix_dl.config import AppConfig
 from comix_dl.settings import (
     Settings,
     SettingsRepository,
     apply_settings_to_config,
+    build_runtime_config,
     load_settings,
     save_settings,
 )
@@ -180,31 +181,44 @@ class TestSaveSettings:
         assert loaded.optimize_images is False
 
 
-class TestApplySettingsToConfig:
+class TestBuildRuntimeConfig:
     def test_applies_output_dir(self):
         s = Settings(output_dir="/custom/path")
-        apply_settings_to_config(s)
-        assert CONFIG.download.default_output_dir == Path("/custom/path")
+        config = build_runtime_config(s)
+        assert config.download.default_output_dir == Path("/custom/path")
 
     def test_applies_concurrency(self):
         s = Settings(concurrent_chapters=4, concurrent_images=16)
-        apply_settings_to_config(s)
-        assert CONFIG.download.max_concurrent_chapters == 4
-        assert CONFIG.download.max_concurrent_images == 16
+        config = build_runtime_config(s)
+        assert config.download.max_concurrent_chapters == 4
+        assert config.download.max_concurrent_images == 16
 
     def test_applies_format(self):
         s = Settings(default_format="cbz")
-        apply_settings_to_config(s)
-        assert CONFIG.convert.default_format == "cbz"
+        config = build_runtime_config(s)
+        assert config.convert.default_format == "cbz"
 
     def test_delay_enabled(self):
         s = Settings(download_delay=True)
-        apply_settings_to_config(s)
-        assert CONFIG.download.image_delay == 0.15
-        assert CONFIG.download.chapter_delay == 0.8
+        config = build_runtime_config(s)
+        assert config.download.image_delay == 0.15
+        assert config.download.chapter_delay == 0.8
 
     def test_delay_disabled(self):
         s = Settings(download_delay=False)
-        apply_settings_to_config(s)
-        assert CONFIG.download.image_delay == 0.0
-        assert CONFIG.download.chapter_delay == 0.0
+        config = build_runtime_config(s)
+        assert config.download.image_delay == 0.0
+        assert config.download.chapter_delay == 0.0
+
+    def test_does_not_mutate_base_config(self):
+        base = AppConfig()
+        config = build_runtime_config(Settings(default_format="cbz", concurrent_images=4), base)
+
+        assert base.convert.default_format == "pdf"
+        assert base.download.max_concurrent_images == 8
+        assert config.convert.default_format == "cbz"
+        assert config.download.max_concurrent_images == 4
+
+    def test_compatibility_wrapper_returns_runtime_config(self):
+        config = apply_settings_to_config(Settings(default_format="both"))
+        assert config.convert.default_format == "both"

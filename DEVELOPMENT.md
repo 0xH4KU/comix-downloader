@@ -13,6 +13,8 @@ playwright install chromium
 
 The editable install includes the runtime `pypdf` dependency, so large PDF chapters do not require a separate merge-backend install.
 
+Settings are loaded into a per-run `AppConfig` via `build_runtime_config()` and injected into runtime components. `load_settings()` now returns normalized settings only; it does not mutate any process-global config object.
+
 ## Project Layout
 
 ``` 
@@ -23,7 +25,7 @@ comix-downloader/
     browser_session.py    # Chrome lifecycle, locks, CDP, page pool
     cdp_browser.py        # Cloudflare-aware browser request client
     comix_service.py      # REST API client
-    config.py             # Default config dataclasses
+    config.py             # AppConfig dataclasses used for runtime injection
     converters.py         # PDF / CBZ conversion
     downloader.py         # Image downloader
     fileio.py            # Atomic file write helpers

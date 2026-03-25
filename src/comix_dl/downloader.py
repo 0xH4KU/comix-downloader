@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from comix_dl.config import CONFIG, AppConfig
+from comix_dl.config import AppConfig
 from comix_dl.fileio import atomic_write_bytes, atomic_write_text
 
 if TYPE_CHECKING:
@@ -104,7 +104,7 @@ class Downloader:
         config: AppConfig | None = None,
     ) -> None:
         self._client = client
-        self._config = config or CONFIG
+        self._config = config if config is not None else AppConfig()
         self._output_dir = output_dir or self._config.download.default_output_dir
         self._on_progress = on_progress
         self.bytes_downloaded: int = 0

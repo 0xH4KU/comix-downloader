@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, ClassVar
 
-from comix_dl.config import CONFIG
+from comix_dl.config import AppConfig
 from comix_dl.fileio import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -40,22 +40,19 @@ class SettingsRepository:
         self._settings_file = settings_file or _SETTINGS_FILE
 
     def load(self) -> Settings:
-        """Load settings from disk, apply them to CONFIG, and return them."""
+        """Load settings from disk and return normalized values."""
         if not self._settings_file.exists():
-            settings = Settings()
-        else:
-            try:
-                data = json.loads(self._settings_file.read_text(encoding="utf-8"))
-                settings = self._deserialize(data)
-            except Exception as exc:
-                logger.warning("Failed to load settings: %s", exc)
-                settings = Settings()
+            return Settings()
 
-        self.apply_to_config(settings)
-        return settings
+        try:
+            data = json.loads(self._settings_file.read_text(encoding="utf-8"))
+            return self._deserialize(data)
+        except Exception as exc:
+            logger.warning("Failed to load settings: %s", exc)
+            return Settings()
 
     def save(self, settings: Settings) -> None:
-        """Save settings to disk and update CONFIG."""
+        """Save normalized settings to disk."""
         normalized = self._normalize_settings(asdict(settings))
         atomic_write_text(
             self._settings_file,
@@ -65,24 +62,32 @@ class SettingsRepository:
                 ensure_ascii=False,
             ) + "\n",
         )
-        self.apply_to_config(normalized)
         logger.debug("Settings saved to %s", self._settings_file)
 
     @staticmethod
-    def apply_to_config(settings: Settings) -> None:
-        """Apply user settings to the current global CONFIG."""
-        CONFIG.download.default_output_dir = Path(settings.output_dir)
-        CONFIG.download.max_concurrent_chapters = settings.concurrent_chapters
-        CONFIG.download.max_concurrent_images = settings.concurrent_images
-        CONFIG.download.max_retries = settings.max_retries
-        CONFIG.convert.default_format = settings.default_format
-        CONFIG.convert.optimize_images = settings.optimize_images
-        if settings.download_delay:
-            CONFIG.download.image_delay = 0.15
-            CONFIG.download.chapter_delay = 0.8
-        else:
-            CONFIG.download.image_delay = 0.0
-            CONFIG.download.chapter_delay = 0.0
+    def build_runtime_config(settings: Settings, base_config: AppConfig | None = None) -> AppConfig:
+        """Build a per-run AppConfig from persisted user settings."""
+        base = base_config if base_config is not None else AppConfig()
+        image_delay = 0.15 if settings.download_delay else 0.0
+        chapter_delay = 0.8 if settings.download_delay else 0.0
+        return AppConfig(
+            browser=replace(base.browser),
+            service=replace(base.service),
+            download=replace(
+                base.download,
+                default_output_dir=Path(settings.output_dir),
+                max_concurrent_chapters=settings.concurrent_chapters,
+                max_concurrent_images=settings.concurrent_images,
+                max_retries=settings.max_retries,
+                image_delay=image_delay,
+                chapter_delay=chapter_delay,
+            ),
+            convert=replace(
+                base.convert,
+                default_format=settings.default_format,
+                optimize_images=settings.optimize_images,
+            ),
+        )
 
     def _deserialize(self, data: object) -> Settings:
         """Deserialize JSON data, including legacy settings formats."""
@@ -211,6 +216,11 @@ def save_settings(settings: Settings) -> None:
     SettingsRepository().save(settings)
 
 
-def apply_settings_to_config(settings: Settings) -> None:
-    """Compatibility wrapper around repository-owned config application."""
-    SettingsRepository.apply_to_config(settings)
+def build_runtime_config(settings: Settings, base_config: AppConfig | None = None) -> AppConfig:
+    """Compatibility wrapper for building an injected runtime config."""
+    return SettingsRepository.build_runtime_config(settings, base_config=base_config)
+
+
+def apply_settings_to_config(settings: Settings, base_config: AppConfig | None = None) -> AppConfig:
+    """Backward-compatible alias for runtime config construction."""
+    return build_runtime_config(settings, base_config=base_config)

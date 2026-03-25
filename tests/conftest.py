@@ -2,31 +2,9 @@
 
 from __future__ import annotations
 
-import copy
-from dataclasses import fields
-from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-
-from comix_dl.config import CONFIG, AppConfig
-
-
-@pytest.fixture(autouse=True)
-def _isolate_config():
-    """Save and restore CONFIG state around every test.
-
-    This prevents tests from polluting each other through the global
-    CONFIG singleton.
-    """
-    originals: dict[str, Any] = {}
-    for f in fields(AppConfig):
-        originals[f.name] = copy.deepcopy(getattr(CONFIG, f.name))
-
-    yield
-
-    for name, value in originals.items():
-        setattr(CONFIG, name, value)
 
 
 @pytest.fixture()

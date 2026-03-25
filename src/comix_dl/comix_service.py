@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-from comix_dl.config import CONFIG, AppConfig
+from comix_dl.config import AppConfig
 
 if TYPE_CHECKING:
     from comix_dl.cdp_browser import CdpBrowser
@@ -113,7 +113,7 @@ class ComixService:
 
     def __init__(self, client: CdpBrowser, config: AppConfig | None = None) -> None:
         self._client = client
-        self._config = config or CONFIG
+        self._config = config if config is not None else AppConfig()
         self._base = self._config.service.base_url
 
     @staticmethod

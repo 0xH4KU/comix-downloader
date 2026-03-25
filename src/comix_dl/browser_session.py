@@ -13,15 +13,13 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
-from comix_dl.config import CONFIG
+from comix_dl.config import AppConfig
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
     from io import TextIOWrapper
 
     from playwright.async_api import Browser, BrowserContext, Page, Playwright
-
-    from comix_dl.config import AppConfig
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -139,7 +137,7 @@ class BrowserSessionManager:
     """Own Chrome lifecycle, CDP connection, and the pooled Playwright pages."""
 
     def __init__(self, *, max_pages: int | None = None, config: AppConfig | None = None) -> None:
-        self._config = config or CONFIG
+        self._config = config if config is not None else AppConfig()
         resolved_max_pages = (
             max_pages if max_pages is not None else self._config.download.max_concurrent_images
         )

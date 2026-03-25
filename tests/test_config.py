@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from comix_dl.config import CONFIG, AppConfig, BrowserConfig, ConvertConfig, DownloadConfig, ServiceConfig
+import comix_dl.config as config_module
+from comix_dl.config import AppConfig, BrowserConfig, ConvertConfig, DownloadConfig, ServiceConfig
 
 
 class TestBrowserConfig:
@@ -44,18 +45,20 @@ class TestConvertConfig:
 
 
 class TestAppConfig:
-    def test_global_config_exists(self):
-        assert isinstance(CONFIG, AppConfig)
+    def test_no_global_config_singleton(self):
+        assert not hasattr(config_module, "CONFIG")
 
     def test_sub_configs_are_instances(self):
-        assert isinstance(CONFIG.browser, BrowserConfig)
-        assert isinstance(CONFIG.download, DownloadConfig)
-        assert isinstance(CONFIG.service, ServiceConfig)
-        assert isinstance(CONFIG.convert, ConvertConfig)
+        cfg = AppConfig()
+        assert isinstance(cfg.browser, BrowserConfig)
+        assert isinstance(cfg.download, DownloadConfig)
+        assert isinstance(cfg.service, ServiceConfig)
+        assert isinstance(cfg.convert, ConvertConfig)
 
-    def test_config_is_mutable(self):
-        """CONFIG must be mutable so user settings can override defaults."""
-        original = CONFIG.download.max_retries
-        CONFIG.download.max_retries = 99
-        assert CONFIG.download.max_retries == 99
-        CONFIG.download.max_retries = original
+    def test_new_instances_do_not_share_nested_state(self):
+        first = AppConfig()
+        second = AppConfig()
+
+        first.download.max_retries = 99
+
+        assert second.download.max_retries == 3

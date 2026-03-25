@@ -16,12 +16,12 @@ from comix_dl.cdp_browser import CdpBrowser
 from comix_dl.cli.display import console, format_bytes, print_chapters_table, print_search_table, print_series_header
 from comix_dl.cli.interactive import filter_chapters_interactive, parse_chapter_selection
 from comix_dl.comix_service import ComixService
-from comix_dl.config import CONFIG
 from comix_dl.downloader import Downloader, DownloadProgress
-from comix_dl.settings import Settings, SettingsRepository
+from comix_dl.settings import Settings, SettingsRepository, build_runtime_config
 
 if TYPE_CHECKING:
     from comix_dl.comix_service import ChapterInfo
+    from comix_dl.config import AppConfig
 
 
 def _is_shutdown() -> bool:
@@ -36,10 +36,11 @@ def _is_shutdown() -> bool:
 async def flow_search(query: str) -> int:
     """Interactive search → select → download."""
     settings = SettingsRepository().load()
-    output_dir = Path(settings.output_dir)
+    config = build_runtime_config(settings)
+    output_dir = config.download.default_output_dir
 
-    async with CdpBrowser() as browser:
-        service = ComixService(browser)
+    async with CdpBrowser(config=config) as browser:
+        service = ComixService(browser, config=config)
 
         # 1. Search
         with console.status("[bold cyan]Searching…"):
@@ -165,7 +166,7 @@ async def flow_search(query: str) -> int:
         )
 
         # 6. Download
-        await download_chapters(browser, service, info.title, to_download, output_dir, fmt, settings)
+        await download_chapters(browser, service, info.title, to_download, output_dir, fmt, settings, config=config)
 
     return 0
 
@@ -173,13 +174,14 @@ async def flow_search(query: str) -> int:
 async def flow_url_download(url: str) -> int:
     """Download from a manga URL (interactive mode)."""
     settings = SettingsRepository().load()
-    output_dir = Path(settings.output_dir)
+    config = build_runtime_config(settings)
+    output_dir = config.download.default_output_dir
 
     # Extract slug from the URL
     slug = url.rstrip("/").split("/")[-1]
 
-    async with CdpBrowser() as browser:
-        service = ComixService(browser)
+    async with CdpBrowser(config=config) as browser:
+        service = ComixService(browser, config=config)
 
         with console.status("[bold cyan]Fetching series info…"):
             try:
@@ -239,20 +241,29 @@ async def flow_url_download(url: str) -> int:
             default=settings.default_format,
         )
 
-        await download_chapters(browser, service, info.title, to_download, output_dir, fmt, settings)
+        await download_chapters(browser, service, info.title, to_download, output_dir, fmt, settings, config=config)
 
     return 0
 
 
 async def flow_noninteractive_download(
-    url: str, chapters_sel: str, fmt: str, output: str, *, optimize: bool = True,
+    url: str,
+    chapters_sel: str,
+    fmt: str,
+    output: str,
+    *,
+    optimize: bool = True,
+    settings: Settings | None = None,
+    config: AppConfig | None = None,
 ) -> int:
     """Fully non-interactive download flow."""
     output_dir = Path(output)
     slug = url.rstrip("/").split("/")[-1]
+    resolved_settings = settings or SettingsRepository().load()
+    runtime_config = config or build_runtime_config(resolved_settings)
 
-    async with CdpBrowser() as browser:
-        service = ComixService(browser)
+    async with CdpBrowser(config=runtime_config) as browser:
+        service = ComixService(browser, config=runtime_config)
 
         console.print(f"[bold]Looking up '{slug}'…[/bold]")
         try:
@@ -273,9 +284,9 @@ async def flow_noninteractive_download(
             return 1
 
         console.print(f"[bold]Downloading {len(to_download)} chapter(s) as {fmt.upper()}…[/bold]\n")
-        settings = SettingsRepository().load()
         await download_chapters(
-            browser, service, info.title, to_download, output_dir, fmt, settings,
+            browser, service, info.title, to_download, output_dir, fmt, resolved_settings,
+            config=runtime_config,
             optimize=optimize,
         )
 
@@ -453,6 +464,7 @@ async def download_chapters(
     output_dir: Path,
     fmt: str,
     settings: Settings,
+    config: AppConfig,
     *,
     optimize: bool | None = None,
 ) -> None:
@@ -497,7 +509,7 @@ async def download_chapters(
             if _is_shutdown():
                 return
 
-            downloader = Downloader(browser, output_dir=output_dir)
+            downloader = Downloader(browser, output_dir=output_dir, config=config)
 
             # Check if already downloaded (resume)
             if downloader.is_chapter_complete(series_title, ch.title):
@@ -545,7 +557,7 @@ async def download_chapters(
                 return
 
             try:
-                out = convert(download_result.chapter_dir, fmt, optimize=optimize)
+                out = convert(download_result.chapter_dir, fmt, optimize=optimize, config=config)
                 progress.update(task_id, description=f"  [green]✓ {out.name}[/green]")
                 completed_ok += 1
             except RuntimeError:
@@ -553,7 +565,7 @@ async def download_chapters(
                 failed_count += 1
 
             # Delay between chapters to avoid rate limits
-            ch_delay = CONFIG.download.chapter_delay
+            ch_delay = config.download.chapter_delay
             if ch_delay > 0:
                 await asyncio.sleep(random.uniform(ch_delay * 0.5, ch_delay * 1.5))
 

@@ -1,7 +1,4 @@
-"""Application configuration.
-
-Provides sensible defaults that can be overridden by user settings.
-"""
+"""Application configuration models."""
 
 from __future__ import annotations
 
@@ -59,12 +56,9 @@ class ConvertConfig:
 
 @dataclass
 class AppConfig:
-    """Root configuration — mutable so user settings can override defaults."""
+    """Root configuration passed explicitly into runtime components."""
 
     browser: BrowserConfig = field(default_factory=BrowserConfig)
     download: DownloadConfig = field(default_factory=DownloadConfig)
     service: ServiceConfig = field(default_factory=ServiceConfig)
     convert: ConvertConfig = field(default_factory=ConvertConfig)
-
-
-CONFIG = AppConfig()

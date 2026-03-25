@@ -8,14 +8,19 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from comix_dl.config import CONFIG, AppConfig
+from comix_dl.config import AppConfig
 
 logger = logging.getLogger(__name__)
 
 
+def _resolve_config(config: AppConfig | None = None) -> AppConfig:
+    """Return an explicit runtime config or a fresh default config."""
+    return config if config is not None else AppConfig()
+
+
 def _get_image_extensions(config: AppConfig | None = None) -> frozenset[str]:
     """Return supported image extensions (lazy, respects runtime config)."""
-    cfg = config or CONFIG
+    cfg = _resolve_config(config)
     return frozenset(cfg.convert.supported_image_formats)
 
 
@@ -28,7 +33,7 @@ def collect_images(directory: Path, config: AppConfig | None = None) -> list[Pat
     ]
 
 
-def to_cbz(image_dir: Path, output_path: Path | None = None) -> Path:
+def to_cbz(image_dir: Path, output_path: Path | None = None, config: AppConfig | None = None) -> Path:
     """Create a CBZ archive from images in *image_dir*.
 
     Args:
@@ -41,7 +46,7 @@ def to_cbz(image_dir: Path, output_path: Path | None = None) -> Path:
     Raises:
         RuntimeError: If no images are found.
     """
-    images = collect_images(image_dir)
+    images = collect_images(image_dir, config=config)
     if not images:
         raise RuntimeError(f"No images found in {image_dir}")
 
@@ -72,7 +77,7 @@ def to_pdf(image_dir: Path, output_path: Path | None = None, config: AppConfig |
     Raises:
         RuntimeError: If no images are found.
     """
-    cfg = config or CONFIG
+    cfg = _resolve_config(config)
     images = collect_images(image_dir, config=cfg)
     if not images:
         raise RuntimeError(f"No images found in {image_dir}")
@@ -203,7 +208,13 @@ def _merge_pdfs(pdf_paths: list[Path], output: Path) -> None:
     )
 
 
-def convert(image_dir: Path, fmt: str = "cbz", *, optimize: bool = False) -> Path:
+def convert(
+    image_dir: Path,
+    fmt: str = "cbz",
+    *,
+    optimize: bool = False,
+    config: AppConfig | None = None,
+) -> Path:
     """Convert images using the specified format.
 
     Args:
@@ -217,16 +228,16 @@ def convert(image_dir: Path, fmt: str = "cbz", *, optimize: bool = False) -> Pat
     fmt = fmt.lower().strip()
 
     if optimize:
-        optimize_images(image_dir)
+        optimize_images(image_dir, config=config)
 
     if fmt == "both":
-        to_cbz(image_dir)
-        return to_pdf(image_dir)
+        to_cbz(image_dir, config=config)
+        return to_pdf(image_dir, config=config)
 
     if fmt == "pdf":
-        return to_pdf(image_dir)
+        return to_pdf(image_dir, config=config)
 
-    return to_cbz(image_dir)
+    return to_cbz(image_dir, config=config)
 
 
 @dataclass
@@ -249,7 +260,7 @@ class OptimizeResult:
         return (self.saved_bytes / self.original_bytes) * 100
 
 
-def optimize_images(image_dir: Path, *, quality: int = 85) -> OptimizeResult:
+def optimize_images(image_dir: Path, *, quality: int = 85, config: AppConfig | None = None) -> OptimizeResult:
     """Convert PNG/JPG/JPEG images in *image_dir* to WebP for smaller size.
 
     Already-WebP images are skipped.  The original files are replaced.
@@ -263,7 +274,7 @@ def optimize_images(image_dir: Path, *, quality: int = 85) -> OptimizeResult:
     """
     from PIL import Image
 
-    images = collect_images(image_dir)
+    images = collect_images(image_dir, config=config)
     original_bytes = 0
     optimized_bytes = 0
     converted = 0
