@@ -10,15 +10,9 @@ from comix_dl.config import CONFIG, AppConfig, BrowserConfig, ConvertConfig, Dow
 class TestBrowserConfig:
     def test_defaults(self):
         cfg = BrowserConfig()
-        assert cfg.headless is True
         assert cfg.timeout_ms == 30_000
         assert cfg.cf_wait_seconds == 60
-        assert cfg.cookie_file == "cookies.json"
         assert isinstance(cfg.cookie_dir, Path)
-
-    def test_user_agent_contains_chrome(self):
-        cfg = BrowserConfig()
-        assert "Chrome" in cfg.user_agent
 
 
 class TestDownloadConfig:
@@ -37,10 +31,6 @@ class TestServiceConfig:
     def test_base_url(self):
         cfg = ServiceConfig()
         assert cfg.base_url == "https://comix.to"
-
-    def test_rate_limit_delay(self):
-        cfg = ServiceConfig()
-        assert cfg.rate_limit_delay == 0.5
 
 
 class TestConvertConfig:

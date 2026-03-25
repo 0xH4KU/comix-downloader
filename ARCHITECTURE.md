@@ -153,6 +153,16 @@ This is the main architecture debt left in the project. The code works, but main
 
 Settings are stored in `~/.config/comix-dl/settings.json` and written atomically. The current implementation still mutates the global `CONFIG` singleton at startup and save time. That matches the code today, but it is also a known design debt scheduled for removal.
 
+Only active user-facing controls remain wired here:
+
+- output directory
+- default format
+- chapter concurrency
+- image concurrency
+- retry count
+- rate-limit delay toggle
+- image optimization toggle
+
 ### `history.py`
 
 Download history is stored in `~/.config/comix-dl/history.json` and written atomically. Entries record:
