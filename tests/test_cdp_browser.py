@@ -4,7 +4,25 @@ from __future__ import annotations
 
 import socket
 
+import pytest
+
 from comix_dl.cdp_browser import _find_free_port, _is_port_in_use
+
+
+def _can_bind_localhost() -> bool:
+    """Return whether this environment allows binding localhost TCP sockets."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", 0))
+        except OSError:
+            return False
+    return True
+
+
+pytestmark = pytest.mark.skipif(
+    not _can_bind_localhost(),
+    reason="Environment blocks binding localhost TCP sockets",
+)
 
 
 class TestFindFreePort:

@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.3-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.4-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -220,11 +220,14 @@ Checks Python version, dependencies, Chrome availability, and output directory.
 
 ## Project Structure
 
-```
+``` 
 src/comix_dl/
   __init__.py         # Package version
   __main__.py         # python -m comix_dl entry point
-  cli.py              # Interactive & non-interactive CLI (argparse)
+  cli/__init__.py     # CLI entry, parser, signal handling
+  cli/flows.py        # Search/download/info/cleanup workflows
+  cli/interactive.py  # Settings, history, chapter selection UI
+  cli/display.py      # Rich display helpers
   cdp_browser.py      # Chrome CDP connection (CF bypass, page pool)
   comix_service.py    # REST API client (search, chapters, dedup)
   downloader.py       # Concurrent image downloader with resume

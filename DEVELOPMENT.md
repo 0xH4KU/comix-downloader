@@ -5,30 +5,37 @@
 ```bash
 git clone https://github.com/0xH4KU/comix-downloader.git
 cd comix-downloader
-python3 -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 playwright install chromium
 ```
 
 ## Project Layout
 
-```
+``` 
 comix-downloader/
-  src/comix_dl/           # Main package
-    __init__.py           # Version
+  src/comix_dl/
+    __init__.py           # Version fallback
     __main__.py           # python -m entry point
-    cdp_browser.py        # Chrome CDP connection
-    cli.py                # Interactive CLI
+    cdp_browser.py        # Chrome CDP session + page pool
     comix_service.py      # REST API client
     config.py             # Default config dataclasses
     converters.py         # PDF / CBZ conversion
     downloader.py         # Image downloader
-    parser.py             # HTML parser (legacy)
+    history.py            # Download history persistence
+    notify.py             # Desktop notifications
     settings.py           # Persistent settings
-    tui.py                # Textual TUI (alternative)
+    cli/
+      __init__.py         # CLI entry, parser, signal handling
+      flows.py            # Search/download/info/cleanup flows
+      interactive.py      # Interactive settings/history/filter UI
+      display.py          # Rich tables and formatting
+  tests/                  # Test suite
   README.md
   ARCHITECTURE.md
   DEVELOPMENT.md
+  TODO.md
   pyproject.toml
 ```
 
@@ -42,7 +49,7 @@ comix-dl
 comix-dl "manga name"
 
 # Diagnostics
-comix-dl --doctor
+comix-dl doctor
 
 # Debug logging
 comix-dl --debug
@@ -57,9 +64,16 @@ ruff check .
 # Type check
 mypy src/comix_dl/ --no-error-summary
 
-# Both
-ruff check . && mypy src/comix_dl/ --no-error-summary
+# Test
+pytest
+
+# Full local gate
+ruff check . && mypy src/comix_dl/ --no-error-summary && pytest
 ```
+
+Notes:
+- Running `pytest` from the repository root now imports from `src/` directly, so an editable install is not required just to collect tests.
+- Low-level localhost socket tests auto-skip in restricted sandboxes that do not allow binding TCP ports.
 
 ## Key Concepts
 
@@ -89,7 +103,7 @@ comix.to uses several identifiers:
 ### Adding New Features
 
 1. **New API call** — add method to `ComixService` in `comix_service.py`
-2. **New CLI command** — add to the main menu in `cli.py`
+2. **New CLI command** — add parser wiring in `src/comix_dl/cli/__init__.py` and flow logic in `src/comix_dl/cli/flows.py`
 3. **New output format** — add converter in `converters.py`
 4. **New setting** — add field to `Settings` in `settings.py`
 
