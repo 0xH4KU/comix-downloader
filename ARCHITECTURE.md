@@ -207,6 +207,7 @@ The current implementation has several explicit high-availability boundaries:
 - Cloudflare expiry is retried once through a clearance reset path
 - Dead pooled pages are evicted and replaced
 - Atomic writes prevent half-written settings, history, and image files from being treated as valid state
+- High-risk failure modes now emit targeted diagnostics instead of generic transport errors
 
 These boundaries are the difference between a recoverable run and silent damage.
 

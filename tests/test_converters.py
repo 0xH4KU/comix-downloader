@@ -190,7 +190,10 @@ class TestToPdf:
 
         with (
             patch("builtins.__import__", side_effect=_block_pdf_merge_backends),
-            pytest.raises(RuntimeError, match="refusing to create an incomplete PDF"),
+            pytest.raises(
+                RuntimeError,
+                match=r"Install one of them and retry; refusing to create an incomplete PDF",
+            ),
         ):
             to_pdf(img_dir)
 

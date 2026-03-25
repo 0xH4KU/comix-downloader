@@ -109,7 +109,8 @@ class CdpBrowser(BrowserSessionManager):
                         )
                         continue
                     raise RuntimeError(
-                        f"Cloudflare clearance refresh did not recover access to {url}.",
+                        "Cloudflare clearance refresh did not recover browser access "
+                        f"to {url} after HTTP 403.",
                     ) from exc
                 if use_page_pool:
                     await self._replace_dead_page(page)

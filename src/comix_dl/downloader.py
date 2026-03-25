@@ -109,6 +109,21 @@ class Downloader:
         self._on_progress = on_progress
         self.bytes_downloaded: int = 0
 
+    @staticmethod
+    def _describe_download_error(url: str, filename: str, exc: Exception) -> str:
+        """Return a clearer error message for common image-download failures."""
+        message = str(exc)
+        if "timed out" in message:
+            return f"Image request timed out for {filename} from {url}: {message}"
+        if "HTTP 403" in message or "403 Forbidden" in message:
+            return (
+                f"Image request was blocked by HTTP 403 for {filename} from {url}; "
+                "Cloudflare clearance may have expired."
+            )
+        if "page pool" in message.lower():
+            return f"Browser page pool is unavailable while downloading {filename} from {url}: {message}"
+        return message
+
     def is_chapter_complete(self, title: str, chapter: str) -> bool:
         """Check whether a chapter has already been downloaded."""
         chapter_dir = self._output_dir / sanitize_dirname(title) / sanitize_dirname(chapter)
@@ -291,16 +306,21 @@ class Downloader:
                 return True, None
 
             except Exception as exc:
-                last_error = str(exc)
+                last_error = self._describe_download_error(url, filename, exc)
                 if attempt < max_retries:
                     wait = retry_delay * (2 ** attempt)
                     logger.debug(
                         "Retry %d/%d for %s after %.1fs: %s",
-                        attempt + 1, max_retries, filename, wait, exc,
+                        attempt + 1, max_retries, filename, wait, last_error,
                     )
                     await asyncio.sleep(wait)
                 else:
-                    logger.warning("Failed to download %s after %d attempts: %s", url, max_retries + 1, exc)
+                    logger.warning(
+                        "Failed to download %s after %d attempts: %s",
+                        url,
+                        max_retries + 1,
+                        last_error,
+                    )
 
         return False, last_error
 

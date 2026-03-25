@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 from comix_dl.comix_service import ChapterImages, ChapterInfo, ComixService, SearchResult, SeriesInfo
 
 if TYPE_CHECKING:
@@ -219,6 +221,14 @@ class TestSearch:
         results = await svc.search("test")
         assert results == []
 
+    async def test_403_error_logs_clearance_hint(self, mock_browser: AsyncMock, caplog: pytest.LogCaptureFixture):
+        mock_browser.get_json.side_effect = Exception("HTTP 403 Forbidden")
+        svc = _make_service(mock_browser)
+
+        await svc.search("test")
+
+        assert "Cloudflare clearance may have expired." in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # get_chapter_images
@@ -274,6 +284,30 @@ class TestGetChapterImages:
         svc = _make_service(mock_browser)
         result = await svc.get_chapter_images(12345)
         assert result is None
+
+    async def test_timeout_logs_clear_error(self, mock_browser: AsyncMock, caplog: pytest.LogCaptureFixture):
+        mock_browser.get_json.side_effect = Exception("Reading response timed out after 5000ms.")
+        svc = _make_service(mock_browser)
+
+        result = await svc.get_chapter_images(12345)
+
+        assert result is None
+        assert "API request timed out." in caplog.text
+
+
+class TestGetSeries:
+    async def test_403_raises_clear_runtime_error(self, mock_browser: AsyncMock):
+        mock_browser.get_json.side_effect = Exception("HTTP 403 Forbidden")
+        svc = _make_service(mock_browser)
+
+        with pytest.raises(
+            RuntimeError,
+            match=(
+                r"Fetch series info for 'abc' failed: API request was blocked by HTTP 403\. "
+                r"Cloudflare clearance may have expired\."
+            ),
+        ):
+            await svc.get_series("abc")
 
 
 # ---------------------------------------------------------------------------

@@ -26,6 +26,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
+_POOL_UNAVAILABLE_MESSAGE = (
+    "Browser page pool is unavailable; pooled download requests cannot proceed. "
+    "This usually means pooled page creation failed during browser startup."
+)
+
 # Module-level reference for current-process atexit cleanup
 _active_chrome: subprocess.Popen[bytes] | None = None
 _active_instance_lock: TextIOWrapper | None = None
@@ -430,7 +435,7 @@ class BrowserSessionManager:
         """Get a page from the pool, waiting if all pooled pages are busy."""
         while True:
             if not self._all_pages:
-                raise RuntimeError("Browser page pool is empty; cannot perform pooled requests.")
+                raise RuntimeError(_POOL_UNAVAILABLE_MESSAGE)
             page = await self._page_pool.get()
             if self._page_is_healthy(page):
                 return page

@@ -198,8 +198,8 @@ def _merge_pdfs(pdf_paths: list[Path], output: Path) -> None:
         pass
 
     raise RuntimeError(
-        "Large PDF conversion requires pikepdf or pypdf to merge batch files; "
-        "refusing to create an incomplete PDF."
+        "Large PDF conversion requires a PDF merge backend (`pypdf` or `pikepdf`). "
+        "Install one of them and retry; refusing to create an incomplete PDF."
     )
 
 

@@ -434,6 +434,51 @@ class TestDownloadImageRetry:
         # 1 initial + 2 retries = 3 calls
         assert mock_browser.get_bytes.call_count == 3
 
+    async def test_timeout_error_is_contextualized(self, tmp_path: Path, mock_browser: AsyncMock):
+        mock_browser.get_bytes.side_effect = RuntimeError("Fetching binary response timed out after 20ms.")
+
+        dl = Downloader(mock_browser, output_dir=tmp_path)
+
+        with (
+            patch("comix_dl.downloader.CONFIG.download.max_retries", 0),
+            patch("comix_dl.downloader.CONFIG.download.retry_delay", 0),
+        ):
+            success, error = await dl._download_image(
+                "https://cdn.com/test.jpg",
+                tmp_path,
+                "001",
+            )
+
+        assert success is False
+        assert error == (
+            "Image request timed out for 001 from https://cdn.com/test.jpg: "
+            "Fetching binary response timed out after 20ms."
+        )
+
+    async def test_page_pool_error_is_contextualized(self, tmp_path: Path, mock_browser: AsyncMock):
+        mock_browser.get_bytes.side_effect = RuntimeError(
+            "Browser page pool is unavailable; pooled download requests cannot proceed.",
+        )
+
+        dl = Downloader(mock_browser, output_dir=tmp_path)
+
+        with (
+            patch("comix_dl.downloader.CONFIG.download.max_retries", 0),
+            patch("comix_dl.downloader.CONFIG.download.retry_delay", 0),
+        ):
+            success, error = await dl._download_image(
+                "https://cdn.com/test.jpg",
+                tmp_path,
+                "001",
+            )
+
+        assert success is False
+        assert error == (
+            "Browser page pool is unavailable while downloading 001 from "
+            "https://cdn.com/test.jpg: Browser page pool is unavailable; "
+            "pooled download requests cannot proceed."
+        )
+
 
 # ---------------------------------------------------------------------------
 # DownloadProgress dataclass

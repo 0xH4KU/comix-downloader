@@ -206,7 +206,7 @@ class TestBrowserTimeouts:
 
         with pytest.raises(
             RuntimeError,
-            match=r"Browser page pool is empty; cannot perform pooled requests\.",
+            match=r"Browser page pool is unavailable; pooled download requests cannot proceed\.",
         ):
             await browser.acquire_page()
 
@@ -350,7 +350,10 @@ class TestCloudflareRecovery:
 
         with pytest.raises(
             RuntimeError,
-            match=r"Cloudflare clearance refresh did not recover access to https://api\.example\.com/data\.",
+            match=(
+                r"Cloudflare clearance refresh did not recover browser access to "
+                r"https://api\.example\.com/data after HTTP 403\."
+            ),
         ):
             await browser.get_json("https://api.example.com/data")
 

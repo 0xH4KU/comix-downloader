@@ -83,6 +83,19 @@ class ComixService:
         self._config = config or CONFIG
         self._base = self._config.service.base_url
 
+    @staticmethod
+    def _describe_api_error(exc: Exception, *, action: str) -> str:
+        """Return a clearer message for high-value remote failure modes."""
+        message = str(exc)
+        if "HTTP 403" in message or "403 Forbidden" in message:
+            return (
+                f"{action} failed: API request was blocked by HTTP 403. "
+                "Cloudflare clearance may have expired."
+            )
+        if "timed out" in message:
+            return f"{action} failed: API request timed out. {message}"
+        return f"{action} failed: {message}"
+
     async def search(
         self,
         query: str,
@@ -100,14 +113,7 @@ class ComixService:
         try:
             resp = await self._client.get_json(api_url)
         except Exception as exc:
-            msg = str(exc)
-            if "403" in msg:
-                logger.error(
-                    "Access denied (HTTP 403). CF cookies may have expired. "
-                    "Try running again to refresh."
-                )
-            else:
-                logger.error("Search failed: %s", exc)
+            logger.error("%s", self._describe_api_error(exc, action=f"Search for '{query}'"))
             return []
 
         results: list[SearchResult] = []
@@ -163,7 +169,9 @@ class ComixService:
         try:
             info_resp = await self._client.get_json(api_url)
         except Exception as exc:
-            raise RuntimeError(f"Failed to fetch series info: {exc}") from exc
+            raise RuntimeError(
+                self._describe_api_error(exc, action=f"Fetch series info for '{hash_id}'"),
+            ) from exc
 
         data = info_resp.get("result", {})
         if not isinstance(data, dict):
@@ -203,7 +211,10 @@ class ComixService:
             try:
                 resp = await self._client.get_json(api_url)
             except Exception as exc:
-                logger.error("Failed to fetch chapters (page %d): %s", page, exc)
+                logger.error(
+                    "%s",
+                    self._describe_api_error(exc, action=f"Fetch chapter list page {page} for '{hash_id}'"),
+                )
                 break
 
             result_obj = resp.get("result", {})
@@ -360,7 +371,10 @@ class ComixService:
         try:
             resp = await self._client.get_json(api_url)
         except Exception as exc:
-            logger.error("Failed to fetch chapter %d: %s", chapter_id, exc)
+            logger.error(
+                "%s",
+                self._describe_api_error(exc, action=f"Fetch chapter images for {chapter_id}"),
+            )
             return None
 
         data = resp.get("result", {})
