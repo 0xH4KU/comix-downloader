@@ -39,6 +39,7 @@ class TestConvertConfig:
         cfg = ConvertConfig()
         assert cfg.default_format == "pdf"
         assert cfg.pdf_dpi == 100.0
+        assert cfg.pdf_batch_size == 20
         assert "png" in cfg.supported_image_formats
         assert "webp" in cfg.supported_image_formats
         assert "avif" in cfg.supported_image_formats

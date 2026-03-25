@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
+import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +23,12 @@ def _get_image_extensions(config: AppConfig | None = None) -> frozenset[str]:
     """Return supported image extensions (lazy, respects runtime config)."""
     cfg = _resolve_config(config)
     return frozenset(cfg.convert.supported_image_formats)
+
+
+def _get_pdf_batch_size(config: AppConfig | None = None) -> int:
+    """Return a safe PDF batch size from config."""
+    cfg = _resolve_config(config)
+    return max(1, cfg.convert.pdf_batch_size)
 
 
 def collect_images(directory: Path, config: AppConfig | None = None) -> list[Path]:
@@ -87,7 +93,7 @@ def to_pdf(image_dir: Path, output_path: Path | None = None, config: AppConfig |
     out.parent.mkdir(parents=True, exist_ok=True)
 
     dpi = cfg.convert.pdf_dpi
-    _build_pdf_batched(images, out, dpi, batch_size=20)
+    _build_pdf_batched(images, out, dpi, batch_size=_get_pdf_batch_size(cfg))
 
     logger.info("Created PDF: %s (%d pages)", out.name, len(images))
     return out
@@ -135,21 +141,19 @@ def _build_pdf_batched(
             img.close()
         return
 
-    # For large sets, build in true batches
-    import tempfile
-
-    temp_pdfs: list[Path] = []
-    try:
+    # For large sets, build in true batches inside an isolated temp workspace
+    with tempfile.TemporaryDirectory(prefix="comix-dl-pdf-") as temp_dir:
+        temp_root = Path(temp_dir)
+        temp_pdfs: list[Path] = []
         for i in range(0, len(image_paths), batch_size):
             batch_paths = image_paths[i : i + batch_size]
             batch_imgs = _load_batch(batch_paths)
             if not batch_imgs:
                 continue
 
-            # Write each batch as a separate temp PDF
-            tmp_fd = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)  # noqa: SIM115
-            tmp_path = Path(tmp_fd.name)
-            tmp_fd.close()
+            # Each batch becomes one temp PDF inside a dedicated workspace that
+            # is removed automatically after merge or failure.
+            tmp_path = temp_root / f"batch-{(i // batch_size) + 1:04d}.pdf"
 
             first, *rest = batch_imgs
             first.save(tmp_path, "PDF", resolution=dpi, save_all=True, append_images=rest)
@@ -163,10 +167,6 @@ def _build_pdf_batched(
 
         # Merge all batch PDFs into the final output
         _merge_pdfs(temp_pdfs, output)
-    finally:
-        for tmp in temp_pdfs:
-            with contextlib.suppress(OSError):
-                tmp.unlink()
 
 
 def _merge_pdfs(pdf_paths: list[Path], output: Path) -> None:

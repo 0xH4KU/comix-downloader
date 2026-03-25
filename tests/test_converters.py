@@ -4,17 +4,14 @@ from __future__ import annotations
 
 import builtins
 import zipfile
-from typing import TYPE_CHECKING
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from comix_dl.config import AppConfig
 from comix_dl.converters import collect_images, convert, to_cbz, to_pdf
 from comix_dl.errors import ConversionError
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
 
 _ORIGINAL_IMPORT = builtins.__import__
 
@@ -209,6 +206,54 @@ class TestToPdf:
 
         assert result.exists()
         assert len(PdfReader(str(result)).pages) == 21
+
+    def test_large_pdf_uses_configured_batch_size_and_cleans_temp_workspace(self, tmp_path: Path):
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=5)
+        config = AppConfig()
+        config.convert.pdf_batch_size = 2
+
+        observed: dict[str, object] = {}
+
+        def fake_merge(pdf_paths: list[Path], output: Path) -> None:
+            observed["count"] = len(pdf_paths)
+            observed["all_exist"] = all(path.exists() for path in pdf_paths)
+            observed["parent"] = pdf_paths[0].parent
+            output.write_bytes(b"%PDF-test")
+
+        with patch("comix_dl.converters._merge_pdfs", side_effect=fake_merge):
+            result = to_pdf(img_dir, config=config)
+
+        assert result.exists()
+        assert observed["count"] == 3
+        assert observed["all_exist"] is True
+        assert isinstance(observed["parent"], Path)
+        assert not observed["parent"].exists()
+
+    def test_large_pdf_cleans_temp_workspace_after_merge_failure(self, tmp_path: Path):
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=5)
+        config = AppConfig()
+        config.convert.pdf_batch_size = 2
+
+        observed: dict[str, object] = {}
+
+        def fake_merge(pdf_paths: list[Path], output: Path) -> None:
+            observed["count"] = len(pdf_paths)
+            observed["parent"] = pdf_paths[0].parent
+            raise ConversionError("merge failed")
+
+        with (
+            patch("comix_dl.converters._merge_pdfs", side_effect=fake_merge),
+            pytest.raises(ConversionError, match="merge failed"),
+        ):
+            to_pdf(img_dir, config=config)
+
+        assert observed["count"] == 3
+        assert isinstance(observed["parent"], Path)
+        assert not observed["parent"].exists()
 
 
 # ---------------------------------------------------------------------------

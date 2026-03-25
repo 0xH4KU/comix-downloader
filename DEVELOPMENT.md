@@ -33,7 +33,7 @@ comix-downloader/
     cdp_browser.py        # Cloudflare-aware browser request client
     comix_service.py      # REST API client
     config.py             # AppConfig dataclasses used for runtime injection
-    converters.py         # PDF / CBZ conversion
+    converters.py         # PDF / CBZ conversion with bounded PDF batching
     downloader.py         # Image downloader
     errors.py             # Domain error types
     fileio.py             # Atomic file write helpers
@@ -128,6 +128,7 @@ comix.to uses several identifiers:
 1. **New API call** — add method to `ComixService` in `comix_service.py`
 2. **New CLI command** — add parser wiring in `src/comix_dl/cli/__init__.py`; keep orchestration/runtime setup in `src/comix_dl/application/` and leave `src/comix_dl/cli/flows.py` as a presentation adapter
 3. **New output format** — add converter in `converters.py`
+   If it touches PDF batching, keep temp-workspace cleanup and batch-size tests green.
 4. **New setting** — add field to `Settings` in `settings.py`
    If it affects runtime tuning, either map it into an existing profile or update the profile-resolution tests.
 5. **New user-meaningful failure mode** — add or reuse a domain error in `errors.py`, then catch/render it at the CLI boundary

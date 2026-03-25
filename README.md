@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.38-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.39-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -26,6 +26,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Structured logging** — download-path logs now carry stable JSON fields such as `series`, `chapter_id`, `chapter_title`, `retry_count`, `status`, `bytes`, and `elapsed`
 - **Thin CLI adapter** — the CLI entry now sticks to argument parsing and command dispatch, while browser/session/runtime wiring lives under `application/session.py`
 - **Environment tuning profiles** — download concurrency can now switch between `desktop`, `low_resource`, `ci`, and `custom` profiles without patching code
+- **Bounded PDF batching** — large PDF conversion now uses a configurable batch size and an isolated temp workspace that is cleaned even on failure
 - **Resume / skip** — automatically skips already-downloaded chapters and images
 - **Corrupt-page recovery** — invalid existing image files are discarded and re-downloaded instead of being trusted by resume
 - **No false-success conversion** — chapters with failed page downloads stay unconverted and are reported as partial instead of completed

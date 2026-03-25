@@ -109,6 +109,8 @@ The service client talks to the `comix.to` v2 REST API and normalizes chapter me
 
 - CBZ output is a direct stored archive of the validated image set
 - Large PDF output is rendered in batches to cap memory use
+- The batch size is explicitly bounded by `convert.pdf_batch_size`
+- Large-PDF temp artifacts live inside one isolated temporary workspace that is removed after merge or failure
 - Multi-batch PDF merge uses the bundled `pypdf` runtime dependency by default
 - `pikepdf` remains an optional faster backend when present
 - Missing merge support is treated as a hard failure instead of producing a truncated PDF
