@@ -18,7 +18,8 @@ comix-downloader/
   src/comix_dl/
     __init__.py           # Version fallback
     __main__.py           # python -m entry point
-    cdp_browser.py        # Chrome CDP session + page pool
+    browser_session.py    # Chrome lifecycle, locks, CDP, page pool
+    cdp_browser.py        # Cloudflare-aware browser request client
     comix_service.py      # REST API client
     config.py             # Default config dataclasses
     converters.py         # PDF / CBZ conversion
@@ -35,6 +36,7 @@ comix-downloader/
   tests/                  # Test suite
   README.md
   ARCHITECTURE.md
+  CONTRIBUTING.md
   DEVELOPMENT.md
   TODO.md
   pyproject.toml
@@ -89,14 +91,15 @@ Notes:
 The bypass works by launching a real Chrome instance and connecting via CDP:
 
 ```python
-# We launch Chrome ourselves (no automation flags)
-subprocess.Popen(["chrome", "--remote-debugging-port=9222", ...])
+# BrowserSessionManager launches Chrome itself (no automation flags)
+port = 9222  # or a dynamically-selected free port
+subprocess.Popen(["chrome", f"--remote-debugging-port={port}", ...])
 
 # Then connect via Playwright
-browser = await playwright.chromium.connect_over_cdp("http://127.0.0.1:9222")
+browser = await playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
 ```
 
-Requests are made through the page context using `page.evaluate(fetch(...))`, which inherits Chrome's real cookies and TLS fingerprint.
+`BrowserSessionManager` owns Chrome startup, lock handling, and pooled pages. `CdpBrowser` layers Cloudflare clearance and retry behavior on top. Requests are made through the page context using `page.evaluate(fetch(...))`, which inherits Chrome's real cookies and TLS fingerprint.
 
 ### API Identifiers
 

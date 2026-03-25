@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.22-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.23-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -83,6 +83,8 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 playwright install chromium
 ```
+
+For contributor workflow, local quality gates, and regression-test expectations, see `CONTRIBUTING.md`.
 
 ## Update / Uninstall
 
@@ -184,7 +186,7 @@ Filters are case-insensitive and match anywhere in the chapter title. If a filte
 
 ### Settings
 
-Accessible from the main menu (`3`) or `comix-dl settings`. Configurable options:
+Accessible from the main menu (`5`) or `comix-dl settings`. Configurable options:
 
 | Setting              | Default                          | Description                         |
 | -------------------- | -------------------------------- | ----------------------------------- |
