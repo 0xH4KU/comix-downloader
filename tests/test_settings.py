@@ -6,14 +6,26 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from comix_dl.config import CONFIG
-from comix_dl.settings import Settings, apply_settings_to_config, load_settings, save_settings
+from comix_dl.config import AppConfig
+from comix_dl.settings import (
+    DownloadTuning,
+    Settings,
+    SettingsRepository,
+    apply_settings_to_config,
+    build_runtime_config,
+    load_settings,
+    save_settings,
+)
 
 
 class TestSettingsDefaults:
     def test_default_format(self):
         s = Settings()
         assert s.default_format == "pdf"
+
+    def test_default_concurrency_profile(self):
+        s = Settings()
+        assert s.concurrency_profile == "desktop"
 
     def test_default_concurrency(self):
         s = Settings()
@@ -40,19 +52,23 @@ class TestLoadSettings:
     def test_loads_from_json(self, tmp_path: Path):
         fake_file = tmp_path / "settings.json"
         fake_file.write_text(json.dumps({
+            "version": 2,
             "default_format": "cbz",
+            "concurrency_profile": "custom",
             "concurrent_images": 4,
             "max_retries": 5,
         }))
         with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
             s = load_settings()
         assert s.default_format == "cbz"
+        assert s.concurrency_profile == "custom"
         assert s.concurrent_images == 4
         assert s.max_retries == 5
 
     def test_ignores_unknown_fields(self, tmp_path: Path):
         fake_file = tmp_path / "settings.json"
         fake_file.write_text(json.dumps({
+            "version": 2,
             "default_format": "cbz",
             "unknown_field": "should_be_ignored",
         }))
@@ -76,6 +92,65 @@ class TestLoadSettings:
             s = load_settings()
         assert s.default_format == "pdf"
 
+    def test_migrates_legacy_custom_concurrency_to_custom_profile(self, tmp_path: Path):
+        fake_file = tmp_path / "settings.json"
+        fake_file.write_text(json.dumps({
+            "version": 1,
+            "concurrent_chapters": 4,
+            "concurrent_images": 3,
+            "download_delay": False,
+        }))
+        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+            s = load_settings()
+        assert s.concurrency_profile == "custom"
+        assert s.concurrent_chapters == 4
+        assert s.concurrent_images == 3
+        assert s.download_delay is False
+
+    def test_migrates_legacy_settings_without_version(self, tmp_path: Path):
+        fake_file = tmp_path / "settings.json"
+        fake_file.write_text(json.dumps({
+            "default_format": "cbz",
+            "concurrent_images": 6,
+        }))
+        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+            s = load_settings()
+        assert s.default_format == "cbz"
+        assert s.concurrency_profile == "custom"
+        assert s.concurrent_images == 6
+
+    def test_future_version_falls_back_to_defaults(self, tmp_path: Path):
+        fake_file = tmp_path / "settings.json"
+        fake_file.write_text(json.dumps({
+            "version": 999,
+            "default_format": "cbz",
+        }))
+        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+            s = load_settings()
+        assert s.default_format == "pdf"
+
+    def test_invalid_values_are_normalized(self, tmp_path: Path):
+        fake_file = tmp_path / "settings.json"
+        fake_file.write_text(json.dumps({
+            "version": 2,
+            "default_format": "zip",
+            "concurrency_profile": "broken",
+            "concurrent_chapters": 99,
+            "concurrent_images": 0,
+            "max_retries": -3,
+            "download_delay": "yes",
+            "optimize_images": "no",
+        }))
+        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+            s = load_settings()
+        assert s.default_format == "pdf"
+        assert s.concurrency_profile == "custom"
+        assert s.concurrent_chapters == 5
+        assert s.concurrent_images == 1
+        assert s.max_retries == 0
+        assert s.download_delay is True
+        assert s.optimize_images is True
+
 
 class TestSaveSettings:
     def test_save_creates_file(self, tmp_path: Path):
@@ -90,6 +165,7 @@ class TestSaveSettings:
 
         assert fake_file.exists()
         data = json.loads(fake_file.read_text())
+        assert data["version"] == 2
         assert data["default_format"] == "cbz"
         assert data["max_retries"] == 7
 
@@ -103,6 +179,7 @@ class TestSaveSettings:
             original = Settings(
                 output_dir="/tmp/test-output",
                 default_format="cbz",
+                concurrency_profile="custom",
                 concurrent_chapters=3,
                 concurrent_images=12,
                 max_retries=5,
@@ -118,32 +195,106 @@ class TestSaveSettings:
         assert loaded.max_retries == original.max_retries
         assert loaded.download_delay == original.download_delay
 
+    def test_repository_round_trip(self, tmp_path: Path):
+        repository = SettingsRepository(tmp_path / "settings.json")
+        original = Settings(
+            default_format="both",
+            concurrency_profile="custom",
+            concurrent_images=4,
+            optimize_images=False,
+        )
 
-class TestApplySettingsToConfig:
+        repository.save(original)
+        loaded = repository.load()
+
+        assert loaded.default_format == "both"
+        assert loaded.concurrent_images == 4
+        assert loaded.optimize_images is False
+
+
+class TestBuildRuntimeConfig:
     def test_applies_output_dir(self):
         s = Settings(output_dir="/custom/path")
-        apply_settings_to_config(s)
-        assert CONFIG.download.default_output_dir == Path("/custom/path")
+        config = build_runtime_config(s)
+        assert config.download.default_output_dir == Path("/custom/path")
 
     def test_applies_concurrency(self):
-        s = Settings(concurrent_chapters=4, concurrent_images=16)
-        apply_settings_to_config(s)
-        assert CONFIG.download.max_concurrent_chapters == 4
-        assert CONFIG.download.max_concurrent_images == 16
+        s = Settings(concurrency_profile="custom", concurrent_chapters=4, concurrent_images=16)
+        config = build_runtime_config(s)
+        assert config.download.max_concurrent_chapters == 4
+        assert config.download.max_concurrent_images == 16
+
+    def test_applies_low_resource_profile(self):
+        s = Settings(
+            concurrency_profile="low_resource",
+            concurrent_chapters=5,
+            concurrent_images=16,
+            download_delay=False,
+        )
+        config = build_runtime_config(s)
+        assert config.download.max_concurrent_chapters == 1
+        assert config.download.max_concurrent_images == 2
+        assert config.download.image_delay == 0.15
+        assert config.download.chapter_delay == 0.8
+
+    def test_applies_ci_profile(self):
+        s = Settings(
+            concurrency_profile="ci",
+            concurrent_chapters=5,
+            concurrent_images=16,
+            download_delay=True,
+        )
+        config = build_runtime_config(s)
+        assert config.download.max_concurrent_chapters == 1
+        assert config.download.max_concurrent_images == 4
+        assert config.download.image_delay == 0.0
+        assert config.download.chapter_delay == 0.0
 
     def test_applies_format(self):
         s = Settings(default_format="cbz")
-        apply_settings_to_config(s)
-        assert CONFIG.convert.default_format == "cbz"
+        config = build_runtime_config(s)
+        assert config.convert.default_format == "cbz"
 
     def test_delay_enabled(self):
-        s = Settings(download_delay=True)
-        apply_settings_to_config(s)
-        assert CONFIG.download.image_delay == 0.15
-        assert CONFIG.download.chapter_delay == 0.8
+        s = Settings(concurrency_profile="custom", download_delay=True)
+        config = build_runtime_config(s)
+        assert config.download.image_delay == 0.15
+        assert config.download.chapter_delay == 0.8
 
     def test_delay_disabled(self):
-        s = Settings(download_delay=False)
-        apply_settings_to_config(s)
-        assert CONFIG.download.image_delay == 0.0
-        assert CONFIG.download.chapter_delay == 0.0
+        s = Settings(concurrency_profile="custom", download_delay=False)
+        config = build_runtime_config(s)
+        assert config.download.image_delay == 0.0
+        assert config.download.chapter_delay == 0.0
+
+    def test_does_not_mutate_base_config(self):
+        base = AppConfig()
+        config = build_runtime_config(
+            Settings(default_format="cbz", concurrency_profile="custom", concurrent_images=4),
+            base,
+        )
+
+        assert base.convert.default_format == "pdf"
+        assert base.download.max_concurrent_images == 8
+        assert config.convert.default_format == "cbz"
+        assert config.download.max_concurrent_images == 4
+
+    def test_compatibility_wrapper_returns_runtime_config(self):
+        config = apply_settings_to_config(Settings(default_format="both"))
+        assert config.convert.default_format == "both"
+
+
+class TestResolveDownloadTuning:
+    def test_custom_profile_uses_explicit_values(self):
+        tuning = SettingsRepository.resolve_download_tuning(
+            Settings(concurrency_profile="custom", concurrent_chapters=4, concurrent_images=12, download_delay=False)
+        )
+
+        assert tuning == DownloadTuning(concurrent_chapters=4, concurrent_images=12, download_delay=False)
+
+    def test_desktop_profile_ignores_manual_values(self):
+        tuning = SettingsRepository.resolve_download_tuning(
+            Settings(concurrency_profile="desktop", concurrent_chapters=5, concurrent_images=16, download_delay=False)
+        )
+
+        assert tuning == DownloadTuning(concurrent_chapters=2, concurrent_images=8, download_delay=True)

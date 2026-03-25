@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.3-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.41-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -14,9 +14,31 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Cloudflare bypass** — launches a real Chrome instance via CDP, no automation detection
 - **REST API integration** — uses comix.to's v2 API directly, no HTML scraping
 - **Interactive & non-interactive CLI** — main menu, quick search, or full CLI flags
-- **Parallel downloads** — concurrent chapter and image downloads with page pool
+- **Parallel downloads** — concurrent chapter and image downloads with a bounded page pool sized to the configured image concurrency
+- **Bounded browser operations** — CDP connect, page navigation, HTML reads, and in-browser fetches fail with explicit timeouts instead of hanging indefinitely
+- **Clearance self-healing** — HTTP 403 or a renewed Cloudflare challenge resets cached clearance, re-checks the session, and retries once before failing clearly
+- **Dead-page eviction** — closed browser pages are discarded and replaced instead of being returned to the pool
+- **Single-instance browser lock** — a second comix-dl process is rejected cleanly instead of racing over the same Chrome profile
+- **Lifecycle split** — `BrowserSessionManager` owns Chrome startup, page pooling, and cleanup while `CdpBrowser` focuses on Cloudflare-aware request flow
+- **Explicit runtime config** — user settings are normalized into a per-run `AppConfig` and injected into runtime components instead of mutating process-global state
+- **Application use cases** — query resolution, download orchestration, and cleanup planning now live in `application/`, keeping the CLI focused on prompts, progress, and output rendering
+- **Consistent result reporting** — CLI summaries, desktop notifications, and persisted history now derive from the same download report, and failure reasons are retained in history
+- **Structured logging** — download-path logs now carry stable JSON fields such as `series`, `chapter_id`, `chapter_title`, `retry_count`, `status`, `bytes`, and `elapsed`
+- **Thin CLI adapter** — the CLI entry now sticks to argument parsing and command dispatch, while browser/session/runtime wiring lives under `application/session.py`
+- **Environment tuning profiles** — download concurrency can now switch between `desktop`, `low_resource`, `ci`, and `custom` profiles without patching code
+- **Bounded PDF batching** — large PDF conversion now uses a configurable batch size and an isolated temp workspace that is cleaned even on failure
+- **Stricter release gate** — CI now enforces 70% total coverage, with focused regression tests over CLI orchestration, browser retries, and converter boundaries
 - **Resume / skip** — automatically skips already-downloaded chapters and images
-- **Smart dedup** — auto-detects duplicate chapter uploads, keeps the best version by image count
+- **Corrupt-page recovery** — invalid existing image files are discarded and re-downloaded instead of being trusted by resume
+- **No false-success conversion** — chapters with failed page downloads stay unconverted and are reported as partial instead of completed
+- **Partial-state manifest** — incomplete chapters keep a machine-readable `chapter.state.json` for diagnostics and future recovery
+- **Recovery-safe reruns** — stale temp artifacts are cleaned up and partial chapters resume from the missing pages instead of restarting from scratch
+- **Cheaper resume scans** — existing chapter files are indexed once per run instead of re-scanning the directory for every page
+- **Smart dedup** — chapter dedup keeps language variants distinct and only collapses true same-language duplicates by image count
+- **Visible dedup decisions** — before download, CLI now shows which duplicate chapter variants were dropped, why they were dropped, and which variant was kept
+- **Sharper failure diagnostics** — Cloudflare expiry, API 403, image timeouts, page-pool exhaustion, and PDF merge-backend gaps now surface as targeted errors
+- **Typed domain errors** — Cloudflare, remote API, partial-download, conversion, and configuration failures now have distinct exception types instead of collapsing into generic `RuntimeError`
+- **Reliable large PDF merge** — normal installs now include `pypdf`, so multi-batch PDF output works without hidden extra dependencies
 - **Rate limiting** — randomized download delays to avoid triggering anti-scraping (toggleable)
 - **PDF / CBZ output** — convert downloaded images to PDF or CBZ archives
 - **Image optimization** — optional WebP conversion for 40-60% size savings (on by default)
@@ -73,6 +95,11 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 playwright install chromium
 ```
+
+Normal installs now pull in `pypdf`, which is the default merge backend for large multi-batch PDF output.
+
+For contributor workflow, local quality gates, and regression-test expectations, see `CONTRIBUTING.md`.
+For upgrade notes from the older monolithic runtime and for release-slice procedure, see `MIGRATION.md` and `RELEASE_CHECKLIST.md`.
 
 ## Update / Uninstall
 
@@ -149,6 +176,7 @@ comix-dl -q download "manga-slug"
 1. Enter a search query
 2. Select a manga from the results (`1` for direct, `1i` to show info first)
 3. View available chapters (with page counts and automatic deduplication)
+   Dedup decisions are shown before selection when duplicate uploads were merged
 4. **Filter chapters** by keyword (optional — press Enter to skip)
 5. Select chapters to download (`all`, `1-5`, `1,3,5`)
 6. Choose output format (`pdf`, `cbz`, `both`)
@@ -174,19 +202,29 @@ Filters are case-insensitive and match anywhere in the chapter title. If a filte
 
 ### Settings
 
-Accessible from the main menu (`3`) or `comix-dl settings`. Configurable options:
+Accessible from the main menu (`5`) or `comix-dl settings`. Configurable options:
 
 | Setting              | Default                          | Description                         |
 | -------------------- | -------------------------------- | ----------------------------------- |
 | Download directory   | `~/Downloads/comix-dl`           | Where files are saved               |
 | Default format       | `pdf`                            | Output format (pdf/cbz/both)        |
-| Concurrent chapters  | `2`                              | Chapters downloaded in parallel     |
-| Concurrent images    | `8`                              | Images per chapter in parallel      |
+| Concurrency profile  | `desktop`                        | Preset tuning for `desktop`, `low_resource`, `ci`, or `custom` |
+| Concurrent chapters  | `2`                              | Used when profile is `custom`; otherwise derived from the selected profile |
+| Concurrent images    | `8`                              | Used when profile is `custom`; otherwise derived from the selected profile |
 | Max retries          | `3`                              | Retry count for failed images       |
-| Download delay       | `on`                             | Random delays to avoid rate limits  |
+| Download delay       | `on`                             | Used when profile is `custom`; otherwise derived from the selected profile |
 | Optimize images      | `on`                             | Convert images to WebP before packaging |
 
 Settings persist to `~/.config/comix-dl/settings.json`.
+
+Built-in tuning profiles:
+
+| Profile | Chapters | Images | Delay | Intended use |
+|---------|----------|--------|-------|--------------|
+| `desktop` | 2 | 8 | on | Normal desktop usage |
+| `low_resource` | 1 | 2 | on | Low-memory or thermally constrained machines |
+| `ci` | 1 | 4 | off | Predictable automated environments |
+| `custom` | user-set | user-set | user-set | Manual tuning |
 
 ### Diagnostics
 
@@ -198,9 +236,9 @@ Checks Python version, dependencies, Chrome availability, and output directory.
 
 ## How It Works
 
-1. **Chrome CDP** — comix-dl launches a real Chrome subprocess with `--remote-debugging-port` (dynamic port to avoid conflicts), then connects via Playwright's `connect_over_cdp`. No `--enable-automation` flag, so Cloudflare sees a normal browser. Chrome starts hidden off-screen and only moves forward if a manual CF challenge needs solving.
+1. **Chrome CDP** — `BrowserSessionManager` launches a real Chrome subprocess with `--remote-debugging-port` (dynamic port to avoid conflicts), then connects via Playwright's `connect_over_cdp`. No `--enable-automation` flag, so Cloudflare sees a normal browser. Chrome starts hidden off-screen and only moves forward if a manual CF challenge needs solving. A single-instance lock file prevents a second comix-dl process from starting a competing browser session against the same persisted profile.
 
-2. **CF Clearance** — on first run, if a Cloudflare challenge appears, Chrome moves to the foreground for the user to solve it once. The Chrome profile is persisted at `~/.config/comix-dl/chrome-profile/`, so subsequent runs pass automatically. An `asyncio.Lock` prevents concurrent tasks from triggering duplicate CF checks.
+2. **CF Clearance** — on first run, if a Cloudflare challenge appears, Chrome moves to the foreground for the user to solve it once. The Chrome profile is persisted at `~/.config/comix-dl/chrome-profile/`, so subsequent runs pass automatically. An `asyncio.Lock` prevents concurrent tasks from triggering duplicate CF checks. If a later API/image request starts returning `HTTP 403` or a challenge page reappears, comix-dl drops its cached clearance state, reacquires clearance once, and retries the request once before surfacing a clear failure.
 
 3. **REST API** — all data comes from comix.to's v2 REST API:
    - `GET /api/v2/manga?keyword=...` — search
@@ -208,26 +246,35 @@ Checks Python version, dependencies, Chrome availability, and output directory.
    - `GET /api/v2/manga/{hash_id}/chapters` — chapter list
    - `GET /api/v2/chapters/{chapter_id}` — chapter images
 
-4. **Smart Dedup** — the API often returns duplicate entries for the same chapter (from different uploaders). comix-dl groups chapters by number, fetches image counts for duplicates, and keeps the version with the most images. Chapters with the same number but different subtitles (e.g. "Chapter 0 - Volume 11" vs "Chapter 0 - Volume 12") are correctly treated as distinct content.
+4. **Smart Dedup** — the API often returns duplicate entries for the same chapter (from different uploaders). comix-dl groups chapters by number, language, and subtitle, then keeps the same-language duplicate with the most images. Chapters with the same number but different subtitles (e.g. "Chapter 0 - Volume 11" vs "Chapter 0 - Volume 12") or different languages are correctly treated as distinct content.
 
-5. **Download** — image URLs are fetched via `page.evaluate(fetch())` inside Chrome's page context. A **page pool** (4 browser pages) enables true parallel downloads. Binary data uses **base64 encoding** (3-4x less overhead than JSON arrays). Random delays between requests avoid rate limiting.
+5. **Download** — image URLs are fetched via `page.evaluate(fetch())` inside Chrome's page context. A **page pool** sized from the `Concurrent images` setting enables parallel downloads while keeping the main browser page reserved for navigation and Cloudflare handling. If all pooled pages are busy, requests wait for a pooled page instead of racing on the shared main page. Closed or stale pooled pages are discarded and replaced instead of being silently returned to circulation. Binary data uses **base64 encoding** (3-4x less overhead than JSON arrays). CDP connect, navigation, and in-browser fetch calls all use explicit timeouts, so stalled browser operations fail fast instead of hanging forever. Random delays between requests avoid rate limiting.
 
-6. **Resume** — each chapter directory gets a `.complete` marker after successful download. Re-running the same download skips completed chapters and resumes partially-downloaded ones.
+6. **Resume** — each chapter directory gets a `.complete` marker only after every page succeeds. Re-running the same download skips completed chapters and resumes partially-downloaded ones. Existing image files are validated before reuse, invalid files are re-downloaded, stale temp artifacts are cleaned up, and incomplete chapters keep `chapter.state.json` until a later successful rerun clears it.
 
-7. **Convert** — downloaded images are packaged into PDF (via Pillow, processed in batches to limit memory) or CBZ (zip archive).
+7. **Convert** — only fully successful chapters are packaged into PDF or CBZ. Large chapters are rendered in batches and merged with the bundled `pypdf` backend (or `pikepdf` if you install it), so a normal install can emit full PDFs without hidden setup. If the merge backend is missing in a broken environment, conversion fails fast instead of emitting a truncated file.
 
-8. **Graceful shutdown** — `Ctrl+C` finishes current downloads then stops. An `atexit` handler ensures Chrome is cleaned up even on crashes.
+8. **Graceful shutdown** — `Ctrl+C` finishes current downloads then stops. An `atexit` handler ensures the Chrome started by the current Python process is cleaned up even on crashes, without using a shared global PID kill path.
 
 ## Project Structure
 
-```
+``` 
 src/comix_dl/
   __init__.py         # Package version
   __main__.py         # python -m comix_dl entry point
-  cli.py              # Interactive & non-interactive CLI (argparse)
-  cdp_browser.py      # Chrome CDP connection (CF bypass, page pool)
+  application/        # Query, download, and cleanup use cases
+  application/download_reporting.py  # Shared summary and issue formatting
+  application/session.py  # Runtime/session wiring for CLI adapters
+  logging_utils.py    # Structured logging helpers and formatter
+  cli/__init__.py     # CLI entry, parser, signal handling
+  cli/flows.py        # CLI interaction flows delegating to application use cases
+  cli/interactive.py  # Settings, history, chapter selection UI
+  cli/display.py      # Rich display helpers
+  browser_session.py  # Chrome lifecycle, CDP connection, page pool
+  cdp_browser.py      # Cloudflare clearance + browser-side request orchestration
   comix_service.py    # REST API client (search, chapters, dedup)
   downloader.py       # Concurrent image downloader with resume
+  fileio.py           # Atomic file write helpers
   converters.py       # PDF / CBZ conversion + image optimization
   config.py           # Default configuration dataclasses
   settings.py         # Persistent user settings (JSON)

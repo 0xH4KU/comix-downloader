@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import logging
+import signal
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pytest
 
+from comix_dl import cli as cli_module
 from comix_dl.cli import _build_parser, _parse_chapter_selection
 from comix_dl.comix_service import ChapterInfo
+from comix_dl.settings import Settings
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -14,7 +21,7 @@ from comix_dl.comix_service import ChapterInfo
 def _make_chapters(n: int) -> list[ChapterInfo]:
     """Create a list of n test chapters."""
     return [
-        ChapterInfo(title=f"Chapter {i}", chapter_id=i * 100, number=float(i))
+        ChapterInfo(title=f"Chapter {i}", chapter_id=i * 100, number=str(i))
         for i in range(1, n + 1)
     ]
 
@@ -213,3 +220,199 @@ class TestBuildParser:
         args = parser.parse_args(["download", "test"])
         assert args.no_optimize is False
 
+
+def test_main_treats_bare_positional_arg_as_search(monkeypatch: pytest.MonkeyPatch):
+    recorded: dict[str, object] = {}
+
+    def run_async(coro: object) -> int:
+        recorded["coro"] = coro
+        return 17
+
+    monkeypatch.setattr(cli_module, "_build_parser", lambda: SimpleNamespace(parse_args=lambda: None))
+    monkeypatch.setattr(cli_module, "configure_logging", lambda level: recorded.setdefault("level", level))
+    monkeypatch.setattr(cli_module, "flow_search", lambda query: ("search", query))
+    monkeypatch.setattr(cli_module, "_run_async", run_async)
+    monkeypatch.setattr(cli_module.sys, "argv", ["comix-dl", "one-piece"])
+
+    assert cli_module.main() == 17
+    assert recorded["level"] == logging.INFO
+    assert recorded["coro"] == ("search", "one-piece")
+
+
+def test_main_dispatches_subcommands_and_menu(monkeypatch: pytest.MonkeyPatch):
+    recorded: list[object] = []
+    args_queue = [
+        SimpleNamespace(command="search", query="naruto", debug=False, quiet=False),
+        SimpleNamespace(
+            command="download",
+            url="series-a",
+            chapters="1-2",
+            format="pdf",
+            output="/tmp/out",
+            no_optimize=True,
+            debug=True,
+            quiet=True,
+        ),
+        SimpleNamespace(command="info", url="series-a", debug=False, quiet=False),
+        SimpleNamespace(command="list", debug=False, quiet=False),
+        SimpleNamespace(command="clean", force=True, debug=False, quiet=True),
+        SimpleNamespace(command="history", action="clear", debug=False, quiet=False),
+        SimpleNamespace(command="doctor", debug=False, quiet=False),
+        SimpleNamespace(command="settings", debug=False, quiet=False),
+        SimpleNamespace(command=None, debug=False, quiet=False),
+    ]
+
+    class _Parser:
+        def parse_args(self) -> object:
+            return args_queue.pop(0)
+
+    monkeypatch.setattr(cli_module, "_build_parser", lambda: _Parser())
+    monkeypatch.setattr(cli_module.sys, "argv", ["comix-dl"])
+    monkeypatch.setattr(cli_module, "configure_logging", lambda level: recorded.append(("log", level)))
+    monkeypatch.setattr(cli_module, "flow_search", lambda query, quiet=False: ("search", query, quiet))
+    monkeypatch.setattr(
+        cli_module,
+        "flow_noninteractive_download",
+        lambda url, chapters, fmt, output, optimize=None, quiet=False: (
+            "download",
+            url,
+            chapters,
+            fmt,
+            output,
+            optimize,
+            quiet,
+        ),
+    )
+    monkeypatch.setattr(cli_module, "flow_info", lambda url: ("info", url))
+    monkeypatch.setattr(cli_module, "_run_async", lambda coro: recorded.append(("async", coro)) or 10)
+    monkeypatch.setattr(cli_module, "flow_list", lambda: 21)
+    monkeypatch.setattr(
+        cli_module,
+        "flow_clean",
+        lambda *, force=False, auto_confirm=False: ("clean", force, auto_confirm),
+    )
+    monkeypatch.setattr(cli_module, "flow_history", lambda action=None: ("history", action))
+    monkeypatch.setattr(cli_module, "run_doctor", lambda: 24)
+    monkeypatch.setattr(cli_module, "flow_settings", lambda: recorded.append(("settings",)))
+    monkeypatch.setattr(cli_module, "_main_menu", lambda: 25)
+    monkeypatch.setattr(cli_module.console, "quiet", False)
+
+    assert cli_module.main() == 10
+    assert cli_module.main() == 10
+    assert cli_module.console.quiet is True
+    assert cli_module.main() == 10
+    assert cli_module.main() == 21
+    assert cli_module.main() == ("clean", True, True)
+    assert cli_module.main() == ("history", "clear")
+    assert cli_module.main() == 24
+    assert cli_module.main() == 0
+    assert cli_module.main() == 25
+
+    assert ("log", logging.DEBUG) in recorded
+    assert ("async", ("search", "naruto", False)) in recorded
+    assert ("async", ("download", "series-a", "1-2", "pdf", "/tmp/out", False, True)) in recorded
+    assert ("async", ("info", "series-a")) in recorded
+    assert ("settings",) in recorded
+
+
+def test_run_async_sets_shutdown_flag_on_sigint_and_restores_signal(monkeypatch: pytest.MonkeyPatch):
+    printed: list[str] = []
+    signal_calls: list[tuple[signal.Signals, object]] = []
+
+    class _Loop:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def run_until_complete(self, coro: object) -> int:
+            del coro
+            handler = signal_calls[0][1]
+            assert callable(handler)
+            handler()
+            return 12
+
+        def close(self) -> None:
+            self.closed = True
+
+    loop = _Loop()
+
+    monkeypatch.setattr(cli_module.asyncio, "new_event_loop", lambda: loop)
+    monkeypatch.setattr(
+        cli_module.signal,
+        "signal",
+        lambda sig, handler: signal_calls.append((sig, handler)),
+    )
+    monkeypatch.setattr(cli_module.console, "print", lambda message: printed.append(str(message)))
+
+    assert cli_module._run_async(object()) == 12
+    assert cli_module._shutdown_requested is True
+    assert loop.closed is True
+    assert signal_calls[0][0] == signal.SIGINT
+    assert signal_calls[-1] == (signal.SIGINT, signal.SIG_DFL)
+    assert "Ctrl+C" in printed[0]
+
+
+def test_run_async_returns_130_on_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch):
+    printed: list[str] = []
+
+    class _Loop:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def run_until_complete(self, coro: object) -> int:
+            del coro
+            raise KeyboardInterrupt
+
+        def close(self) -> None:
+            self.closed = True
+
+    loop = _Loop()
+
+    monkeypatch.setattr(cli_module.asyncio, "new_event_loop", lambda: loop)
+    monkeypatch.setattr(cli_module.signal, "signal", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli_module.console, "print", lambda message: printed.append(str(message)))
+
+    assert cli_module._run_async(object()) == 130
+    assert loop.closed is True
+    assert "Interrupted." in printed[0]
+
+
+def test_main_menu_invokes_each_action_then_exits(monkeypatch: pytest.MonkeyPatch):
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli_module,
+        "SettingsRepository",
+        lambda: SimpleNamespace(load=lambda: Settings(output_dir="/tmp/out", default_format="pdf")),
+    )
+    monkeypatch.setattr(
+        cli_module.Prompt,
+        "ask",
+        MagicMock(
+            side_effect=[
+                "1",
+                "  search me  ",
+                "2",
+                "  series-a  ",
+                "3",
+                "4",
+                "5",
+                "6",
+                "q",
+            ]
+        ),
+    )
+    monkeypatch.setattr(cli_module, "flow_search", lambda query: ("search", query))
+    monkeypatch.setattr(cli_module, "flow_url_download", lambda url: ("url", url))
+    monkeypatch.setattr(cli_module, "_run_async", lambda coro: calls.append(("async", coro)) or 0)
+    monkeypatch.setattr(cli_module, "flow_list", lambda: calls.append(("list",)))
+    monkeypatch.setattr(cli_module, "flow_history", lambda: calls.append(("history",)))
+    monkeypatch.setattr(cli_module, "flow_settings", lambda: calls.append(("settings",)))
+    monkeypatch.setattr(cli_module, "run_doctor", lambda: calls.append(("doctor",)))
+
+    assert cli_module._main_menu() == 0
+    assert ("async", ("search", "search me")) in calls
+    assert ("async", ("url", "series-a")) in calls
+    assert ("list",) in calls
+    assert ("history",) in calls
+    assert ("settings",) in calls
+    assert ("doctor",) in calls

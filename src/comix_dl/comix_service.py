@@ -12,17 +12,46 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-from comix_dl.config import CONFIG, AppConfig
+from comix_dl.config import AppConfig
+from comix_dl.errors import RemoteApiError
 
 if TYPE_CHECKING:
     from comix_dl.cdp_browser import CdpBrowser
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_chapter_number(raw_number: object) -> str:
+    """Preserve chapter numbers as strings without forcing float semantics."""
+    if isinstance(raw_number, str):
+        normalized = raw_number.strip()
+    elif isinstance(raw_number, int):
+        normalized = str(raw_number)
+    elif isinstance(raw_number, float):
+        normalized = format(raw_number, "g")
+    else:
+        normalized = "0"
+    return normalized or "0"
+
+
+def _chapter_number_sort_key(number: str) -> tuple[tuple[int, str], ...]:
+    """Build a stable natural-sort key for chapter numbers."""
+    tokens = re.findall(r"\d+|[^\d]+", number.lower())
+    key: list[tuple[int, str]] = []
+    for token in tokens:
+        if token.isdigit():
+            key.append((0, token.zfill(12)))
+            continue
+        cleaned = re.sub(r"[^a-z]+", "", token)
+        if cleaned:
+            key.append((1, cleaned))
+    return tuple(key) or ((0, "000000000000"),)
 
 
 # -- data classes -------------------------------------------------------------
@@ -44,10 +73,15 @@ class ChapterInfo:
 
     title: str
     chapter_id: int
-    number: float
+    number: str
     name: str = ""  # subtitle (e.g. "Dear Little Brother")
     language: str = "en"
     image_count: int = 0
+    number_sort_key: tuple[tuple[int, str], ...] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.number = _normalize_chapter_number(self.number)
+        self.number_sort_key = _chapter_number_sort_key(self.number)
 
 
 @dataclass
@@ -57,6 +91,16 @@ class ChapterImages:
     title: str
     chapter_label: str
     image_urls: list[str]
+
+
+@dataclass
+class DedupDecision:
+    """Human-readable explanation of a deduplication decision."""
+
+    chapter_number: str
+    reason: str
+    kept: tuple[str, ...]
+    dropped: tuple[str, ...]
 
 
 @dataclass
@@ -70,6 +114,7 @@ class SeriesInfo:
     chapters: list[ChapterInfo]
     url: str
     hash_id: str
+    dedup_decisions: list[DedupDecision] = field(default_factory=list)
 
 
 # -- service ------------------------------------------------------------------
@@ -80,8 +125,21 @@ class ComixService:
 
     def __init__(self, client: CdpBrowser, config: AppConfig | None = None) -> None:
         self._client = client
-        self._config = config or CONFIG
+        self._config = config if config is not None else AppConfig()
         self._base = self._config.service.base_url
+
+    @staticmethod
+    def _describe_api_error(exc: Exception, *, action: str) -> str:
+        """Return a clearer message for high-value remote failure modes."""
+        message = str(exc)
+        if "HTTP 403" in message or "403 Forbidden" in message:
+            return (
+                f"{action} failed: API request was blocked by HTTP 403. "
+                "Cloudflare clearance may have expired."
+            )
+        if "timed out" in message:
+            return f"{action} failed: API request timed out. {message}"
+        return f"{action} failed: {message}"
 
     async def search(
         self,
@@ -100,14 +158,7 @@ class ComixService:
         try:
             resp = await self._client.get_json(api_url)
         except Exception as exc:
-            msg = str(exc)
-            if "403" in msg:
-                logger.error(
-                    "Access denied (HTTP 403). CF cookies may have expired. "
-                    "Try running again to refresh."
-                )
-            else:
-                logger.error("Search failed: %s", exc)
+            logger.error("%s", self._describe_api_error(exc, action=f"Search for '{query}'"))
             return []
 
         results: list[SearchResult] = []
@@ -136,7 +187,7 @@ class ComixService:
         falls back to a keyword search and matches the slug.
 
         Raises:
-            RuntimeError: If the slug cannot be resolved.
+            RemoteApiError: If the slug cannot be resolved.
         """
         # Try direct lookup
         api_url = f"{self._base}/api/v2/manga/{slug}"
@@ -154,7 +205,7 @@ class ComixService:
         if matched:
             return await self.get_series(matched.hash_id)
 
-        raise RuntimeError(f"Could not find manga with slug '{slug}'")
+        raise RemoteApiError(f"Could not find manga with slug '{slug}'")
 
     async def get_series(self, hash_id: str) -> SeriesInfo:
         """Fetch series info and chapter list by hash_id."""
@@ -163,7 +214,9 @@ class ComixService:
         try:
             info_resp = await self._client.get_json(api_url)
         except Exception as exc:
-            raise RuntimeError(f"Failed to fetch series info: {exc}") from exc
+            raise RemoteApiError(
+                self._describe_api_error(exc, action=f"Fetch series info for '{hash_id}'"),
+            ) from exc
 
         data = info_resp.get("result", {})
         if not isinstance(data, dict):
@@ -174,7 +227,7 @@ class ComixService:
         synopsis = data.get("synopsis", "") or data.get("description", "") or ""
 
         # Fetch chapters
-        chapters = await self._fetch_chapters(hash_id)
+        chapters, dedup_decisions = await self._fetch_chapters(hash_id)
 
         return SeriesInfo(
             title=title,
@@ -182,11 +235,12 @@ class ComixService:
             genres=[],
             description=synopsis,
             chapters=chapters,
+            dedup_decisions=dedup_decisions,
             url=f"{self._base}/manga/{slug or hash_id}",
             hash_id=hash_id,
         )
 
-    async def _fetch_chapters(self, hash_id: str) -> list[ChapterInfo]:
+    async def _fetch_chapters(self, hash_id: str) -> tuple[list[ChapterInfo], list[DedupDecision]]:
         """Fetch all chapters for a manga by hash_id."""
 
 
@@ -203,7 +257,10 @@ class ComixService:
             try:
                 resp = await self._client.get_json(api_url)
             except Exception as exc:
-                logger.error("Failed to fetch chapters (page %d): %s", page, exc)
+                logger.error(
+                    "%s",
+                    self._describe_api_error(exc, action=f"Fetch chapter list page {page} for '{hash_id}'"),
+                )
                 break
 
             result_obj = resp.get("result", {})
@@ -218,8 +275,8 @@ class ComixService:
             page += 1
 
         # Sort + deduplicate
-        all_chapters.sort(key=lambda c: c.number)
-        all_chapters = await self._deduplicate_chapters(all_chapters)
+        all_chapters.sort(key=lambda c: c.number_sort_key)
+        all_chapters, dedup_decisions = await self._deduplicate_chapters_with_report(all_chapters)
 
         # Fetch image counts in parallel for the final (deduplicated) list
         missing = [ch for ch in all_chapters if ch.image_count == 0]
@@ -232,7 +289,7 @@ class ComixService:
             await asyncio.gather(*[_fetch_count(ch) for ch in missing])
 
         logger.info("Fetched %d chapters for '%s'", len(all_chapters), hash_id)
-        return all_chapters
+        return all_chapters, dedup_decisions
 
     def _parse_chapter_items(self, items: list[dict[str, object]]) -> list[ChapterInfo]:
         """Parse raw API chapter items into ChapterInfo objects."""
@@ -243,7 +300,7 @@ class ComixService:
             raw_id = item.get("chapter_id", 0)
             chapter_id = int(raw_id) if isinstance(raw_id, (int, float, str)) else 0
             raw_num = item.get("number", 0)
-            number = float(raw_num) if isinstance(raw_num, (int, float, str)) else 0.0
+            number = _normalize_chapter_number(raw_num)
             name = str(item.get("name", "") or "")
             lang = str(item.get("language", "en") or "en")
             pages_count = item.get("pages_count", 0)
@@ -263,59 +320,130 @@ class ComixService:
         return chapters
 
     async def _deduplicate_chapters(self, chapters: list[ChapterInfo]) -> list[ChapterInfo]:
+        """Backward-compatible wrapper returning only the final chapter list."""
+        deduplicated, _ = await self._deduplicate_chapters_with_report(chapters)
+        return deduplicated
+
+    @staticmethod
+    def _format_dedup_variant(chapter: ChapterInfo) -> str:
+        """Return a readable variant label for dedup audit output."""
+        pages = f"{chapter.image_count}p" if chapter.image_count > 0 else "pages=?"
+        return f"{chapter.title} [{chapter.language}, {pages}, id={chapter.chapter_id}]"
+
+    def _build_dedup_decision(
+        self,
+        *,
+        chapter_number: str,
+        reason: str,
+        kept: list[ChapterInfo],
+        dropped: list[ChapterInfo],
+    ) -> DedupDecision:
+        """Build a user-facing dedup decision snapshot."""
+        return DedupDecision(
+            chapter_number=chapter_number,
+            reason=reason,
+            kept=tuple(self._format_dedup_variant(chapter) for chapter in kept),
+            dropped=tuple(self._format_dedup_variant(chapter) for chapter in dropped),
+        )
+
+    async def _deduplicate_chapters_with_report(
+        self,
+        chapters: list[ChapterInfo],
+    ) -> tuple[list[ChapterInfo], list[DedupDecision]]:
         """Remove duplicate chapters, keeping the one with the most images.
 
-        Chapters with the same number but *different* subtitles are treated as
-        distinct content (e.g. "Chapter 0 - Volume 11" vs "Chapter 0 - Volume 12").
-        Only chapters with the same number AND the same (or missing) subtitle are
+        Chapters with the same number but *different* subtitles or languages are
+        treated as distinct content (e.g. "Chapter 0 - Volume 11" vs
+        "Chapter 0 - Volume 12", or English vs Spanish uploads). Only chapters
+        with the same number, language, and the same (or missing) subtitle are
         considered true duplicates.
 
         Uses ``image_count`` from the chapter list API (``pages_count`` field).
         Only falls back to per-chapter API calls if ``pages_count`` was missing.
         """
         if not chapters:
-            return chapters
+            return chapters, []
 
-        groups: dict[float, list[ChapterInfo]] = defaultdict(list)
+        groups: dict[str, list[ChapterInfo]] = defaultdict(list)
         for ch in chapters:
             groups[ch.number].append(ch)
 
         result: list[ChapterInfo] = []
+        decisions: list[DedupDecision] = []
         dup_count = 0
 
-        for _num, chs in groups.items():
+        for chapter_number, chs in groups.items():
             if len(chs) == 1:
                 result.append(chs[0])
                 continue
 
-            # Multiple entries — sub-group by name
-            named: dict[str, list[ChapterInfo]] = defaultdict(list)
-            unnamed: list[ChapterInfo] = []
+            # Multiple entries — sub-group by language and name
+            named: dict[tuple[str, str], list[ChapterInfo]] = defaultdict(list)
+            unnamed: dict[str, list[ChapterInfo]] = defaultdict(list)
             for ch in chs:
                 if ch.name:
-                    named[ch.name].append(ch)
+                    named[(ch.language, ch.name)].append(ch)
                 else:
-                    unnamed.append(ch)
+                    unnamed[ch.language].append(ch)
 
             if not named:
-                best = await self._pick_best(unnamed)
-                result.append(best)
-                dup_count += len(unnamed) - 1
+                for language_group in unnamed.values():
+                    best = await self._pick_best(language_group)
+                    result.append(best)
+                    dropped = [chapter for chapter in language_group if chapter is not best]
+                    dup_count += len(dropped)
+                    if dropped:
+                        decisions.append(
+                            self._build_dedup_decision(
+                                chapter_number=chapter_number,
+                                reason="same-language duplicate; kept the variant with the highest page count",
+                                kept=[best],
+                                dropped=dropped,
+                            )
+                        )
             else:
+                kept_for_number: list[ChapterInfo] = []
                 for name_group in named.values():
                     if len(name_group) == 1:
-                        result.append(name_group[0])
+                        best = name_group[0]
+                        result.append(best)
+                        kept_for_number.append(best)
                     else:
                         best = await self._pick_best(name_group)
                         result.append(best)
-                        dup_count += len(name_group) - 1
-                dup_count += len(unnamed)
+                        kept_for_number.append(best)
+                        dropped = [chapter for chapter in name_group if chapter is not best]
+                        dup_count += len(dropped)
+                        if dropped:
+                            decisions.append(
+                                self._build_dedup_decision(
+                                    chapter_number=chapter_number,
+                                    reason=(
+                                        "same-language duplicate with the same subtitle; "
+                                        "kept the highest page count"
+                                    ),
+                                    kept=[best],
+                                    dropped=dropped,
+                                )
+                            )
 
-        result.sort(key=lambda c: c.number)
+                dropped_unnamed = [chapter for language_group in unnamed.values() for chapter in language_group]
+                dup_count += len(dropped_unnamed)
+                if dropped_unnamed:
+                    decisions.append(
+                        self._build_dedup_decision(
+                            chapter_number=chapter_number,
+                            reason="unnamed uploads were dropped because named variants exist for this chapter number",
+                            kept=kept_for_number,
+                            dropped=dropped_unnamed,
+                        )
+                    )
+
+        result.sort(key=lambda c: c.number_sort_key)
         if dup_count:
             logger.info("Removed %d duplicate chapter(s)", dup_count)
 
-        return result
+        return result, decisions
 
     async def _pick_best(self, candidates: list[ChapterInfo]) -> ChapterInfo:
         """From a list of true duplicates, pick the one with the most images.
@@ -358,7 +486,10 @@ class ComixService:
         try:
             resp = await self._client.get_json(api_url)
         except Exception as exc:
-            logger.error("Failed to fetch chapter %d: %s", chapter_id, exc)
+            logger.error(
+                "%s",
+                self._describe_api_error(exc, action=f"Fetch chapter images for {chapter_id}"),
+            )
             return None
 
         data = resp.get("result", {})

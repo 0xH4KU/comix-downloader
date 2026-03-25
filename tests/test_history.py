@@ -10,6 +10,7 @@ import pytest
 from comix_dl.history import (
     MAX_ENTRIES,
     HistoryEntry,
+    HistoryRepository,
     clear_history,
     list_history,
     record_download,
@@ -46,11 +47,37 @@ class TestRecordDownload:
         assert entries[1].title == "Manga A"
 
     def test_record_with_stats(self, tmp_path):
-        record_download("Manga A", 10, "both", completed=8, failed=1, skipped=1)
+        record_download("Manga A", 10, "both", completed=7, partial=1, failed=1, skipped=1)
         entry = list_history()[0]
-        assert entry.completed == 8
+        assert entry.completed == 7
+        assert entry.partial == 1
         assert entry.failed == 1
         assert entry.skipped == 1
+
+    def test_record_persists_summary_text_and_issues(self, tmp_path):
+        record_download(
+            "Manga A",
+            10,
+            "both",
+            completed=7,
+            partial=1,
+            failed=1,
+            skipped=1,
+            summary_text="7 downloaded, 1 partial, 1 failed, 1 skipped",
+            issues=["Chapter 9: timeout", "Chapter 10: conversion failed"],
+        )
+        entry = list_history()[0]
+        assert entry.summary_text == "7 downloaded, 1 partial, 1 failed, 1 skipped"
+        assert entry.issues == ["Chapter 9: timeout", "Chapter 10: conversion failed"]
+
+    def test_repository_records_download(self, tmp_path):
+        repository = HistoryRepository(tmp_path / "history.json")
+
+        repository.record_download("Manga Repo", 3, "cbz")
+
+        entries = repository.list_entries()
+        assert len(entries) == 1
+        assert entries[0].title == "Manga Repo"
 
 
 class TestAutoTrim:
@@ -110,8 +137,12 @@ class TestHistoryEntry:
             format="pdf",
             total_size_bytes=2048,
             completed=4,
+            partial=1,
             failed=1,
             skipped=0,
+            summary_text="4 downloaded, 1 partial, 1 failed",
+            issues=["Chapter 5: conversion failed"],
         )
         assert entry.title == "Test"
         assert entry.total_size_bytes == 2048
+        assert entry.issues == ["Chapter 5: conversion failed"]

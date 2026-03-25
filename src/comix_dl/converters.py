@@ -2,21 +2,33 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
+import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from comix_dl.config import CONFIG, AppConfig
+from comix_dl.config import AppConfig
+from comix_dl.errors import ConversionError
 
 logger = logging.getLogger(__name__)
 
 
+def _resolve_config(config: AppConfig | None = None) -> AppConfig:
+    """Return an explicit runtime config or a fresh default config."""
+    return config if config is not None else AppConfig()
+
+
 def _get_image_extensions(config: AppConfig | None = None) -> frozenset[str]:
     """Return supported image extensions (lazy, respects runtime config)."""
-    cfg = config or CONFIG
+    cfg = _resolve_config(config)
     return frozenset(cfg.convert.supported_image_formats)
+
+
+def _get_pdf_batch_size(config: AppConfig | None = None) -> int:
+    """Return a safe PDF batch size from config."""
+    cfg = _resolve_config(config)
+    return max(1, cfg.convert.pdf_batch_size)
 
 
 def collect_images(directory: Path, config: AppConfig | None = None) -> list[Path]:
@@ -28,7 +40,7 @@ def collect_images(directory: Path, config: AppConfig | None = None) -> list[Pat
     ]
 
 
-def to_cbz(image_dir: Path, output_path: Path | None = None) -> Path:
+def to_cbz(image_dir: Path, output_path: Path | None = None, config: AppConfig | None = None) -> Path:
     """Create a CBZ archive from images in *image_dir*.
 
     Args:
@@ -39,11 +51,11 @@ def to_cbz(image_dir: Path, output_path: Path | None = None) -> Path:
         Path to the created CBZ file.
 
     Raises:
-        RuntimeError: If no images are found.
+        ConversionError: If no images are found.
     """
-    images = collect_images(image_dir)
+    images = collect_images(image_dir, config=config)
     if not images:
-        raise RuntimeError(f"No images found in {image_dir}")
+        raise ConversionError(f"No images found in {image_dir}")
 
     out = output_path or (image_dir.parent / (image_dir.name + ".cbz"))
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -70,18 +82,18 @@ def to_pdf(image_dir: Path, output_path: Path | None = None, config: AppConfig |
         Path to the created PDF file.
 
     Raises:
-        RuntimeError: If no images are found.
+        ConversionError: If no images are found.
     """
-    cfg = config or CONFIG
+    cfg = _resolve_config(config)
     images = collect_images(image_dir, config=cfg)
     if not images:
-        raise RuntimeError(f"No images found in {image_dir}")
+        raise ConversionError(f"No images found in {image_dir}")
 
     out = output_path or (image_dir.parent / (image_dir.name + ".pdf"))
     out.parent.mkdir(parents=True, exist_ok=True)
 
     dpi = cfg.convert.pdf_dpi
-    _build_pdf_batched(images, out, dpi, batch_size=20)
+    _build_pdf_batched(images, out, dpi, batch_size=_get_pdf_batch_size(cfg))
 
     logger.info("Created PDF: %s (%d pages)", out.name, len(images))
     return out
@@ -97,10 +109,12 @@ def _build_pdf_batched(
     """Build PDF by loading images in batches to limit memory usage.
 
     Only ``batch_size`` images are held in memory at any time.
-    The first batch creates the PDF; subsequent batches are appended
-    via Pillow's incremental ``append_images`` by writing to temporary
-    PDFs then merging with pikepdf if available, otherwise falling back
-    to a single-pass approach for smaller sets.
+    The first batch creates the PDF; subsequent batches are written to
+    temporary PDFs and merged into the final output.
+
+    For multi-batch PDFs, a merge backend (``pikepdf`` or ``pypdf``) is
+    required. If none is available, this function fails fast rather than
+    silently creating an incomplete PDF.
     """
     from PIL import Image
 
@@ -120,28 +134,26 @@ def _build_pdf_batched(
     if len(image_paths) <= batch_size:
         loaded = _load_batch(image_paths)
         if not loaded:
-            raise RuntimeError("No valid images to create PDF")
+            raise ConversionError("No valid images to create PDF")
         first, *rest = loaded
         first.save(output, "PDF", resolution=dpi, save_all=True, append_images=rest)
         for img in loaded:
             img.close()
         return
 
-    # For large sets, build in true batches
-    import tempfile
-
-    temp_pdfs: list[Path] = []
-    try:
+    # For large sets, build in true batches inside an isolated temp workspace
+    with tempfile.TemporaryDirectory(prefix="comix-dl-pdf-") as temp_dir:
+        temp_root = Path(temp_dir)
+        temp_pdfs: list[Path] = []
         for i in range(0, len(image_paths), batch_size):
             batch_paths = image_paths[i : i + batch_size]
             batch_imgs = _load_batch(batch_paths)
             if not batch_imgs:
                 continue
 
-            # Write each batch as a separate temp PDF
-            tmp_fd = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)  # noqa: SIM115
-            tmp_path = Path(tmp_fd.name)
-            tmp_fd.close()
+            # Each batch becomes one temp PDF inside a dedicated workspace that
+            # is removed automatically after merge or failure.
+            tmp_path = temp_root / f"batch-{(i // batch_size) + 1:04d}.pdf"
 
             first, *rest = batch_imgs
             first.save(tmp_path, "PDF", resolution=dpi, save_all=True, append_images=rest)
@@ -151,21 +163,17 @@ def _build_pdf_batched(
             temp_pdfs.append(tmp_path)
 
         if not temp_pdfs:
-            raise RuntimeError("No valid images to create PDF")
+            raise ConversionError("No valid images to create PDF")
 
         # Merge all batch PDFs into the final output
         _merge_pdfs(temp_pdfs, output)
-    finally:
-        for tmp in temp_pdfs:
-            with contextlib.suppress(OSError):
-                tmp.unlink()
 
 
 def _merge_pdfs(pdf_paths: list[Path], output: Path) -> None:
     """Merge multiple PDF files into one.
 
-    Uses pikepdf if available for efficient merging,
-    falls back to pypdf or raw concatenation.
+    Uses pikepdf if available for efficient merging and falls back to pypdf.
+    If neither backend is available, raises instead of emitting a truncated PDF.
     """
     if len(pdf_paths) == 1:
         import shutil
@@ -185,7 +193,7 @@ def _merge_pdfs(pdf_paths: list[Path], output: Path) -> None:
 
     # Fallback: if no pikepdf, use pypdf
     try:
-        from pypdf import PdfWriter  # type: ignore[import-not-found]
+        from pypdf import PdfWriter
         writer = PdfWriter()
         for p in pdf_paths:
             writer.append(str(p))
@@ -195,16 +203,19 @@ def _merge_pdfs(pdf_paths: list[Path], output: Path) -> None:
     except ImportError:
         pass
 
-    # Last resort: just copy first batch (data loss but won't crash)
-    import shutil
-    logger.warning(
-        "Neither pikepdf nor pypdf installed. "
-        "Large PDF may be incomplete. Install: pip install pikepdf"
+    raise ConversionError(
+        "Large PDF conversion requires a PDF merge backend (`pypdf` or `pikepdf`). "
+        "Install one of them and retry; refusing to create an incomplete PDF."
     )
-    shutil.copy2(pdf_paths[0], output)
 
 
-def convert(image_dir: Path, fmt: str = "cbz", *, optimize: bool = False) -> Path:
+def convert(
+    image_dir: Path,
+    fmt: str = "cbz",
+    *,
+    optimize: bool = False,
+    config: AppConfig | None = None,
+) -> Path:
     """Convert images using the specified format.
 
     Args:
@@ -218,16 +229,16 @@ def convert(image_dir: Path, fmt: str = "cbz", *, optimize: bool = False) -> Pat
     fmt = fmt.lower().strip()
 
     if optimize:
-        optimize_images(image_dir)
+        optimize_images(image_dir, config=config)
 
     if fmt == "both":
-        to_cbz(image_dir)
-        return to_pdf(image_dir)
+        to_cbz(image_dir, config=config)
+        return to_pdf(image_dir, config=config)
 
     if fmt == "pdf":
-        return to_pdf(image_dir)
+        return to_pdf(image_dir, config=config)
 
-    return to_cbz(image_dir)
+    return to_cbz(image_dir, config=config)
 
 
 @dataclass
@@ -250,7 +261,7 @@ class OptimizeResult:
         return (self.saved_bytes / self.original_bytes) * 100
 
 
-def optimize_images(image_dir: Path, *, quality: int = 85) -> OptimizeResult:
+def optimize_images(image_dir: Path, *, quality: int = 85, config: AppConfig | None = None) -> OptimizeResult:
     """Convert PNG/JPG/JPEG images in *image_dir* to WebP for smaller size.
 
     Already-WebP images are skipped.  The original files are replaced.
@@ -264,7 +275,7 @@ def optimize_images(image_dir: Path, *, quality: int = 85) -> OptimizeResult:
     """
     from PIL import Image
 
-    images = collect_images(image_dir)
+    images = collect_images(image_dir, config=config)
     original_bytes = 0
     optimized_bytes = 0
     converted = 0

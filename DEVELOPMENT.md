@@ -5,30 +5,53 @@
 ```bash
 git clone https://github.com/0xH4KU/comix-downloader.git
 cd comix-downloader
-python3 -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 playwright install chromium
 ```
 
+The editable install includes the runtime `pypdf` dependency, so large PDF chapters do not require a separate merge-backend install.
+
+Settings are loaded into a per-run `AppConfig` via `build_runtime_config()` and injected into runtime components. `load_settings()` now returns normalized settings only; it does not mutate any process-global config object.
+Download tuning is profile-driven: `desktop`, `low_resource`, and `ci` presets map to effective chapter/image concurrency and delay values, while `custom` preserves explicit user overrides.
+
 ## Project Layout
 
-```
+``` 
 comix-downloader/
-  src/comix_dl/           # Main package
-    __init__.py           # Version
+  src/comix_dl/
+    __init__.py           # Version fallback
     __main__.py           # python -m entry point
-    cdp_browser.py        # Chrome CDP connection
-    cli.py                # Interactive CLI
+    application/
+      query_usecase.py    # Slug/query resolution and lookup rules
+      download_usecase.py # Download orchestration + event emission
+      cleanup_usecase.py  # Listing and cleanup planning
+      download_reporting.py # Shared summary and issue formatting
+      session.py          # Runtime/session wiring for CLI adapters
+    browser_session.py    # Chrome lifecycle, locks, CDP, page pool
+    cdp_browser.py        # Cloudflare-aware browser request client
     comix_service.py      # REST API client
-    config.py             # Default config dataclasses
-    converters.py         # PDF / CBZ conversion
+    config.py             # AppConfig dataclasses used for runtime injection
+    converters.py         # PDF / CBZ conversion with bounded PDF batching
     downloader.py         # Image downloader
-    parser.py             # HTML parser (legacy)
+    errors.py             # Domain error types
+    fileio.py             # Atomic file write helpers
+    history.py            # Download history persistence
+    logging_utils.py      # Structured logging formatter/helpers
+    notify.py             # Desktop notifications
     settings.py           # Persistent settings
-    tui.py                # Textual TUI (alternative)
+    cli/
+      __init__.py         # CLI entry, parser, signal handling
+      flows.py            # CLI prompts, progress rendering, and use-case wiring
+      interactive.py      # Interactive settings/history/filter UI
+      display.py          # Rich tables and formatting
+  tests/                  # Test suite
   README.md
   ARCHITECTURE.md
+  CONTRIBUTING.md
   DEVELOPMENT.md
+  TODO.md
   pyproject.toml
 ```
 
@@ -42,7 +65,7 @@ comix-dl
 comix-dl "manga name"
 
 # Diagnostics
-comix-dl --doctor
+comix-dl doctor
 
 # Debug logging
 comix-dl --debug
@@ -57,9 +80,24 @@ ruff check .
 # Type check
 mypy src/comix_dl/ --no-error-summary
 
-# Both
-ruff check . && mypy src/comix_dl/ --no-error-summary
+# Docs/version consistency
+python scripts/check_docs_consistency.py
+
+# Test
+pytest
+
+# Coverage gate (matches CI)
+pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=70
+
+# Full local gate
+ruff check . && mypy src/comix_dl/ --no-error-summary && python scripts/check_docs_consistency.py && pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=70
 ```
+
+Notes:
+- Running `pytest` from the repository root now imports from `src/` directly, so an editable install is not required just to collect tests.
+- Low-level localhost socket tests auto-skip in restricted sandboxes that do not allow binding TCP ports.
+- Current high-risk module baselines are tracked in CI: `cli/__init__.py` 100%, `cli/flows.py` 89%, `cdp_browser.py` 78%, `converters.py` 70%.
+- `MIGRATION.md` captures maintainer-facing upgrade notes; `RELEASE_CHECKLIST.md` defines the slice release order and final verification sequence.
 
 ## Key Concepts
 
@@ -68,14 +106,15 @@ ruff check . && mypy src/comix_dl/ --no-error-summary
 The bypass works by launching a real Chrome instance and connecting via CDP:
 
 ```python
-# We launch Chrome ourselves (no automation flags)
-subprocess.Popen(["chrome", "--remote-debugging-port=9222", ...])
+# BrowserSessionManager launches Chrome itself (no automation flags)
+port = 9222  # or a dynamically-selected free port
+subprocess.Popen(["chrome", f"--remote-debugging-port={port}", ...])
 
 # Then connect via Playwright
-browser = await playwright.chromium.connect_over_cdp("http://127.0.0.1:9222")
+browser = await playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
 ```
 
-Requests are made through the page context using `page.evaluate(fetch(...))`, which inherits Chrome's real cookies and TLS fingerprint.
+`BrowserSessionManager` owns Chrome startup, lock handling, and pooled pages. `CdpBrowser` layers Cloudflare clearance and retry behavior on top. Requests are made through the page context using `page.evaluate(fetch(...))`, which inherits Chrome's real cookies and TLS fingerprint.
 
 ### API Identifiers
 
@@ -89,9 +128,15 @@ comix.to uses several identifiers:
 ### Adding New Features
 
 1. **New API call** — add method to `ComixService` in `comix_service.py`
-2. **New CLI command** — add to the main menu in `cli.py`
+2. **New CLI command** — add parser wiring in `src/comix_dl/cli/__init__.py`; keep orchestration/runtime setup in `src/comix_dl/application/` and leave `src/comix_dl/cli/flows.py` as a presentation adapter
 3. **New output format** — add converter in `converters.py`
+   If it touches PDF batching, keep temp-workspace cleanup and batch-size tests green.
 4. **New setting** — add field to `Settings` in `settings.py`
+   If it affects runtime tuning, either map it into an existing profile or update the profile-resolution tests.
+5. **New user-meaningful failure mode** — add or reuse a domain error in `errors.py`, then catch/render it at the CLI boundary
+6. **New dedup rule** — update `ComixService` to emit `DedupDecision` entries and keep the CLI dedup report aligned with the actual rule
+7. **New download summary wording** — update `application/download_reporting.py` and keep CLI/history/notification tests aligned with the shared report output
+8. **New download-path log field** — update `logging_utils.py` and the download/use-case tests so structured logging stays stable
 
 ## Commit Conventions
 

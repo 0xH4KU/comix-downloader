@@ -2,15 +2,25 @@
 
 from __future__ import annotations
 
+import builtins
 import zipfile
-from typing import TYPE_CHECKING
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from comix_dl.config import AppConfig
 from comix_dl.converters import collect_images, convert, to_cbz, to_pdf
+from comix_dl.errors import ConversionError
 
-if TYPE_CHECKING:
-    from pathlib import Path
+_ORIGINAL_IMPORT = builtins.__import__
+
+
+def _block_pdf_merge_backends(name: str, *args: object, **kwargs: object):
+    """Force pikepdf/pypdf imports to fail while keeping other imports intact."""
+    if name in {"pikepdf", "pypdf"}:
+        raise ImportError(f"blocked import for test: {name}")
+    return _ORIGINAL_IMPORT(name, *args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +131,7 @@ class TestToCbz:
     def test_empty_directory_raises(self, tmp_path: Path):
         img_dir = tmp_path / "empty"
         img_dir.mkdir()
-        with pytest.raises(RuntimeError, match="No images found"):
+        with pytest.raises(ConversionError, match="No images found"):
             to_cbz(img_dir)
 
 
@@ -155,7 +165,7 @@ class TestToPdf:
     def test_empty_directory_raises(self, tmp_path: Path):
         img_dir = tmp_path / "empty"
         img_dir.mkdir()
-        with pytest.raises(RuntimeError, match="No images found"):
+        with pytest.raises(ConversionError, match="No images found"):
             to_pdf(img_dir)
 
     def test_rgba_images_converted(self, tmp_path: Path):
@@ -170,6 +180,101 @@ class TestToPdf:
 
         result = to_pdf(img_dir)
         assert result.exists()
+
+    def test_large_pdf_without_merge_backend_fails_fast(self, tmp_path: Path):
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=21)
+
+        with (
+            patch("builtins.__import__", side_effect=_block_pdf_merge_backends),
+            pytest.raises(
+                ConversionError,
+                match=r"Install one of them and retry; refusing to create an incomplete PDF",
+            ),
+        ):
+            to_pdf(img_dir)
+
+    def test_large_pdf_merges_all_pages_when_backend_available(self, tmp_path: Path):
+        from pypdf import PdfReader
+
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=21)
+
+        result = to_pdf(img_dir)
+
+        assert result.exists()
+        assert len(PdfReader(str(result)).pages) == 21
+
+    def test_large_pdf_uses_configured_batch_size_and_cleans_temp_workspace(self, tmp_path: Path):
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=5)
+        config = AppConfig()
+        config.convert.pdf_batch_size = 2
+
+        observed: dict[str, object] = {}
+
+        def fake_merge(pdf_paths: list[Path], output: Path) -> None:
+            observed["count"] = len(pdf_paths)
+            observed["all_exist"] = all(path.exists() for path in pdf_paths)
+            observed["parent"] = pdf_paths[0].parent
+            output.write_bytes(b"%PDF-test")
+
+        with patch("comix_dl.converters._merge_pdfs", side_effect=fake_merge):
+            result = to_pdf(img_dir, config=config)
+
+        assert result.exists()
+        assert observed["count"] == 3
+        assert observed["all_exist"] is True
+        assert isinstance(observed["parent"], Path)
+        assert not observed["parent"].exists()
+
+    def test_large_pdf_cleans_temp_workspace_after_merge_failure(self, tmp_path: Path):
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=5)
+        config = AppConfig()
+        config.convert.pdf_batch_size = 2
+
+        observed: dict[str, object] = {}
+
+        def fake_merge(pdf_paths: list[Path], output: Path) -> None:
+            observed["count"] = len(pdf_paths)
+            observed["parent"] = pdf_paths[0].parent
+            raise ConversionError("merge failed")
+
+        with (
+            patch("comix_dl.converters._merge_pdfs", side_effect=fake_merge),
+            pytest.raises(ConversionError, match="merge failed"),
+        ):
+            to_pdf(img_dir, config=config)
+
+        assert observed["count"] == 3
+        assert isinstance(observed["parent"], Path)
+        assert not observed["parent"].exists()
+
+    def test_pdf_batch_size_is_clamped_to_at_least_one(self, tmp_path: Path):
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=2)
+        config = AppConfig()
+        config.convert.pdf_batch_size = 0
+
+        observed: dict[str, object] = {}
+
+        def fake_build(image_paths: list[Path], output: Path, dpi: float, *, batch_size: int) -> None:
+            observed["count"] = len(image_paths)
+            observed["batch_size"] = batch_size
+            observed["dpi"] = dpi
+            output.write_bytes(b"%PDF-test")
+
+        with patch("comix_dl.converters._build_pdf_batched", side_effect=fake_build):
+            result = to_pdf(img_dir, config=config)
+
+        assert result.exists()
+        assert observed == {"count": 2, "batch_size": 1, "dpi": 100.0}
 
 
 # ---------------------------------------------------------------------------
@@ -213,3 +318,18 @@ class TestConvert:
         _create_test_images(img_dir, count=1)
         result = convert(img_dir)
         assert result.suffix == ".cbz"
+
+    def test_optimize_flag_runs_optimizer_before_conversion(self, tmp_path: Path):
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=1)
+
+        with (
+            patch("comix_dl.converters.optimize_images") as optimize_images,
+            patch("comix_dl.converters.to_cbz", return_value=img_dir.with_suffix(".cbz")) as to_cbz_mock,
+        ):
+            result = convert(img_dir, "cbz", optimize=True)
+
+        optimize_images.assert_called_once_with(img_dir, config=None)
+        to_cbz_mock.assert_called_once_with(img_dir, config=None)
+        assert result == img_dir.with_suffix(".cbz")

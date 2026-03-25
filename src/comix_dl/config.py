@@ -1,7 +1,4 @@
-"""Application configuration.
-
-Provides sensible defaults that can be overridden by user settings.
-"""
+"""Application configuration models."""
 
 from __future__ import annotations
 
@@ -13,15 +10,9 @@ from pathlib import Path
 class BrowserConfig:
     """Chrome / CDP settings."""
 
-    headless: bool = True
     timeout_ms: int = 30_000
     cf_wait_seconds: int = 60
     cookie_dir: Path = field(default_factory=lambda: Path.home() / ".config" / "comix-dl")
-    cookie_file: str = "cookies.json"
-    user_agent: str = (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    )
     chrome_path: str | None = None  # User override; auto-detect if None
     cf_titles: tuple[str, ...] = ("Just a moment...", "Attention Required!", "Verify you are human")
     cf_selectors: tuple[str, ...] = (
@@ -51,8 +42,6 @@ class ServiceConfig:
     """comix.to API settings."""
 
     base_url: str = "https://comix.to"
-    rate_limit_delay: float = 0.5
-    max_search_pages: int = 3
 
 
 @dataclass
@@ -60,6 +49,7 @@ class ConvertConfig:
     """Converter settings."""
 
     pdf_dpi: float = 100.0
+    pdf_batch_size: int = 20
     default_format: str = "pdf"
     supported_image_formats: tuple[str, ...] = ("png", "jpg", "jpeg", "gif", "bmp", "webp", "avif")
     optimize_images: bool = True
@@ -67,12 +57,9 @@ class ConvertConfig:
 
 @dataclass
 class AppConfig:
-    """Root configuration — mutable so user settings can override defaults."""
+    """Root configuration passed explicitly into runtime components."""
 
     browser: BrowserConfig = field(default_factory=BrowserConfig)
     download: DownloadConfig = field(default_factory=DownloadConfig)
     service: ServiceConfig = field(default_factory=ServiceConfig)
     convert: ConvertConfig = field(default_factory=ConvertConfig)
-
-
-CONFIG = AppConfig()

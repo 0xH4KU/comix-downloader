@@ -1,16 +1,14 @@
-"""Download history with JSON storage.
-
-Records each download session to ``~/.config/comix-dl/history.json``.
-Entries are auto-trimmed when the list exceeds ``max_entries``.
-"""
+"""Download history with repository-backed JSON storage."""
 
 from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+
+from comix_dl.fileio import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +28,92 @@ class HistoryEntry:
     format: str
     total_size_bytes: int = 0
     completed: int = 0
+    partial: int = 0
     failed: int = 0
     skipped: int = 0
+    summary_text: str = ""
+    issues: list[str] = field(default_factory=list)
+
+
+class HistoryRepository:
+    """Repository for reading and writing persisted download history."""
+
+    def __init__(self, history_file: Path | None = None, *, max_entries: int = MAX_ENTRIES) -> None:
+        self._history_file = history_file or _HISTORY_FILE
+        self._max_entries = max_entries
+
+    def record_download(
+        self,
+        title: str,
+        chapters_count: int,
+        fmt: str,
+        total_size_bytes: int = 0,
+        completed: int = 0,
+        partial: int = 0,
+        failed: int = 0,
+        skipped: int = 0,
+        summary_text: str = "",
+        issues: list[str] | None = None,
+    ) -> None:
+        """Append a download record and trim old entries."""
+        entry = HistoryEntry(
+            timestamp=datetime.now(UTC).isoformat(),
+            title=title,
+            chapters_count=chapters_count,
+            format=fmt,
+            total_size_bytes=total_size_bytes,
+            completed=completed,
+            partial=partial,
+            failed=failed,
+            skipped=skipped,
+            summary_text=summary_text,
+            issues=list(issues or []),
+        )
+
+        entries = self._load_entries()
+        entries.append(asdict(entry))
+        if len(entries) > self._max_entries:
+            entries = entries[-self._max_entries :]
+
+        self._save_entries(entries)
+        logger.debug("Recorded download: %s (%d chapters)", title, chapters_count)
+
+    def list_entries(self) -> list[HistoryEntry]:
+        """Return all history entries, newest first."""
+        result: list[HistoryEntry] = []
+        for data in reversed(self._load_entries()):
+            try:
+                result.append(HistoryEntry(**{  # type: ignore[arg-type]
+                    key: value for key, value in data.items() if key in HistoryEntry.__dataclass_fields__
+                }))
+            except (TypeError, KeyError):
+                continue
+        return result
+
+    def clear(self) -> None:
+        """Delete all history entries."""
+        if self._history_file.exists():
+            self._history_file.unlink()
+            logger.info("History cleared")
+
+    def _load_entries(self) -> list[dict[str, object]]:
+        """Load raw entries from disk."""
+        if not self._history_file.exists():
+            return []
+        try:
+            data = json.loads(self._history_file.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                return data
+        except Exception as exc:
+            logger.warning("Failed to load history: %s", exc)
+        return []
+
+    def _save_entries(self, entries: list[dict[str, object]]) -> None:
+        """Write entries to disk."""
+        atomic_write_text(
+            self._history_file,
+            json.dumps(entries, indent=2, ensure_ascii=False) + "\n",
+        )
 
 
 def record_download(
@@ -40,70 +122,32 @@ def record_download(
     fmt: str,
     total_size_bytes: int = 0,
     completed: int = 0,
+    partial: int = 0,
     failed: int = 0,
     skipped: int = 0,
+    summary_text: str = "",
+    issues: list[str] | None = None,
 ) -> None:
-    """Append a download record to history, auto-trimming old entries."""
-    entry = HistoryEntry(
-        timestamp=datetime.now(UTC).isoformat(),
+    """Compatibility wrapper around the default history repository."""
+    HistoryRepository().record_download(
         title=title,
         chapters_count=chapters_count,
-        format=fmt,
+        fmt=fmt,
         total_size_bytes=total_size_bytes,
         completed=completed,
+        partial=partial,
         failed=failed,
         skipped=skipped,
+        summary_text=summary_text,
+        issues=issues,
     )
-
-    entries = _load_entries()
-    entries.append(asdict(entry))
-
-    # Auto-trim oldest entries
-    if len(entries) > MAX_ENTRIES:
-        entries = entries[-MAX_ENTRIES:]
-
-    _save_entries(entries)
-    logger.debug("Recorded download: %s (%d chapters)", title, chapters_count)
 
 
 def list_history() -> list[HistoryEntry]:
-    """Return all history entries, newest first."""
-    entries = _load_entries()
-    result = []
-    for data in reversed(entries):
-        try:
-            result.append(HistoryEntry(**{  # type: ignore[arg-type]
-                k: v for k, v in data.items() if k in HistoryEntry.__dataclass_fields__
-            }))
-        except (TypeError, KeyError):
-            continue
-    return result
+    """Compatibility wrapper around the default history repository."""
+    return HistoryRepository().list_entries()
 
 
 def clear_history() -> None:
-    """Delete all history entries."""
-    if _HISTORY_FILE.exists():
-        _HISTORY_FILE.unlink()
-        logger.info("History cleared")
-
-
-def _load_entries() -> list[dict[str, object]]:
-    """Load raw entries from disk."""
-    if not _HISTORY_FILE.exists():
-        return []
-    try:
-        data = json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
-        if isinstance(data, list):
-            return data
-    except Exception as exc:
-        logger.warning("Failed to load history: %s", exc)
-    return []
-
-
-def _save_entries(entries: list[dict[str, object]]) -> None:
-    """Write entries to disk."""
-    _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    _HISTORY_FILE.write_text(
-        json.dumps(entries, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    """Compatibility wrapper around the default history repository."""
+    HistoryRepository().clear()

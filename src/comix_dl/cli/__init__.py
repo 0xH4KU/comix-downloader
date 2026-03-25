@@ -39,7 +39,8 @@ from comix_dl.cli.flows import (
     flow_url_download,
 )
 from comix_dl.cli.interactive import flow_history, flow_settings, parse_chapter_selection, run_doctor
-from comix_dl.settings import load_settings
+from comix_dl.logging_utils import configure_logging
+from comix_dl.settings import SettingsRepository
 
 _shutdown_requested = False
 
@@ -110,27 +111,32 @@ def main() -> int:
         and not sys.argv[1].startswith("-")
         and sys.argv[1] not in ("search", "download", "info", "list", "clean", "history", "doctor", "settings")
     ):
-        logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+        configure_logging(logging.INFO)
         return _run_async(flow_search(sys.argv[1]))
 
     args = parser.parse_args()
 
     log_level = logging.DEBUG if args.debug else logging.INFO
-    logging.basicConfig(level=log_level, format="%(levelname)s:%(name)s:%(message)s")
+    configure_logging(log_level)
 
     # Quiet mode
     if getattr(args, "quiet", False):
         console.quiet = True
 
     if args.command == "search":
-        return _run_async(flow_search(args.query))
+        return _run_async(flow_search(args.query, quiet=args.quiet))
 
     if args.command == "download":
-        settings = load_settings()
-        fmt = args.format or settings.default_format
-        output = args.output or settings.output_dir
-        optimize = settings.optimize_images and not args.no_optimize
-        return _run_async(flow_noninteractive_download(args.url, args.chapters, fmt, output, optimize=optimize))
+        return _run_async(
+            flow_noninteractive_download(
+                args.url,
+                args.chapters,
+                args.format,
+                args.output,
+                optimize=None if not args.no_optimize else False,
+                quiet=args.quiet,
+            )
+        )
 
     if args.command == "info":
         return _run_async(flow_info(args.url))
@@ -139,7 +145,7 @@ def main() -> int:
         return flow_list()
 
     if args.command == "clean":
-        return flow_clean(force=args.force)
+        return flow_clean(force=args.force, auto_confirm=args.quiet)
 
     if args.command == "history":
         return flow_history(action=args.action)
@@ -184,7 +190,7 @@ def _run_async(coro: object) -> int:
 
 def _main_menu() -> int:
     """Interactive main menu."""
-    settings = load_settings()
+    settings = SettingsRepository().load()
 
     console.print(Text(BANNER, style="bold cyan"), highlight=False)
     console.print(

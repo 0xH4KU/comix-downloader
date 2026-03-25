@@ -4,21 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from comix_dl.config import CONFIG, AppConfig, BrowserConfig, ConvertConfig, DownloadConfig, ServiceConfig
+import comix_dl.config as config_module
+from comix_dl.config import AppConfig, BrowserConfig, ConvertConfig, DownloadConfig, ServiceConfig
 
 
 class TestBrowserConfig:
     def test_defaults(self):
         cfg = BrowserConfig()
-        assert cfg.headless is True
         assert cfg.timeout_ms == 30_000
         assert cfg.cf_wait_seconds == 60
-        assert cfg.cookie_file == "cookies.json"
         assert isinstance(cfg.cookie_dir, Path)
-
-    def test_user_agent_contains_chrome(self):
-        cfg = BrowserConfig()
-        assert "Chrome" in cfg.user_agent
 
 
 class TestDownloadConfig:
@@ -38,34 +33,33 @@ class TestServiceConfig:
         cfg = ServiceConfig()
         assert cfg.base_url == "https://comix.to"
 
-    def test_rate_limit_delay(self):
-        cfg = ServiceConfig()
-        assert cfg.rate_limit_delay == 0.5
-
 
 class TestConvertConfig:
     def test_defaults(self):
         cfg = ConvertConfig()
         assert cfg.default_format == "pdf"
         assert cfg.pdf_dpi == 100.0
+        assert cfg.pdf_batch_size == 20
         assert "png" in cfg.supported_image_formats
         assert "webp" in cfg.supported_image_formats
         assert "avif" in cfg.supported_image_formats
 
 
 class TestAppConfig:
-    def test_global_config_exists(self):
-        assert isinstance(CONFIG, AppConfig)
+    def test_no_global_config_singleton(self):
+        assert not hasattr(config_module, "CONFIG")
 
     def test_sub_configs_are_instances(self):
-        assert isinstance(CONFIG.browser, BrowserConfig)
-        assert isinstance(CONFIG.download, DownloadConfig)
-        assert isinstance(CONFIG.service, ServiceConfig)
-        assert isinstance(CONFIG.convert, ConvertConfig)
+        cfg = AppConfig()
+        assert isinstance(cfg.browser, BrowserConfig)
+        assert isinstance(cfg.download, DownloadConfig)
+        assert isinstance(cfg.service, ServiceConfig)
+        assert isinstance(cfg.convert, ConvertConfig)
 
-    def test_config_is_mutable(self):
-        """CONFIG must be mutable so user settings can override defaults."""
-        original = CONFIG.download.max_retries
-        CONFIG.download.max_retries = 99
-        assert CONFIG.download.max_retries == 99
-        CONFIG.download.max_retries = original
+    def test_new_instances_do_not_share_nested_state(self):
+        first = AppConfig()
+        second = AppConfig()
+
+        first.download.max_retries = 99
+
+        assert second.download.max_retries == 3
