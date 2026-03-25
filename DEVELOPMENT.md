@@ -65,11 +65,17 @@ ruff check .
 # Type check
 mypy src/comix_dl/ --no-error-summary
 
+# Docs/version consistency
+python scripts/check_docs_consistency.py
+
 # Test
 pytest
 
+# Coverage gate (matches CI)
+pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=45
+
 # Full local gate
-ruff check . && mypy src/comix_dl/ --no-error-summary && pytest
+ruff check . && mypy src/comix_dl/ --no-error-summary && python scripts/check_docs_consistency.py && pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=45
 ```
 
 Notes:
