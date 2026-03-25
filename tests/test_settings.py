@@ -46,6 +46,7 @@ class TestLoadSettings:
     def test_loads_from_json(self, tmp_path: Path):
         fake_file = tmp_path / "settings.json"
         fake_file.write_text(json.dumps({
+            "version": 1,
             "default_format": "cbz",
             "concurrent_images": 4,
             "max_retries": 5,
@@ -59,6 +60,7 @@ class TestLoadSettings:
     def test_ignores_unknown_fields(self, tmp_path: Path):
         fake_file = tmp_path / "settings.json"
         fake_file.write_text(json.dumps({
+            "version": 1,
             "default_format": "cbz",
             "unknown_field": "should_be_ignored",
         }))
@@ -82,6 +84,47 @@ class TestLoadSettings:
             s = load_settings()
         assert s.default_format == "pdf"
 
+    def test_migrates_legacy_settings_without_version(self, tmp_path: Path):
+        fake_file = tmp_path / "settings.json"
+        fake_file.write_text(json.dumps({
+            "default_format": "cbz",
+            "concurrent_images": 6,
+        }))
+        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+            s = load_settings()
+        assert s.default_format == "cbz"
+        assert s.concurrent_images == 6
+
+    def test_future_version_falls_back_to_defaults(self, tmp_path: Path):
+        fake_file = tmp_path / "settings.json"
+        fake_file.write_text(json.dumps({
+            "version": 999,
+            "default_format": "cbz",
+        }))
+        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+            s = load_settings()
+        assert s.default_format == "pdf"
+
+    def test_invalid_values_are_normalized(self, tmp_path: Path):
+        fake_file = tmp_path / "settings.json"
+        fake_file.write_text(json.dumps({
+            "version": 1,
+            "default_format": "zip",
+            "concurrent_chapters": 99,
+            "concurrent_images": 0,
+            "max_retries": -3,
+            "download_delay": "yes",
+            "optimize_images": "no",
+        }))
+        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+            s = load_settings()
+        assert s.default_format == "pdf"
+        assert s.concurrent_chapters == 5
+        assert s.concurrent_images == 1
+        assert s.max_retries == 0
+        assert s.download_delay is True
+        assert s.optimize_images is True
+
 
 class TestSaveSettings:
     def test_save_creates_file(self, tmp_path: Path):
@@ -96,6 +139,7 @@ class TestSaveSettings:
 
         assert fake_file.exists()
         data = json.loads(fake_file.read_text())
+        assert data["version"] == 1
         assert data["default_format"] == "cbz"
         assert data["max_retries"] == 7
 
