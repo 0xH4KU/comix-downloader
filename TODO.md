@@ -90,7 +90,7 @@
 1. 單實例：使用 lock file，第二個實例直接拒絕啟動
 2. 多實例：每個實例使用獨立 profile、獨立 session、獨立 pid/lock
 
-- [ ] 將瀏覽器生命週期抽為 `BrowserSessionManager`
+- [x] 將瀏覽器生命週期抽為 `BrowserSessionManager`
 說明：目前 `CdpBrowser` 同時處理啟動、清理、CF 檢測、頁面池、傳輸。
 完成標準：啟動、恢復、關閉、頁面池、CF 管理職責拆開，降低單類別複雜度。
 
@@ -210,7 +210,7 @@
 - [ ] Milestone 1：修正資料正確性
 範圍：大 PDF、partial download、atomic write、resume 驗證、history/notification 修正。
 
-- [ ] Milestone 2：修正瀏覽器高可用性
+- [x] Milestone 2：修正瀏覽器高可用性
 範圍：session manager、timeout、CF reset、page pool、單實例/多實例策略。
 
 - [ ] Milestone 3：完成架構解耦

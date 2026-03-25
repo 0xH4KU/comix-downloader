@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import comix_dl.cdp_browser as cdp_browser_module
+import comix_dl.browser_session as browser_session_module
+from comix_dl.browser_session import BrowserSessionManager
 from comix_dl.cdp_browser import CdpBrowser, _atexit_kill_chrome, _find_free_port, _is_port_in_use
 from comix_dl.config import AppConfig
 
@@ -74,7 +75,7 @@ class TestBrowserTimeouts:
         config = AppConfig()
         config.download.max_concurrent_images = 6
 
-        browser = CdpBrowser(config=config)
+        browser = BrowserSessionManager(config=config)
 
         assert browser._max_pages == 6
 
@@ -83,13 +84,13 @@ class TestBrowserTimeouts:
         config.download.max_concurrent_images = 0
 
         with pytest.raises(ValueError, match=r"Browser page pool size must be at least 1\."):
-            CdpBrowser(config=config)
+            BrowserSessionManager(config=config)
 
     async def test_connect_over_cdp_uses_connect_timeout(self, monkeypatch: pytest.MonkeyPatch):
         config = AppConfig()
         config.download.connect_timeout_ms = 1234
 
-        browser = CdpBrowser(config=config)
+        browser = BrowserSessionManager(config=config)
         browser._cdp_port = 9444
 
         captured: dict[str, float] = {}
@@ -102,7 +103,7 @@ class TestBrowserTimeouts:
             assert endpoint == "http://127.0.0.1:9444"
             return {"ok": True}
 
-        monkeypatch.setattr("comix_dl.cdp_browser.asyncio.wait_for", fake_wait_for)
+        monkeypatch.setattr("comix_dl.browser_session.asyncio.wait_for", fake_wait_for)
         browser._playwright = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=connect))
 
         result = await browser._connect_over_cdp_with_timeout()
@@ -155,7 +156,7 @@ class TestBrowserTimeouts:
         config = AppConfig()
         config.download.connect_timeout_ms = 600
 
-        browser = CdpBrowser(config=config)
+        browser = BrowserSessionManager(config=config)
         browser._cdp_port = 9222
 
         class _Clock:
@@ -173,9 +174,9 @@ class TestBrowserTimeouts:
         def fail_connect(*_args: object, **_kwargs: object) -> None:
             raise ConnectionRefusedError()
 
-        monkeypatch.setattr("comix_dl.cdp_browser.time.monotonic", clock.monotonic)
-        monkeypatch.setattr("comix_dl.cdp_browser.time.sleep", clock.sleep)
-        monkeypatch.setattr("comix_dl.cdp_browser.socket.create_connection", fail_connect)
+        monkeypatch.setattr("comix_dl.browser_session.time.monotonic", clock.monotonic)
+        monkeypatch.setattr("comix_dl.browser_session.time.sleep", clock.sleep)
+        monkeypatch.setattr("comix_dl.browser_session.socket.create_connection", fail_connect)
 
         with pytest.raises(
             RuntimeError,
@@ -184,7 +185,7 @@ class TestBrowserTimeouts:
             browser._wait_for_cdp_ready()
 
     async def test_acquire_page_waits_for_released_pool_page(self):
-        browser = CdpBrowser(config=AppConfig())
+        browser = BrowserSessionManager(config=AppConfig())
         page = MagicMock()
         page.is_closed.return_value = False
         browser._all_pages = [page]
@@ -201,7 +202,7 @@ class TestBrowserTimeouts:
         browser._ensure_page.assert_not_called()
 
     async def test_acquire_page_raises_when_pool_is_empty(self):
-        browser = CdpBrowser(config=AppConfig())
+        browser = BrowserSessionManager(config=AppConfig())
 
         with pytest.raises(
             RuntimeError,
@@ -210,7 +211,7 @@ class TestBrowserTimeouts:
             await browser.acquire_page()
 
     async def test_release_page_skips_closed_page_and_replaces_it(self):
-        browser = CdpBrowser(config=AppConfig())
+        browser = BrowserSessionManager(config=AppConfig())
         page = MagicMock()
         page.is_closed.return_value = True
         browser._all_pages = [page]
@@ -223,7 +224,7 @@ class TestBrowserTimeouts:
         browser._replace_dead_page.assert_awaited_once_with(page)
 
     async def test_acquire_page_discards_closed_page_from_queue(self):
-        browser = CdpBrowser(config=AppConfig())
+        browser = BrowserSessionManager(config=AppConfig())
         dead_page = MagicMock()
         dead_page.is_closed.return_value = True
         healthy_page = MagicMock()
@@ -239,7 +240,7 @@ class TestBrowserTimeouts:
         browser._replace_dead_page.assert_awaited_once_with(dead_page)
 
     async def test_replace_dead_page_enqueues_replacement_page(self):
-        browser = CdpBrowser(config=AppConfig())
+        browser = BrowserSessionManager(config=AppConfig())
         dead_page = MagicMock()
         dead_page.is_closed.return_value = True
         new_page = MagicMock()
@@ -257,20 +258,20 @@ class TestBrowserTimeouts:
 
     def test_atexit_cleanup_only_targets_current_process_chrome(self):
         process = MagicMock()
-        cdp_browser_module._active_chrome = process
+        browser_session_module._active_chrome = process
 
         _atexit_kill_chrome()
 
         process.terminate.assert_called_once()
         process.wait.assert_called_once_with(timeout=3)
-        assert cdp_browser_module._active_chrome is None
+        assert browser_session_module._active_chrome is None
 
     def test_single_instance_lock_rejects_second_browser(self, tmp_path):
         config = AppConfig()
         config.browser.cookie_dir = tmp_path
 
-        first = CdpBrowser(config=config)
-        second = CdpBrowser(config=config)
+        first = BrowserSessionManager(config=config)
+        second = BrowserSessionManager(config=config)
 
         first._acquire_instance_lock()
         try:
@@ -286,8 +287,8 @@ class TestBrowserTimeouts:
         config = AppConfig()
         config.browser.cookie_dir = tmp_path
 
-        first = CdpBrowser(config=config)
-        second = CdpBrowser(config=config)
+        first = BrowserSessionManager(config=config)
+        second = BrowserSessionManager(config=config)
 
         first._acquire_instance_lock()
         assert first._lock_file.exists()

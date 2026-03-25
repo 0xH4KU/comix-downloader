@@ -2,7 +2,7 @@
 
 ## Overview
 
-comix-downloader uses a Chrome CDP connection to bypass Cloudflare protection on comix.to, then interacts with the site's REST API v2 to search, list chapters, and fetch image URLs. Images are downloaded concurrently via a page pool and packaged into PDF or CBZ.
+comix-downloader uses a Chrome CDP connection to bypass Cloudflare protection on comix.to, then interacts with the site's REST API v2 to search, list chapters, and fetch image URLs. `browser_session.py` owns Chrome lifecycle, lock handling, timeouts, and pooled pages; `cdp_browser.py` layers Cloudflare detection and request retry logic on top. Images are downloaded concurrently via that page pool and packaged into PDF or CBZ.
 
 ## Component Diagram
 
@@ -17,6 +17,8 @@ comix-downloader uses a Chrome CDP connection to bypass Cloudflare protection on
          |           |           |           |
          |     [cdp_browser.py]  [Pillow]   history.json
          |           |
+         |    [browser_session.py]
+         |           |
      settings.json  Chrome (subprocess)
                      |              [notify.py]
               Playwright (CDP)       |
@@ -26,22 +28,27 @@ comix-downloader uses a Chrome CDP connection to bypass Cloudflare protection on
 
 ## Key Components
 
-### `cdp_browser.py` — Cloudflare Bypass
+### `browser_session.py` — Chrome Session Lifecycle
 
-The core of the CF bypass strategy:
+This layer owns the state that was previously packed into one monolithic browser client:
 
 1. Launches Google Chrome as a **subprocess** with `--remote-debugging-port` (dynamic port selection)
-2. Does NOT use `--enable-automation` — Chrome appears as a normal user browser
-3. Chrome starts **hidden** (`--window-position=-32000,-32000`); only brought forward if CF challenge needs manual solving
-4. Connects via Playwright's `connect_over_cdp()` to control the browser programmatically
-5. All network requests go through `page.evaluate(fetch())`, inheriting Chrome's real TLS fingerprint, cookies, and headers
-6. **Binary data** (images) transferred as **base64** for 3-4x less overhead than JSON arrays
-7. **Page pool** — multiple browser pages for parallel downloads without contention, sized from the configured image concurrency
-8. **Explicit timeout boundaries** — CDP connect, page navigation, HTML reads, and in-browser `fetch()` calls all fail with config-backed timeouts instead of hanging indefinitely
-9. **Clearance self-healing** — if API/image requests start returning HTTP 403 or a challenge page reappears, cached clearance is reset, reacquired once, and the request is retried once
-10. **Dead-page eviction** — closed pooled pages are discarded on release or acquire and trigger replacement instead of being re-queued
-11. **Single-instance lock** — a lock file under the config directory rejects a second comix-dl process before it can reuse the same Chrome profile
-12. **Graceful shutdown** — `atexit` only cleans Chrome started by the current Python process, avoiding shared PID-file cross-instance kills
+2. Applies the **single-instance lock** so only one comix-dl process can reuse the persisted Chrome profile at a time
+3. Connects Playwright via `connect_over_cdp()` and owns the main page plus the pooled download pages
+4. Wraps CDP connect, page creation, navigation, and `page.evaluate()` in **explicit timeout boundaries**
+5. Replaces dead pooled pages instead of silently re-queuing them
+6. Handles **graceful shutdown** and `atexit` cleanup for the Chrome started by the current Python process only
+
+### `cdp_browser.py` — Cloudflare-Aware Request Client
+
+This layer now focuses on Cloudflare-sensitive behavior and browser-side request orchestration:
+
+1. Does NOT use `--enable-automation` — Chrome appears as a normal user browser
+2. Chrome starts **hidden** (`--window-position=-32000,-32000`); only brought forward if CF challenge needs manual solving
+3. All network requests go through `page.evaluate(fetch())`, inheriting Chrome's real TLS fingerprint, cookies, and headers
+4. **Binary data** (images) transferred as **base64** for 3-4x less overhead than JSON arrays
+5. **Clearance self-healing** — if API/image requests start returning HTTP 403 or a challenge page reappears, cached clearance is reset, reacquired once, and the request is retried once
+6. Keeps Cloudflare logic separate from Chrome startup/page-pool lifecycle so the session layer stays testable and smaller
 
 This defeats CF's multi-layer detection:
 - **JS challenge** — Chrome executes it natively
