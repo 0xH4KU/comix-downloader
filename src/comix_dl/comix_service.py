@@ -265,9 +265,10 @@ class ComixService:
     async def _deduplicate_chapters(self, chapters: list[ChapterInfo]) -> list[ChapterInfo]:
         """Remove duplicate chapters, keeping the one with the most images.
 
-        Chapters with the same number but *different* subtitles are treated as
-        distinct content (e.g. "Chapter 0 - Volume 11" vs "Chapter 0 - Volume 12").
-        Only chapters with the same number AND the same (or missing) subtitle are
+        Chapters with the same number but *different* subtitles or languages are
+        treated as distinct content (e.g. "Chapter 0 - Volume 11" vs
+        "Chapter 0 - Volume 12", or English vs Spanish uploads). Only chapters
+        with the same number, language, and the same (or missing) subtitle are
         considered true duplicates.
 
         Uses ``image_count`` from the chapter list API (``pages_count`` field).
@@ -288,19 +289,20 @@ class ComixService:
                 result.append(chs[0])
                 continue
 
-            # Multiple entries — sub-group by name
-            named: dict[str, list[ChapterInfo]] = defaultdict(list)
-            unnamed: list[ChapterInfo] = []
+            # Multiple entries — sub-group by language and name
+            named: dict[tuple[str, str], list[ChapterInfo]] = defaultdict(list)
+            unnamed: dict[str, list[ChapterInfo]] = defaultdict(list)
             for ch in chs:
                 if ch.name:
-                    named[ch.name].append(ch)
+                    named[(ch.language, ch.name)].append(ch)
                 else:
-                    unnamed.append(ch)
+                    unnamed[ch.language].append(ch)
 
             if not named:
-                best = await self._pick_best(unnamed)
-                result.append(best)
-                dup_count += len(unnamed) - 1
+                for language_group in unnamed.values():
+                    best = await self._pick_best(language_group)
+                    result.append(best)
+                    dup_count += len(language_group) - 1
             else:
                 for name_group in named.values():
                     if len(name_group) == 1:
@@ -309,7 +311,7 @@ class ComixService:
                         best = await self._pick_best(name_group)
                         result.append(best)
                         dup_count += len(name_group) - 1
-                dup_count += len(unnamed)
+                dup_count += sum(len(language_group) for language_group in unnamed.values())
 
         result.sort(key=lambda c: c.number)
         if dup_count:

@@ -14,7 +14,13 @@ if TYPE_CHECKING:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_chapter(number: float, chapter_id: int = 0, name: str = "", image_count: int = 0) -> ChapterInfo:
+def _make_chapter(
+    number: float,
+    chapter_id: int = 0,
+    name: str = "",
+    image_count: int = 0,
+    language: str = "en",
+) -> ChapterInfo:
     label = f"Chapter {number}"
     if name:
         label += f" - {name}"
@@ -23,6 +29,7 @@ def _make_chapter(number: float, chapter_id: int = 0, name: str = "", image_coun
         chapter_id=chapter_id or int(number * 100),
         number=number,
         name=name,
+        language=language,
         image_count=image_count,
     )
 
@@ -110,6 +117,42 @@ class TestDeduplicateChapters:
         result = await svc._deduplicate_chapters(chapters)
         assert len(result) == 1
         assert result[0].chapter_id == 200  # most images
+
+    async def test_same_number_same_name_different_language_kept(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        chapters = [
+            _make_chapter(7, 100, name="Special", image_count=20, language="en"),
+            _make_chapter(7, 200, name="Special", image_count=25, language="es"),
+        ]
+
+        result = await svc._deduplicate_chapters(chapters)
+
+        assert len(result) == 2
+        assert {ch.language for ch in result} == {"en", "es"}
+
+    async def test_same_number_unnamed_different_language_kept(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        chapters = [
+            _make_chapter(8, 100, image_count=20, language="en"),
+            _make_chapter(8, 200, image_count=25, language="jp"),
+        ]
+
+        result = await svc._deduplicate_chapters(chapters)
+
+        assert len(result) == 2
+        assert {ch.language for ch in result} == {"en", "jp"}
+
+    async def test_same_number_same_name_same_language_keeps_most_images(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        chapters = [
+            _make_chapter(9, 100, name="Finale", image_count=10, language="en"),
+            _make_chapter(9, 200, name="Finale", image_count=30, language="en"),
+        ]
+
+        result = await svc._deduplicate_chapters(chapters)
+
+        assert len(result) == 1
+        assert result[0].chapter_id == 200
 
     async def test_result_sorted_by_number(self, mock_browser: AsyncMock):
         svc = _make_service(mock_browser)

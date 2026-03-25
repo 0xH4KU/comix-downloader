@@ -65,6 +65,11 @@ Key identifiers:
 - `chapter_id` (e.g. `5678901`) — used for chapter image retrieval
 - `slug` (e.g. `some-manga`) — used only for user-facing URLs
 
+Deduplication rules:
+- Chapters are grouped by chapter number first, then by language and subtitle.
+- Same-number chapters with different subtitles or different languages are preserved as distinct content.
+- Only same-language duplicates compete on `image_count`, with the largest upload kept.
+
 ### `downloader.py` — Concurrent Image Downloader
 
 - Downloads images via `CdpBrowser.get_bytes()` (fetch inside Chrome page, base64 encoded)

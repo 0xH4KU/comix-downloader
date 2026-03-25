@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.16-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.17-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -24,7 +24,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Partial-state manifest** — incomplete chapters keep a machine-readable `chapter.state.json` for diagnostics and future recovery
 - **Recovery-safe reruns** — stale temp artifacts are cleaned up and partial chapters resume from the missing pages instead of restarting from scratch
 - **Cheaper resume scans** — existing chapter files are indexed once per run instead of re-scanning the directory for every page
-- **Smart dedup** — auto-detects duplicate chapter uploads, keeps the best version by image count
+- **Smart dedup** — chapter dedup keeps language variants distinct and only collapses true same-language duplicates by image count
 - **Rate limiting** — randomized download delays to avoid triggering anti-scraping (toggleable)
 - **PDF / CBZ output** — convert downloaded images to PDF or CBZ archives
 - **Image optimization** — optional WebP conversion for 40-60% size savings (on by default)
@@ -216,7 +216,7 @@ Checks Python version, dependencies, Chrome availability, and output directory.
    - `GET /api/v2/manga/{hash_id}/chapters` — chapter list
    - `GET /api/v2/chapters/{chapter_id}` — chapter images
 
-4. **Smart Dedup** — the API often returns duplicate entries for the same chapter (from different uploaders). comix-dl groups chapters by number, fetches image counts for duplicates, and keeps the version with the most images. Chapters with the same number but different subtitles (e.g. "Chapter 0 - Volume 11" vs "Chapter 0 - Volume 12") are correctly treated as distinct content.
+4. **Smart Dedup** — the API often returns duplicate entries for the same chapter (from different uploaders). comix-dl groups chapters by number, language, and subtitle, then keeps the same-language duplicate with the most images. Chapters with the same number but different subtitles (e.g. "Chapter 0 - Volume 11" vs "Chapter 0 - Volume 12") or different languages are correctly treated as distinct content.
 
 5. **Download** — image URLs are fetched via `page.evaluate(fetch())` inside Chrome's page context. A **page pool** sized from the `Concurrent images` setting enables parallel downloads while keeping the main browser page reserved for navigation and Cloudflare handling. If all pooled pages are busy, requests wait for a pooled page instead of racing on the shared main page. Closed or stale pooled pages are discarded and replaced instead of being silently returned to circulation. Binary data uses **base64 encoding** (3-4x less overhead than JSON arrays). CDP connect, navigation, and in-browser fetch calls all use explicit timeouts, so stalled browser operations fail fast instead of hanging forever. Random delays between requests avoid rate limiting.
 
