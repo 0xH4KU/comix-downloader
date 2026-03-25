@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import socket
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -387,3 +388,175 @@ class TestCloudflareRecovery:
         assert result == "<html>ok</html>"
         assert browser.ensure_cf_clearance.await_count == 2
         assert page.goto.await_count == 2
+
+
+class TestBrowserHelpers:
+    async def test_close_resets_cf_flag_even_if_parent_close_fails(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._cf_cleared = True
+
+        with (
+            patch.object(BrowserSessionManager, "close", AsyncMock(side_effect=RuntimeError("boom"))),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            await browser.close()
+
+        assert browser._cf_cleared is False
+
+    async def test_context_manager_starts_and_closes_browser(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser.start = AsyncMock()
+        browser.close = AsyncMock()
+
+        async with browser as current:
+            assert current is browser
+
+        browser.start.assert_awaited_once()
+        browser.close.assert_awaited_once()
+
+    def test_cf_access_error_and_release_helpers(self):
+        browser = CdpBrowser(config=AppConfig())
+        page = MagicMock()
+        browser.release_page = MagicMock()
+        browser._all_pages = [page]
+
+        assert browser._is_cf_access_error(RuntimeError("HTTP 403 Forbidden")) is True
+        assert browser._is_cf_access_error(RuntimeError("timeout")) is False
+
+        browser._release_page_if_pooled(page)
+        browser._release_page_if_pooled(MagicMock())
+
+        browser.release_page.assert_called_once_with(page)
+
+    async def test_refresh_cf_clearance_resets_and_rechecks(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._cf_cleared = True
+
+        async def ensure() -> None:
+            browser._cf_cleared = True
+
+        browser.ensure_cf_clearance = AsyncMock(side_effect=ensure)
+
+        await browser._refresh_cf_clearance(reason="retry")
+
+        assert browser._cf_cleared is True
+        browser.ensure_cf_clearance.assert_awaited_once()
+
+    async def test_evaluate_request_with_cf_retry_uses_primary_page_for_non_pooled_calls(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = False
+        browser.start = AsyncMock()
+        browser.ensure_cf_clearance = AsyncMock()
+        browser.acquire_page = AsyncMock(side_effect=AssertionError("pool should not be used"))
+        page = MagicMock()
+        browser._ensure_page = AsyncMock(return_value=page)
+        browser._evaluate_with_timeout = AsyncMock(return_value={"ok": True})
+
+        result = await browser._evaluate_request_with_cf_retry(
+            url="https://api.example.com/data",
+            expression="() => ({ ok: true })",
+            arg=None,
+            action="Posting JSON to https://api.example.com/data",
+            use_page_pool=False,
+        )
+
+        assert result == {"ok": True}
+        browser.start.assert_awaited_once()
+        browser.ensure_cf_clearance.assert_awaited_once()
+        browser._ensure_page.assert_awaited_once()
+        browser._evaluate_with_timeout.assert_awaited_once()
+
+    async def test_fetch_page_raises_when_challenge_persists_after_refresh(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+        browser._refresh_cf_clearance = AsyncMock()
+        page = MagicMock()
+        browser._ensure_page = AsyncMock(return_value=page)
+        browser._goto_with_timeout = AsyncMock()
+        browser._is_cf_challenge = AsyncMock(side_effect=[True, True])
+
+        with pytest.raises(
+            CloudflareChallengeError,
+            match=r"Cloudflare challenge persisted after clearance refresh for https://example\.com\.",
+        ):
+            await browser.fetch_page("https://example.com")
+
+        browser._refresh_cf_clearance.assert_awaited_once()
+
+    async def test_get_bytes_decodes_base64_payload_and_passes_referer(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._evaluate_request_with_cf_retry = AsyncMock(
+            return_value=base64.b64encode(b"hello").decode("ascii"),
+        )
+
+        result = await browser.get_bytes("https://cdn.example.com/img", referer="https://ref.example.com")
+
+        assert result == b"hello"
+        call_kwargs = browser._evaluate_request_with_cf_retry.await_args.kwargs
+        assert call_kwargs["use_page_pool"] is True
+        assert call_kwargs["arg"] == [
+            "https://cdn.example.com/img",
+            {"Referer": "https://ref.example.com"},
+        ]
+
+    async def test_post_json_delegates_without_using_page_pool(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._evaluate_request_with_cf_retry = AsyncMock(return_value={"ok": True})
+
+        result = await browser.post_json("https://api.example.com/post", {"name": "value"})
+
+        assert result == {"ok": True}
+        call_kwargs = browser._evaluate_request_with_cf_retry.await_args.kwargs
+        assert call_kwargs["use_page_pool"] is False
+        assert call_kwargs["arg"] == ["https://api.example.com/post", {"name": "value"}]
+
+    async def test_is_cf_challenge_returns_false_when_clearance_cookie_exists(self):
+        browser = CdpBrowser(config=AppConfig())
+        page = MagicMock()
+        page.context.cookies = AsyncMock(return_value=[{"name": "cf_clearance"}])
+
+        assert await browser._is_cf_challenge(page) is False
+
+    async def test_is_cf_challenge_detects_title_and_selector_signals(self):
+        browser = CdpBrowser(config=AppConfig())
+        page = MagicMock()
+        page.context.cookies = AsyncMock(return_value=[])
+        page.title = AsyncMock(return_value=browser._config.browser.cf_titles[0])
+
+        assert await browser._is_cf_challenge(page) is True
+
+        page = MagicMock()
+        page.context.cookies = AsyncMock(side_effect=RuntimeError("no cookies"))
+        page.title = AsyncMock(return_value="regular page")
+        page.query_selector = AsyncMock(side_effect=[None, object()])
+
+        assert await browser._is_cf_challenge(page) is True
+
+    async def test_wait_for_cf_clearance_returns_when_challenge_resolves(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        browser = CdpBrowser(config=AppConfig())
+        browser._config.browser.cf_wait_seconds = 5
+        browser._is_cf_challenge = AsyncMock(return_value=False)
+        page = MagicMock()
+
+        class _Clock:
+            def __init__(self) -> None:
+                self.now = 0.0
+
+            def monotonic(self) -> float:
+                return self.now
+
+            async def sleep(self, seconds: float) -> None:
+                self.now += seconds
+
+        clock = _Clock()
+
+        monkeypatch.setattr("comix_dl.cdp_browser.time.monotonic", clock.monotonic)
+        monkeypatch.setattr("comix_dl.cdp_browser.asyncio.sleep", AsyncMock(side_effect=clock.sleep))
+
+        await browser._wait_for_cf_clearance(page)
+
+        browser._is_cf_challenge.assert_awaited_once_with(page)

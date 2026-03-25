@@ -255,6 +255,27 @@ class TestToPdf:
         assert isinstance(observed["parent"], Path)
         assert not observed["parent"].exists()
 
+    def test_pdf_batch_size_is_clamped_to_at_least_one(self, tmp_path: Path):
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=2)
+        config = AppConfig()
+        config.convert.pdf_batch_size = 0
+
+        observed: dict[str, object] = {}
+
+        def fake_build(image_paths: list[Path], output: Path, dpi: float, *, batch_size: int) -> None:
+            observed["count"] = len(image_paths)
+            observed["batch_size"] = batch_size
+            observed["dpi"] = dpi
+            output.write_bytes(b"%PDF-test")
+
+        with patch("comix_dl.converters._build_pdf_batched", side_effect=fake_build):
+            result = to_pdf(img_dir, config=config)
+
+        assert result.exists()
+        assert observed == {"count": 2, "batch_size": 1, "dpi": 100.0}
+
 
 # ---------------------------------------------------------------------------
 # convert — format routing
@@ -297,3 +318,18 @@ class TestConvert:
         _create_test_images(img_dir, count=1)
         result = convert(img_dir)
         assert result.suffix == ".cbz"
+
+    def test_optimize_flag_runs_optimizer_before_conversion(self, tmp_path: Path):
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=1)
+
+        with (
+            patch("comix_dl.converters.optimize_images") as optimize_images,
+            patch("comix_dl.converters.to_cbz", return_value=img_dir.with_suffix(".cbz")) as to_cbz_mock,
+        ):
+            result = convert(img_dir, "cbz", optimize=True)
+
+        optimize_images.assert_called_once_with(img_dir, config=None)
+        to_cbz_mock.assert_called_once_with(img_dir, config=None)
+        assert result == img_dir.with_suffix(".cbz")

@@ -29,16 +29,22 @@ Before opening a PR, run the same checks the project expects locally:
 .venv/bin/ruff check .
 .venv/bin/mypy src/comix_dl --no-error-summary
 .venv/bin/python scripts/check_docs_consistency.py
-.venv/bin/pytest --cov=comix_dl --cov-report=term-missing --cov-report=xml --cov-fail-under=45 -q
+.venv/bin/pytest --cov=comix_dl --cov-report=term-missing --cov-report=xml --cov-fail-under=70 -q
 ```
 
 Current enforced coverage gate:
 
-- Total coverage must stay at or above `45%`
+- Total coverage must stay at or above `70%`
 
-Roadmap expectation:
+Current high-risk module baselines:
 
-- Core modules should keep moving toward the TODO target of `70%` overall coverage
+- `src/comix_dl/cli/__init__.py`: `100%`
+- `src/comix_dl/cli/flows.py`: `89%`
+- `src/comix_dl/cdp_browser.py`: `78%`
+- `src/comix_dl/converters.py`: `70%`
+
+Regression expectation:
+
 - Changes in high-risk modules such as browser/session, conversion, and CLI orchestration should come with focused tests instead of relying on the global floor
 
 ## Regression Test Policy

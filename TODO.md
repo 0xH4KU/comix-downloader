@@ -59,7 +59,7 @@
 說明：目前 `pytest-asyncio` 未穩定生效，async 測試在本地直接報錯。
 完成標準：async 測試在標準開發流程可直接跑通，無 `Unknown config option: asyncio_mode` 類警告。
 
-- [ ] 將核心模組覆蓋率提升到可接受水位
+- [x] 將核心模組覆蓋率提升到可接受水位
 說明：目前 `cdp_browser`、`cli/flows`、`converters` 覆蓋率極低，正好是高風險模組。
 完成標準：核心模組各自具備最低覆蓋門檻；總覆蓋率門檻由 35% 提升到至少 70%。
 
@@ -216,7 +216,7 @@
 - [x] Milestone 3：完成架構解耦
 範圍：移除全域 CONFIG、repository/use case 分層、domain errors。
 
-- [ ] Milestone 4：補齊測試與發布門檻
+- [x] Milestone 4：補齊測試與發布門檻
 範圍：async test、核心覆蓋率、CI gate、整合測試。
 
 - [ ] Milestone 5：更新文件與發版
@@ -225,7 +225,7 @@
 ## 發版前驗收清單
 
 - [x] `pytest` 可從乾淨環境直接通過
-- [ ] 核心模組覆蓋率達標
+- [x] 核心模組覆蓋率達標
 - [x] 大章節 PDF 無少頁
 - [x] 中途中斷可安全恢復
 - [x] 多實例策略明確且受測

@@ -87,15 +87,16 @@ python scripts/check_docs_consistency.py
 pytest
 
 # Coverage gate (matches CI)
-pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=45
+pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=70
 
 # Full local gate
-ruff check . && mypy src/comix_dl/ --no-error-summary && python scripts/check_docs_consistency.py && pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=45
+ruff check . && mypy src/comix_dl/ --no-error-summary && python scripts/check_docs_consistency.py && pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=70
 ```
 
 Notes:
 - Running `pytest` from the repository root now imports from `src/` directly, so an editable install is not required just to collect tests.
 - Low-level localhost socket tests auto-skip in restricted sandboxes that do not allow binding TCP ports.
+- Current high-risk module baselines are tracked in CI: `cli/__init__.py` 100%, `cli/flows.py` 89%, `cdp_browser.py` 78%, `converters.py` 70%.
 
 ## Key Concepts
 
