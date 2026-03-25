@@ -41,7 +41,7 @@
 說明：目前只要 `size > 0` 就跳過，會永久接受損壞頁面。
 完成標準：至少驗證 magic bytes；必要時可記錄 manifest 內的副檔名、大小、校驗資訊。
 
-- [ ] 為部分完成章節寫入 manifest
+- [x] 為部分完成章節寫入 manifest
 說明：目前只有 `.complete`，沒有 `.partial` 或失敗明細。
 完成標準：新增類似 `chapter.state.json`，記錄成功頁、失敗頁、重試次數、最後錯誤，支援安全恢復。
 

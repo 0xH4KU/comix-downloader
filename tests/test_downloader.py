@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
@@ -165,7 +166,7 @@ class TestDownloadChapter:
         dl = Downloader(mock_browser, output_dir=tmp_path)
 
         # Disable retry delays for test speed
-        with patch.object(dl, "_download_image", return_value=False):
+        with patch.object(dl, "_download_image", return_value=(False, "Network error")):
             result = await dl.download_chapter(
                 ["https://cdn.com/1.jpg"],
                 "Test Manga",
@@ -175,6 +176,9 @@ class TestDownloadChapter:
         assert result.status == "failed"
         assert result.failed == 1
         assert not (result.chapter_dir / ".complete").exists()
+        state = json.loads((result.chapter_dir / "chapter.state.json").read_text(encoding="utf-8"))
+        assert state["status"] == "failed"
+        assert state["failed_pages"][0]["filename"] == "001"
 
     async def test_successful_download_creates_marker(self, tmp_path: Path, mock_browser: AsyncMock):
         """Successful download should create .complete marker."""
@@ -196,6 +200,7 @@ class TestDownloadChapter:
 
         assert result.status == "complete"
         assert (result.chapter_dir / ".complete").exists()
+        assert not (result.chapter_dir / "chapter.state.json").exists()
         # Should have one image file
         images = [f for f in result.chapter_dir.iterdir() if f.suffix == ".jpg"]
         assert len(images) == 1
@@ -274,7 +279,7 @@ class TestDownloadChapter:
     async def test_partial_failures_return_partial_status(self, tmp_path: Path, mock_browser: AsyncMock):
         dl = Downloader(mock_browser, output_dir=tmp_path)
 
-        with patch.object(dl, "_download_image", side_effect=[True, False]):
+        with patch.object(dl, "_download_image", side_effect=[(True, None), (False, "boom")]):
             result = await dl.download_chapter(
                 ["https://cdn.com/1.jpg", "https://cdn.com/2.jpg"],
                 "Test Manga",
@@ -285,6 +290,10 @@ class TestDownloadChapter:
         assert result.downloaded == 1
         assert result.failed == 1
         assert not (result.chapter_dir / ".complete").exists()
+        state = json.loads((result.chapter_dir / "chapter.state.json").read_text(encoding="utf-8"))
+        assert state["status"] == "partial"
+        assert state["failed_pages"][0]["filename"] == "002"
+        assert result.failed_files == ("002",)
 
 
 # ---------------------------------------------------------------------------
@@ -308,13 +317,14 @@ class TestDownloadImageRetry:
         dl = Downloader(mock_browser, output_dir=tmp_path)
 
         with patch("comix_dl.downloader.CONFIG.download.retry_delay", 0):
-            success = await dl._download_image(
+            success, error = await dl._download_image(
                 "https://cdn.com/test.jpg",
                 tmp_path,
                 "001",
             )
 
         assert success is True
+        assert error is None
         assert call_count == 3
 
     async def test_max_retries_exhausted(self, tmp_path: Path, mock_browser: AsyncMock):
@@ -327,13 +337,14 @@ class TestDownloadImageRetry:
             patch("comix_dl.downloader.CONFIG.download.max_retries", 2),
             patch("comix_dl.downloader.CONFIG.download.retry_delay", 0),
         ):
-            success = await dl._download_image(
+            success, error = await dl._download_image(
                 "https://cdn.com/test.jpg",
                 tmp_path,
                 "001",
             )
 
         assert success is False
+        assert error == "Persistent failure"
         # 1 initial + 2 retries = 3 calls
         assert mock_browser.get_bytes.call_count == 3
 

@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import random
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from comix_dl.config import CONFIG, AppConfig
-from comix_dl.fileio import atomic_write_bytes
+from comix_dl.fileio import atomic_write_bytes, atomic_write_text
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _COMPLETE_MARKER = ".complete"
+_STATE_FILE = "chapter.state.json"
 
 
 @dataclass
@@ -45,6 +48,7 @@ class ChapterDownloadResult:
     downloaded: int
     skipped: int
     failed: int
+    failed_files: tuple[str, ...] = ()
 
     @property
     def success_count(self) -> int:
@@ -63,6 +67,16 @@ class ChapterDownloadResult:
 
 # Type alias for progress callback
 ProgressCallback = Callable[[DownloadProgress], None]
+
+
+@dataclass
+class _PageDownloadResult:
+    """Per-page outcome used to build chapter state."""
+
+    filename: str
+    url: str
+    status: str
+    error: str | None = None
 
 
 def sanitize_dirname(name: str) -> str:
@@ -149,8 +163,7 @@ class Downloader:
         # Atomic-safe progress counter (incremented only inside semaphore)
         _progress_done = 0
 
-        async def fetch_one(index: int, url: str) -> str:
-            """Return 'ok', 'skip', or 'fail'."""
+        async def fetch_one(index: int, url: str) -> _PageDownloadResult:
             nonlocal _progress_done
             async with semaphore:
                 # Random delay to avoid rate limits
@@ -173,13 +186,13 @@ class Downloader:
                             current_file=filename,
                             total_bytes=self.bytes_downloaded,
                         ))
-                    return "skip"
+                    return _PageDownloadResult(filename=filename, url=url, status="skip")
                 if existing:
                     for stale in existing:
                         with contextlib.suppress(OSError):
                             stale.unlink()
 
-                success = await self._download_image(url, chapter_dir, filename, referer=referer)
+                success, error = await self._download_image(url, chapter_dir, filename, referer=referer)
                 _progress_done += 1
 
                 if self._on_progress:
@@ -193,25 +206,35 @@ class Downloader:
                             total_bytes=self.bytes_downloaded,
                         )
                     )
-                return "ok" if success else "fail"
+                return _PageDownloadResult(
+                    filename=filename,
+                    url=url,
+                    status="ok" if success else "fail",
+                    error=error,
+                )
 
         tasks = [fetch_one(i, url) for i, url in enumerate(image_urls)]
         results = await asyncio.gather(*tasks)
 
-        completed = results.count("ok")
-        skipped = results.count("skip")
-        failed = results.count("fail")
+        completed = sum(1 for r in results if r.status == "ok")
+        skipped = sum(1 for r in results if r.status == "skip")
+        failed_results = [r for r in results if r.status == "fail"]
+        failed = len(failed_results)
         result = ChapterDownloadResult(
             chapter_dir=chapter_dir,
             total=total,
             downloaded=completed,
             skipped=skipped,
             failed=failed,
+            failed_files=tuple(r.filename for r in failed_results),
         )
 
         # Mark as complete (only if no failures)
         if failed == 0:
             (chapter_dir / _COMPLETE_MARKER).touch()
+            self._remove_state_file(chapter_dir)
+        else:
+            self._write_state_file(chapter_dir, title, chapter, result, failed_results)
 
         if result.status == "failed":
             logger.warning("%s - %s: all %d images failed", title, chapter, total)
@@ -245,14 +268,15 @@ class Downloader:
         filename: str,
         *,
         referer: str | None = None,
-    ) -> bool:
+    ) -> tuple[bool, str | None]:
         """Download a single image with retry.
 
         Returns:
-            ``True`` on success, ``False`` on failure.
+            ``(True, None)`` on success, otherwise ``(False, last_error)``.
         """
         max_retries = self._config.download.max_retries
         retry_delay = self._config.download.retry_delay
+        last_error: str | None = None
 
         for attempt in range(max_retries + 1):
             try:
@@ -263,9 +287,10 @@ class Downloader:
                 filepath = output_dir / f"{filename}{ext}"
                 atomic_write_bytes(filepath, data)
                 self.bytes_downloaded += len(data)
-                return True
+                return True, None
 
             except Exception as exc:
+                last_error = str(exc)
                 if attempt < max_retries:
                     wait = retry_delay * (2 ** attempt)
                     logger.debug(
@@ -276,7 +301,7 @@ class Downloader:
                 else:
                     logger.warning("Failed to download %s after %d attempts: %s", url, max_retries + 1, exc)
 
-        return False
+        return False, last_error
 
     @staticmethod
     def _guess_extension(url: str, data: bytes) -> str:
@@ -329,3 +354,39 @@ class Downloader:
         if suffix == ".avif":
             return len(header) >= 12 and header[4:12] == b"ftypavif"
         return False
+
+    @staticmethod
+    def _remove_state_file(chapter_dir: Path) -> None:
+        with contextlib.suppress(OSError):
+            (chapter_dir / _STATE_FILE).unlink()
+
+    @staticmethod
+    def _write_state_file(
+        chapter_dir: Path,
+        title: str,
+        chapter: str,
+        result: ChapterDownloadResult,
+        failed_results: list[_PageDownloadResult],
+    ) -> None:
+        payload = {
+            "updated_at": datetime.now(UTC).isoformat(),
+            "title": title,
+            "chapter": chapter,
+            "status": result.status,
+            "total": result.total,
+            "downloaded": result.downloaded,
+            "skipped": result.skipped,
+            "failed": result.failed,
+            "failed_pages": [
+                {
+                    "filename": item.filename,
+                    "url": item.url,
+                    "error": item.error or "unknown error",
+                }
+                for item in failed_results
+            ],
+        }
+        atomic_write_text(
+            chapter_dir / _STATE_FILE,
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        )

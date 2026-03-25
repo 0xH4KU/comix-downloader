@@ -70,6 +70,7 @@ Key identifiers:
 - **Resume support** — skips existing images, writes `.complete` marker only when every page succeeds
 - **Atomic image writes** — downloaded pages are written via temp files and `os.replace()`
 - **Resume validation** — existing image files must pass a magic-byte check before they are trusted
+- **Partial-state manifest** — partial / failed chapters write `chapter.state.json` with failed pages
 - File extension detection from URL or magic bytes (including AVIF)
 
 ### `converters.py` — PDF / CBZ
@@ -119,6 +120,7 @@ Download: hash_id → API chapters → user selects → for each chapter:
 
 Resume:  chapter_dir/.complete exists? → skip
          image file already exists?    → skip
+         chapter.state.json            → inspect incomplete pages / errors
 
 Convert: fully-complete image directory → (optional: optimize to WebP) → PDF/CBZ → output file
 
