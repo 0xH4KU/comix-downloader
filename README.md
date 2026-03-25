@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.13-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.14-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -17,6 +17,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Parallel downloads** — concurrent chapter and image downloads with a bounded page pool sized to the configured image concurrency
 - **Bounded browser operations** — CDP connect, page navigation, HTML reads, and in-browser fetches fail with explicit timeouts instead of hanging indefinitely
 - **Clearance self-healing** — HTTP 403 or a renewed Cloudflare challenge resets cached clearance, re-checks the session, and retries once before failing clearly
+- **Dead-page eviction** — closed browser pages are discarded and replaced instead of being returned to the pool
 - **Resume / skip** — automatically skips already-downloaded chapters and images
 - **Corrupt-page recovery** — invalid existing image files are discarded and re-downloaded instead of being trusted by resume
 - **No false-success conversion** — chapters with failed page downloads stay unconverted and are reported as partial instead of completed
@@ -216,7 +217,7 @@ Checks Python version, dependencies, Chrome availability, and output directory.
 
 4. **Smart Dedup** — the API often returns duplicate entries for the same chapter (from different uploaders). comix-dl groups chapters by number, fetches image counts for duplicates, and keeps the version with the most images. Chapters with the same number but different subtitles (e.g. "Chapter 0 - Volume 11" vs "Chapter 0 - Volume 12") are correctly treated as distinct content.
 
-5. **Download** — image URLs are fetched via `page.evaluate(fetch())` inside Chrome's page context. A **page pool** sized from the `Concurrent images` setting enables parallel downloads while keeping the main browser page reserved for navigation and Cloudflare handling. If all pooled pages are busy, requests wait for a pooled page instead of racing on the shared main page. Binary data uses **base64 encoding** (3-4x less overhead than JSON arrays). CDP connect, navigation, and in-browser fetch calls all use explicit timeouts, so stalled browser operations fail fast instead of hanging forever. Random delays between requests avoid rate limiting.
+5. **Download** — image URLs are fetched via `page.evaluate(fetch())` inside Chrome's page context. A **page pool** sized from the `Concurrent images` setting enables parallel downloads while keeping the main browser page reserved for navigation and Cloudflare handling. If all pooled pages are busy, requests wait for a pooled page instead of racing on the shared main page. Closed or stale pooled pages are discarded and replaced instead of being silently returned to circulation. Binary data uses **base64 encoding** (3-4x less overhead than JSON arrays). CDP connect, navigation, and in-browser fetch calls all use explicit timeouts, so stalled browser operations fail fast instead of hanging forever. Random delays between requests avoid rate limiting.
 
 6. **Resume** — each chapter directory gets a `.complete` marker only after every page succeeds. Re-running the same download skips completed chapters and resumes partially-downloaded ones. Existing image files are validated before reuse, invalid files are re-downloaded, and incomplete chapters keep `chapter.state.json`.
 

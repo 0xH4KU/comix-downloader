@@ -106,7 +106,7 @@
 說明：目前圖片併發可能高於 page pool，最後退回共享主頁，存在競態風險。
 完成標準：池滿時等待，不再回退到共享主頁；最大併發由可配置 pool 明確控制。
 
-- [ ] 為 dead page replacement 建立更可靠的健康檢查
+- [x] 為 dead page replacement 建立更可靠的健康檢查
 完成標準：dead page 不會被重複放回池中，replacement 失敗時有可觀測告警與可恢復路徑。
 
 ## P1 狀態管理與儲存

@@ -208,6 +208,7 @@ class CdpBrowser:
         self._max_pages = resolved_max_pages
         self._page_pool: asyncio.Queue[Page] = asyncio.Queue()
         self._all_pages: list[Page] = []
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -398,6 +399,12 @@ class CdpBrowser:
         if page in self._all_pages:
             self.release_page(page)
 
+    def _page_is_healthy(self, page: Page) -> bool:
+        """Return whether a pooled page still looks reusable."""
+        with contextlib.suppress(Exception):
+            return not page.is_closed()
+        return False
+
     async def _refresh_cf_clearance(self, *, reason: str) -> None:
         """Drop cached clearance state and reacquire it once."""
         logger.warning("%s Resetting Cloudflare clearance and retrying once.", reason)
@@ -453,6 +460,13 @@ class CdpBrowser:
         """Disconnect from Chrome and close the subprocess."""
         global _active_chrome
 
+        for task in list(self._background_tasks):
+            task.cancel()
+        if self._background_tasks:
+            with contextlib.suppress(Exception):
+                await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            self._background_tasks.clear()
+
         # Close pool pages
         for page in self._all_pages:
             with contextlib.suppress(Exception):
@@ -501,15 +515,28 @@ class CdpBrowser:
 
     async def acquire_page(self) -> Page:
         """Get a page from the pool, waiting if all pooled pages are busy."""
-        if not self._all_pages:
-            raise RuntimeError("Browser page pool is empty; cannot perform pooled requests.")
-        return await self._page_pool.get()
+        while True:
+            if not self._all_pages:
+                raise RuntimeError("Browser page pool is empty; cannot perform pooled requests.")
+            page = await self._page_pool.get()
+            if self._page_is_healthy(page):
+                return page
+            logger.warning("Discarded unhealthy pooled page before reuse")
+            await self._replace_dead_page(page)
 
     def release_page(self, page: Page) -> None:
         """Return a page to the pool."""
-        if page in self._all_pages:
-            with contextlib.suppress(asyncio.QueueFull):
-                self._page_pool.put_nowait(page)
+        if page not in self._all_pages:
+            return
+        if not self._page_is_healthy(page):
+            logger.warning("Not returning unhealthy page to pool; scheduling replacement")
+            with contextlib.suppress(RuntimeError):
+                task = asyncio.create_task(self._replace_dead_page(page))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
+            return
+        with contextlib.suppress(asyncio.QueueFull):
+            self._page_pool.put_nowait(page)
 
     async def _replace_dead_page(self, dead_page: Page) -> None:
         """Remove a crashed page from the pool and try to create a replacement."""

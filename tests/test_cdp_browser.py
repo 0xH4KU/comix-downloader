@@ -185,6 +185,7 @@ class TestBrowserTimeouts:
     async def test_acquire_page_waits_for_released_pool_page(self):
         browser = CdpBrowser(config=AppConfig())
         page = MagicMock()
+        page.is_closed.return_value = False
         browser._all_pages = [page]
 
         acquire_task = asyncio.create_task(browser.acquire_page())
@@ -204,6 +205,35 @@ class TestBrowserTimeouts:
             match=r"Browser page pool is empty; cannot perform pooled requests\.",
         ):
             await browser.acquire_page()
+
+    async def test_release_page_skips_closed_page_and_replaces_it(self):
+        browser = CdpBrowser(config=AppConfig())
+        page = MagicMock()
+        page.is_closed.return_value = True
+        browser._all_pages = [page]
+        browser._replace_dead_page = AsyncMock()
+
+        browser.release_page(page)
+        await asyncio.sleep(0)
+
+        assert browser._page_pool.empty()
+        browser._replace_dead_page.assert_awaited_once_with(page)
+
+    async def test_acquire_page_discards_closed_page_from_queue(self):
+        browser = CdpBrowser(config=AppConfig())
+        dead_page = MagicMock()
+        dead_page.is_closed.return_value = True
+        healthy_page = MagicMock()
+        healthy_page.is_closed.return_value = False
+        browser._all_pages = [dead_page, healthy_page]
+        browser._replace_dead_page = AsyncMock()
+        browser._page_pool.put_nowait(dead_page)
+        browser._page_pool.put_nowait(healthy_page)
+
+        result = await browser.acquire_page()
+
+        assert result is healthy_page
+        browser._replace_dead_page.assert_awaited_once_with(dead_page)
 
 
 class TestCloudflareRecovery:
