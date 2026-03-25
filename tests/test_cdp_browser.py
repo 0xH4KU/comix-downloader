@@ -69,6 +69,21 @@ class TestIsPortInUse:
 
 
 class TestBrowserTimeouts:
+    def test_default_pool_size_uses_configured_image_concurrency(self):
+        config = AppConfig()
+        config.download.max_concurrent_images = 6
+
+        browser = CdpBrowser(config=config)
+
+        assert browser._max_pages == 6
+
+    def test_rejects_zero_page_pool_size(self):
+        config = AppConfig()
+        config.download.max_concurrent_images = 0
+
+        with pytest.raises(ValueError, match=r"Browser page pool size must be at least 1\."):
+            CdpBrowser(config=config)
+
     async def test_connect_over_cdp_uses_connect_timeout(self, monkeypatch: pytest.MonkeyPatch):
         config = AppConfig()
         config.download.connect_timeout_ms = 1234
@@ -166,6 +181,29 @@ class TestBrowserTimeouts:
             match=r"Chrome CDP port 9222 did not become ready within 600ms\.",
         ):
             browser._wait_for_cdp_ready()
+
+    async def test_acquire_page_waits_for_released_pool_page(self):
+        browser = CdpBrowser(config=AppConfig())
+        page = MagicMock()
+        browser._all_pages = [page]
+
+        acquire_task = asyncio.create_task(browser.acquire_page())
+        await asyncio.sleep(0)
+
+        assert not acquire_task.done()
+
+        browser.release_page(page)
+
+        assert await acquire_task is page
+
+    async def test_acquire_page_raises_when_pool_is_empty(self):
+        browser = CdpBrowser(config=AppConfig())
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"Browser page pool is empty; cannot perform pooled requests\.",
+        ):
+            await browser.acquire_page()
 
 
 class TestCloudflareRecovery:

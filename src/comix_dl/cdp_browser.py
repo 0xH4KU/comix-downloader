@@ -189,8 +189,13 @@ class CdpBrowser:
             json = await browser.get_json("https://example.com/api/data")
     """
 
-    def __init__(self, *, max_pages: int = 4, config: AppConfig | None = None) -> None:
+    def __init__(self, *, max_pages: int | None = None, config: AppConfig | None = None) -> None:
         self._config = config or CONFIG
+        resolved_max_pages = (
+            max_pages if max_pages is not None else self._config.download.max_concurrent_images
+        )
+        if resolved_max_pages < 1:
+            raise ValueError("Browser page pool size must be at least 1.")
         self._playwright: Playwright | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
@@ -200,7 +205,7 @@ class CdpBrowser:
         self._cf_lock = asyncio.Lock()
         self._user_data_dir = self._config.browser.cookie_dir / "chrome-profile"
         self._cdp_port: int = 0
-        self._max_pages = max_pages
+        self._max_pages = resolved_max_pages
         self._page_pool: asyncio.Queue[Page] = asyncio.Queue()
         self._all_pages: list[Page] = []
 
@@ -249,6 +254,8 @@ class CdpBrowser:
                     self._page_pool.put_nowait(page)
                 except Exception:
                     break
+            if not self._all_pages:
+                raise RuntimeError("Failed to create any pooled browser pages for downloads.")
         except Exception:
             await self.close()
             raise
@@ -493,12 +500,10 @@ class CdpBrowser:
     # -- page pool ------------------------------------------------------------
 
     async def acquire_page(self) -> Page:
-        """Get a page from the pool (blocks if none available)."""
-        try:
-            return self._page_pool.get_nowait()
-        except asyncio.QueueEmpty:
-            # All pool pages in use — fall back to the main page
-            return await self._ensure_page()
+        """Get a page from the pool, waiting if all pooled pages are busy."""
+        if not self._all_pages:
+            raise RuntimeError("Browser page pool is empty; cannot perform pooled requests.")
+        return await self._page_pool.get()
 
     def release_page(self, page: Page) -> None:
         """Return a page to the pool."""

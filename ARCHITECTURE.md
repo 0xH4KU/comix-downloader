@@ -36,7 +36,7 @@ The core of the CF bypass strategy:
 4. Connects via Playwright's `connect_over_cdp()` to control the browser programmatically
 5. All network requests go through `page.evaluate(fetch())`, inheriting Chrome's real TLS fingerprint, cookies, and headers
 6. **Binary data** (images) transferred as **base64** for 3-4x less overhead than JSON arrays
-7. **Page pool** — multiple browser pages for parallel downloads without contention
+7. **Page pool** — multiple browser pages for parallel downloads without contention, sized from the configured image concurrency
 8. **Explicit timeout boundaries** — CDP connect, page navigation, HTML reads, and in-browser `fetch()` calls all fail with config-backed timeouts instead of hanging indefinitely
 9. **Clearance self-healing** — if API/image requests start returning HTTP 403 or a challenge page reappears, cached clearance is reset, reacquired once, and the request is retried once
 10. **Graceful shutdown** — `atexit` handler ensures Chrome is cleaned up even on crash
@@ -132,7 +132,7 @@ History: download finishes → record to history.json → send desktop notificat
 
 ## Threading Model
 
-All operations are async (`asyncio`). The only subprocess is Chrome itself. Image downloads run as concurrent async tasks limited by semaphore, using a pool of browser pages for parallelism. Chapter downloads are also parallelized (default: 2 concurrent). Browser-facing await points are wrapped in explicit timeout boundaries so stuck CDP connects, navigations, and `page.evaluate(fetch())` calls fail predictably.
+All operations are async (`asyncio`). The only subprocess is Chrome itself. Image downloads run as concurrent async tasks limited by semaphore, using a browser page pool sized to `download.max_concurrent_images`. When all pooled pages are busy, requests wait for a pooled page rather than falling back to the shared main page. Chapter downloads are also parallelized (default: 2 concurrent). Browser-facing await points are wrapped in explicit timeout boundaries so stuck CDP connects, navigations, and `page.evaluate(fetch())` calls fail predictably.
 
 ## Why Not httpx / curl_cffi?
 
