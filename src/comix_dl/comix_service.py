@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -23,6 +24,33 @@ if TYPE_CHECKING:
     from comix_dl.cdp_browser import CdpBrowser
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_chapter_number(raw_number: object) -> str:
+    """Preserve chapter numbers as strings without forcing float semantics."""
+    if isinstance(raw_number, str):
+        normalized = raw_number.strip()
+    elif isinstance(raw_number, int):
+        normalized = str(raw_number)
+    elif isinstance(raw_number, float):
+        normalized = format(raw_number, "g")
+    else:
+        normalized = "0"
+    return normalized or "0"
+
+
+def _chapter_number_sort_key(number: str) -> tuple[tuple[int, str], ...]:
+    """Build a stable natural-sort key for chapter numbers."""
+    tokens = re.findall(r"\d+|[^\d]+", number.lower())
+    key: list[tuple[int, str]] = []
+    for token in tokens:
+        if token.isdigit():
+            key.append((0, token.zfill(12)))
+            continue
+        cleaned = re.sub(r"[^a-z]+", "", token)
+        if cleaned:
+            key.append((1, cleaned))
+    return tuple(key) or ((0, "000000000000"),)
 
 
 # -- data classes -------------------------------------------------------------
@@ -44,10 +72,15 @@ class ChapterInfo:
 
     title: str
     chapter_id: int
-    number: float
+    number: str
     name: str = ""  # subtitle (e.g. "Dear Little Brother")
     language: str = "en"
     image_count: int = 0
+    number_sort_key: tuple[tuple[int, str], ...] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.number = _normalize_chapter_number(self.number)
+        self.number_sort_key = _chapter_number_sort_key(self.number)
 
 
 @dataclass
@@ -229,7 +262,7 @@ class ComixService:
             page += 1
 
         # Sort + deduplicate
-        all_chapters.sort(key=lambda c: c.number)
+        all_chapters.sort(key=lambda c: c.number_sort_key)
         all_chapters = await self._deduplicate_chapters(all_chapters)
 
         # Fetch image counts in parallel for the final (deduplicated) list
@@ -254,7 +287,7 @@ class ComixService:
             raw_id = item.get("chapter_id", 0)
             chapter_id = int(raw_id) if isinstance(raw_id, (int, float, str)) else 0
             raw_num = item.get("number", 0)
-            number = float(raw_num) if isinstance(raw_num, (int, float, str)) else 0.0
+            number = _normalize_chapter_number(raw_num)
             name = str(item.get("name", "") or "")
             lang = str(item.get("language", "en") or "en")
             pages_count = item.get("pages_count", 0)
@@ -288,7 +321,7 @@ class ComixService:
         if not chapters:
             return chapters
 
-        groups: dict[float, list[ChapterInfo]] = defaultdict(list)
+        groups: dict[str, list[ChapterInfo]] = defaultdict(list)
         for ch in chapters:
             groups[ch.number].append(ch)
 
@@ -324,7 +357,7 @@ class ComixService:
                         dup_count += len(name_group) - 1
                 dup_count += sum(len(language_group) for language_group in unnamed.values())
 
-        result.sort(key=lambda c: c.number)
+        result.sort(key=lambda c: c.number_sort_key)
         if dup_count:
             logger.info("Removed %d duplicate chapter(s)", dup_count)
 

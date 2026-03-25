@@ -80,6 +80,7 @@ The service client talks to the `comix.to` v2 REST API and normalizes chapter me
 
 - Search and series detail lookup use `hash_id`, not slug
 - Chapter image lookup uses `chapter_id`
+- Chapter numbers are preserved as normalized strings and sorted via a dedicated natural-sort key instead of `float`
 - Deduplication keeps language variants distinct
 - Same-language duplicates compete on `image_count`
 

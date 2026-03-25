@@ -154,7 +154,7 @@
 
 ## P1 章節模型與業務規則
 
-- [ ] 修正 chapter number 使用 `float` 的設計
+- [x] 修正 chapter number 使用 `float` 的設計
 說明：`float` 不適合表示章節編號與排序，容易引入語意與比較誤差。
 完成標準：改用原始字串 + 正規化排序鍵，或改用 `Decimal`。
 

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 def _make_chapter(
-    number: float,
+    number: object,
     chapter_id: int = 0,
     name: str = "",
     image_count: int = 0,
@@ -28,7 +28,7 @@ def _make_chapter(
         label += f" - {name}"
     return ChapterInfo(
         title=label,
-        chapter_id=chapter_id or int(number * 100),
+        chapter_id=chapter_id or 100,
         number=number,
         name=name,
         language=language,
@@ -54,11 +54,11 @@ class TestParseChapterItems:
         result = svc._parse_chapter_items(items)
         assert len(result) == 2
         assert result[0].chapter_id == 100
-        assert result[0].number == 1
+        assert result[0].number == "1"
         assert result[0].name == "Intro"
         assert result[0].image_count == 20
-        assert result[0].title == "Chapter 1.0 - Intro"
-        assert result[1].title == "Chapter 2.0"
+        assert result[0].title == "Chapter 1 - Intro"
+        assert result[1].title == "Chapter 2"
 
     def test_empty_list(self, mock_browser: AsyncMock):
         svc = _make_service(mock_browser)
@@ -164,7 +164,19 @@ class TestDeduplicateChapters:
             _make_chapter(2, 200),
         ]
         result = await svc._deduplicate_chapters(chapters)
-        assert [ch.number for ch in result] == [1, 2, 3]
+        assert [ch.number for ch in result] == ["1", "2", "3"]
+
+    async def test_decimal_numbers_sort_naturally(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        chapters = [
+            _make_chapter("10.5", 300),
+            _make_chapter("2", 100),
+            _make_chapter("2.1", 200),
+        ]
+
+        result = await svc._deduplicate_chapters(chapters)
+
+        assert [ch.number for ch in result] == ["2", "2.1", "10.5"]
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +333,8 @@ class TestDataClasses:
         assert r.hash_id == "abc"
 
     def test_chapter_info_defaults(self):
-        ch = ChapterInfo(title="Ch 1", chapter_id=100, number=1.0)
+        ch = ChapterInfo(title="Ch 1", chapter_id=100, number=1)
+        assert ch.number == "1"
         assert ch.name == ""
         assert ch.language == "en"
         assert ch.image_count == 0

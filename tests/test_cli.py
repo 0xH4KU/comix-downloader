@@ -14,7 +14,7 @@ from comix_dl.comix_service import ChapterInfo
 def _make_chapters(n: int) -> list[ChapterInfo]:
     """Create a list of n test chapters."""
     return [
-        ChapterInfo(title=f"Chapter {i}", chapter_id=i * 100, number=float(i))
+        ChapterInfo(title=f"Chapter {i}", chapter_id=i * 100, number=str(i))
         for i in range(1, n + 1)
     ]
 
@@ -212,4 +212,3 @@ class TestBuildParser:
         parser = _build_parser()
         args = parser.parse_args(["download", "test"])
         assert args.no_optimize is False
-
