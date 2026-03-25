@@ -25,6 +25,7 @@ from comix_dl.config import CONFIG
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
+    from io import TextIOWrapper
 
     from playwright.async_api import Browser, BrowserContext, Page, Playwright
 
@@ -35,6 +36,35 @@ T = TypeVar("T")
 
 # Module-level reference for current-process atexit cleanup
 _active_chrome: subprocess.Popen[bytes] | None = None
+_active_instance_lock: TextIOWrapper | None = None
+
+
+def _lock_file_handle(fileobj: TextIOWrapper) -> None:
+    """Acquire a non-blocking exclusive file lock."""
+    if os.name == "nt":
+        import msvcrt
+
+        fileobj.seek(0)
+        msvcrt.locking(fileobj.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
+        return
+
+    import fcntl
+
+    fcntl.flock(fileobj.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_file_handle(fileobj: TextIOWrapper) -> None:
+    """Release a previously acquired file lock."""
+    if os.name == "nt":
+        import msvcrt
+
+        fileobj.seek(0)
+        msvcrt.locking(fileobj.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+        return
+
+    import fcntl
+
+    fcntl.flock(fileobj.fileno(), fcntl.LOCK_UN)
 
 
 def _atexit_kill_chrome() -> None:
@@ -141,11 +171,13 @@ class CdpBrowser:
         self._cf_cleared = False
         self._cf_lock = asyncio.Lock()
         self._user_data_dir = self._config.browser.cookie_dir / "chrome-profile"
+        self._lock_file = self._config.browser.cookie_dir / "browser.lock"
         self._cdp_port: int = 0
         self._max_pages = resolved_max_pages
         self._page_pool: asyncio.Queue[Page] = asyncio.Queue()
         self._all_pages: list[Page] = []
         self._background_tasks: set[asyncio.Task[None]] = set()
+        self._instance_lock_handle: TextIOWrapper | None = None
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -155,6 +187,8 @@ class CdpBrowser:
             return
 
         try:
+            self._config.browser.cookie_dir.mkdir(parents=True, exist_ok=True)
+            self._acquire_instance_lock()
             self._user_data_dir.mkdir(parents=True, exist_ok=True)
             self._launch_chrome()
 
@@ -197,6 +231,56 @@ class CdpBrowser:
 
         logger.info("Connected to Chrome via CDP (port %d, %d pool pages)",
                      self._cdp_port, self._page_pool.qsize())
+
+    def _acquire_instance_lock(self) -> None:
+        """Acquire the single-instance lock for browser sessions."""
+        global _active_instance_lock
+        if self._instance_lock_handle is not None:
+            return
+        if _active_instance_lock is not None:
+            raise RuntimeError(
+                f"Another comix-dl browser session is already running "
+                f"(lock file: {self._lock_file}).",
+            )
+
+        handle = self._lock_file.open("a+", encoding="utf-8")
+        try:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write("\n")
+                handle.flush()
+            _lock_file_handle(handle)
+            handle.seek(0)
+            handle.truncate()
+            handle.write(f"{os.getpid()}\n")
+            handle.flush()
+            with contextlib.suppress(OSError):
+                os.fsync(handle.fileno())
+        except Exception:
+            handle.close()
+            raise RuntimeError(
+                f"Another comix-dl browser session is already running "
+                f"(lock file: {self._lock_file}).",
+            ) from None
+
+        self._instance_lock_handle = handle
+        _active_instance_lock = handle
+
+    def _release_instance_lock(self) -> None:
+        """Release the single-instance lock if held by this browser."""
+        global _active_instance_lock
+        handle = self._instance_lock_handle
+        if handle is None:
+            return
+
+        with contextlib.suppress(Exception):
+            _unlock_file_handle(handle)
+        handle.close()
+        with contextlib.suppress(OSError):
+            self._lock_file.unlink()
+        self._instance_lock_handle = None
+        if _active_instance_lock is handle:
+            _active_instance_lock = None
 
     def _launch_chrome(self) -> None:
         """Launch Chrome subprocess with remote debugging enabled."""
@@ -434,6 +518,7 @@ class CdpBrowser:
         _active_chrome = None
         self._started = False
         self._cf_cleared = False
+        self._release_instance_lock()
         logger.info("Browser session closed")
 
     async def __aenter__(self) -> CdpBrowser:

@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.19-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.20-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -18,6 +18,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Bounded browser operations** — CDP connect, page navigation, HTML reads, and in-browser fetches fail with explicit timeouts instead of hanging indefinitely
 - **Clearance self-healing** — HTTP 403 or a renewed Cloudflare challenge resets cached clearance, re-checks the session, and retries once before failing clearly
 - **Dead-page eviction** — closed browser pages are discarded and replaced instead of being returned to the pool
+- **Single-instance browser lock** — a second comix-dl process is rejected cleanly instead of racing over the same Chrome profile
 - **Resume / skip** — automatically skips already-downloaded chapters and images
 - **Corrupt-page recovery** — invalid existing image files are discarded and re-downloaded instead of being trusted by resume
 - **No false-success conversion** — chapters with failed page downloads stay unconverted and are reported as partial instead of completed
@@ -206,7 +207,7 @@ Checks Python version, dependencies, Chrome availability, and output directory.
 
 ## How It Works
 
-1. **Chrome CDP** — comix-dl launches a real Chrome subprocess with `--remote-debugging-port` (dynamic port to avoid conflicts), then connects via Playwright's `connect_over_cdp`. No `--enable-automation` flag, so Cloudflare sees a normal browser. Chrome starts hidden off-screen and only moves forward if a manual CF challenge needs solving.
+1. **Chrome CDP** — comix-dl launches a real Chrome subprocess with `--remote-debugging-port` (dynamic port to avoid conflicts), then connects via Playwright's `connect_over_cdp`. No `--enable-automation` flag, so Cloudflare sees a normal browser. Chrome starts hidden off-screen and only moves forward if a manual CF challenge needs solving. A single-instance lock file prevents a second comix-dl process from starting a competing browser session against the same persisted profile.
 
 2. **CF Clearance** — on first run, if a Cloudflare challenge appears, Chrome moves to the foreground for the user to solve it once. The Chrome profile is persisted at `~/.config/comix-dl/chrome-profile/`, so subsequent runs pass automatically. An `asyncio.Lock` prevents concurrent tasks from triggering duplicate CF checks. If a later API/image request starts returning `HTTP 403` or a challenge page reappears, comix-dl drops its cached clearance state, reacquires clearance once, and retries the request once before surfacing a clear failure.
 

@@ -265,6 +265,41 @@ class TestBrowserTimeouts:
         process.wait.assert_called_once_with(timeout=3)
         assert cdp_browser_module._active_chrome is None
 
+    def test_single_instance_lock_rejects_second_browser(self, tmp_path):
+        config = AppConfig()
+        config.browser.cookie_dir = tmp_path
+
+        first = CdpBrowser(config=config)
+        second = CdpBrowser(config=config)
+
+        first._acquire_instance_lock()
+        try:
+            with pytest.raises(
+                RuntimeError,
+                match=r"Another comix-dl browser session is already running",
+            ):
+                second._acquire_instance_lock()
+        finally:
+            first._release_instance_lock()
+
+    def test_releasing_instance_lock_allows_next_browser(self, tmp_path):
+        config = AppConfig()
+        config.browser.cookie_dir = tmp_path
+
+        first = CdpBrowser(config=config)
+        second = CdpBrowser(config=config)
+
+        first._acquire_instance_lock()
+        assert first._lock_file.exists()
+
+        first._release_instance_lock()
+        second._acquire_instance_lock()
+
+        try:
+            assert second._instance_lock_handle is not None
+        finally:
+            second._release_instance_lock()
+
 
 class TestCloudflareRecovery:
     async def test_get_json_retries_once_after_http_403(self):
