@@ -71,6 +71,7 @@ Key identifiers:
 - **Atomic image writes** — downloaded pages are written via temp files and `os.replace()`
 - **Resume validation** — existing image files must pass a magic-byte check before they are trusted
 - **Partial-state manifest** — partial / failed chapters write `chapter.state.json` with failed pages
+- **Single-pass resume index** — chapter directories are scanned once to index existing page files
 - File extension detection from URL or magic bytes (including AVIF)
 
 ### `converters.py` — PDF / CBZ

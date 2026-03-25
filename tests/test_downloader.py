@@ -108,6 +108,22 @@ class TestImageValidation:
         assert Downloader._is_valid_image_file(path) is False
 
 
+class TestExistingDownloadIndex:
+    def test_indexes_page_files_once(self, tmp_path: Path):
+        chapter_dir = tmp_path / "chapter"
+        chapter_dir.mkdir()
+        (chapter_dir / "001.jpg").write_bytes(b"\xff\xd8")
+        (chapter_dir / "001.webp").write_bytes(b"RIFFxxxxWEBP")
+        (chapter_dir / "002.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        (chapter_dir / ".complete").touch()
+        (chapter_dir / "chapter.state.json").write_text("{}")
+
+        indexed = Downloader._index_existing_downloads(chapter_dir)
+
+        assert sorted(indexed) == ["001", "002"]
+        assert sorted(p.name for p in indexed["001"]) == ["001.jpg", "001.webp"]
+
+
 # ---------------------------------------------------------------------------
 # is_chapter_complete
 # ---------------------------------------------------------------------------
@@ -279,7 +295,10 @@ class TestDownloadChapter:
     async def test_partial_failures_return_partial_status(self, tmp_path: Path, mock_browser: AsyncMock):
         dl = Downloader(mock_browser, output_dir=tmp_path)
 
-        with patch.object(dl, "_download_image", side_effect=[(True, None), (False, "boom")]):
+        with (
+            patch.object(dl, "_download_image", side_effect=[(True, None), (False, "boom")]),
+            patch("comix_dl.downloader.CONFIG.download.max_concurrent_images", 1),
+        ):
             result = await dl.download_chapter(
                 ["https://cdn.com/1.jpg", "https://cdn.com/2.jpg"],
                 "Test Manga",

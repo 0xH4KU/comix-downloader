@@ -138,6 +138,7 @@ class Downloader:
         """
         chapter_dir = self._output_dir / sanitize_dirname(title) / sanitize_dirname(chapter)
         chapter_dir.mkdir(parents=True, exist_ok=True)
+        existing_files = self._index_existing_downloads(chapter_dir)
 
         # Already fully downloaded?
         if (chapter_dir / _COMPLETE_MARKER).exists():
@@ -174,7 +175,7 @@ class Downloader:
                 filename = f"{index + 1:03d}"
 
                 # Resume: only trust existing files that still look like valid images.
-                existing = list(chapter_dir.glob(f"{filename}.*"))
+                existing = existing_files.pop(filename, [])
                 if existing and any(self._is_valid_image_file(f) for f in existing):
                     _progress_done += 1
                     if self._on_progress:
@@ -390,3 +391,15 @@ class Downloader:
             chapter_dir / _STATE_FILE,
             json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
         )
+
+    @staticmethod
+    def _index_existing_downloads(chapter_dir: Path) -> dict[str, list[Path]]:
+        """Index existing page files once so resume checks avoid repeated glob() calls."""
+        indexed: dict[str, list[Path]] = {}
+        for entry in chapter_dir.iterdir():
+            if not entry.is_file():
+                continue
+            if entry.name in {_COMPLETE_MARKER, _STATE_FILE}:
+                continue
+            indexed.setdefault(entry.stem, []).append(entry)
+        return indexed

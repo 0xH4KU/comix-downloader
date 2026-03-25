@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.9-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.10-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -19,6 +19,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Corrupt-page recovery** — invalid existing image files are discarded and re-downloaded instead of being trusted by resume
 - **No false-success conversion** — chapters with failed page downloads stay unconverted and are reported as partial instead of completed
 - **Partial-state manifest** — incomplete chapters keep a machine-readable `chapter.state.json` for diagnostics and future recovery
+- **Cheaper resume scans** — existing chapter files are indexed once per run instead of re-scanning the directory for every page
 - **Smart dedup** — auto-detects duplicate chapter uploads, keeps the best version by image count
 - **Rate limiting** — randomized download delays to avoid triggering anti-scraping (toggleable)
 - **PDF / CBZ output** — convert downloaded images to PDF or CBZ archives
