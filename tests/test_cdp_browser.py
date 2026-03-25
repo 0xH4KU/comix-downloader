@@ -187,6 +187,7 @@ class TestBrowserTimeouts:
         page = MagicMock()
         page.is_closed.return_value = False
         browser._all_pages = [page]
+        browser._ensure_page = AsyncMock(side_effect=AssertionError("must not fall back to main page"))
 
         acquire_task = asyncio.create_task(browser.acquire_page())
         await asyncio.sleep(0)
@@ -196,6 +197,7 @@ class TestBrowserTimeouts:
         browser.release_page(page)
 
         assert await acquire_task is page
+        browser._ensure_page.assert_not_called()
 
     async def test_acquire_page_raises_when_pool_is_empty(self):
         browser = CdpBrowser(config=AppConfig())
@@ -234,6 +236,23 @@ class TestBrowserTimeouts:
 
         assert result is healthy_page
         browser._replace_dead_page.assert_awaited_once_with(dead_page)
+
+    async def test_replace_dead_page_enqueues_replacement_page(self):
+        browser = CdpBrowser(config=AppConfig())
+        dead_page = MagicMock()
+        dead_page.is_closed.return_value = True
+        new_page = MagicMock()
+        new_page.is_closed.return_value = False
+        browser._all_pages = [dead_page]
+        browser._context = MagicMock()
+        browser._context.new_page = AsyncMock(return_value=new_page)
+        browser._goto_with_timeout = AsyncMock()
+
+        await browser._replace_dead_page(dead_page)
+
+        assert browser._all_pages == [new_page]
+        assert await browser.acquire_page() is new_page
+        browser._goto_with_timeout.assert_awaited_once()
 
 
 class TestCloudflareRecovery:
