@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.4-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.5-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -214,7 +214,7 @@ Checks Python version, dependencies, Chrome availability, and output directory.
 
 6. **Resume** — each chapter directory gets a `.complete` marker after successful download. Re-running the same download skips completed chapters and resumes partially-downloaded ones.
 
-7. **Convert** — downloaded images are packaged into PDF (via Pillow, processed in batches to limit memory) or CBZ (zip archive).
+7. **Convert** — downloaded images are packaged into PDF (via Pillow, processed in batches to limit memory) or CBZ (zip archive). Multi-batch PDF conversion now fails fast if no merge backend is available, instead of emitting a truncated file.
 
 8. **Graceful shutdown** — `Ctrl+C` finishes current downloads then stops. An `atexit` handler ensures Chrome is cleaned up even on crashes.
 

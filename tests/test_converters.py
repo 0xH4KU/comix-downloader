@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import builtins
 import zipfile
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -11,6 +13,16 @@ from comix_dl.converters import collect_images, convert, to_cbz, to_pdf
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+_ORIGINAL_IMPORT = builtins.__import__
+
+
+def _block_pdf_merge_backends(name: str, *args: object, **kwargs: object):
+    """Force pikepdf/pypdf imports to fail while keeping other imports intact."""
+    if name in {"pikepdf", "pypdf"}:
+        raise ImportError(f"blocked import for test: {name}")
+    return _ORIGINAL_IMPORT(name, *args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +182,17 @@ class TestToPdf:
 
         result = to_pdf(img_dir)
         assert result.exists()
+
+    def test_large_pdf_without_merge_backend_fails_fast(self, tmp_path: Path):
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=21)
+
+        with (
+            patch("builtins.__import__", side_effect=_block_pdf_merge_backends),
+            pytest.raises(RuntimeError, match="refusing to create an incomplete PDF"),
+        ):
+            to_pdf(img_dir)
 
 
 # ---------------------------------------------------------------------------

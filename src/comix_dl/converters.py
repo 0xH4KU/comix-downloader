@@ -97,10 +97,12 @@ def _build_pdf_batched(
     """Build PDF by loading images in batches to limit memory usage.
 
     Only ``batch_size`` images are held in memory at any time.
-    The first batch creates the PDF; subsequent batches are appended
-    via Pillow's incremental ``append_images`` by writing to temporary
-    PDFs then merging with pikepdf if available, otherwise falling back
-    to a single-pass approach for smaller sets.
+    The first batch creates the PDF; subsequent batches are written to
+    temporary PDFs and merged into the final output.
+
+    For multi-batch PDFs, a merge backend (``pikepdf`` or ``pypdf``) is
+    required. If none is available, this function fails fast rather than
+    silently creating an incomplete PDF.
     """
     from PIL import Image
 
@@ -164,8 +166,8 @@ def _build_pdf_batched(
 def _merge_pdfs(pdf_paths: list[Path], output: Path) -> None:
     """Merge multiple PDF files into one.
 
-    Uses pikepdf if available for efficient merging,
-    falls back to pypdf or raw concatenation.
+    Uses pikepdf if available for efficient merging and falls back to pypdf.
+    If neither backend is available, raises instead of emitting a truncated PDF.
     """
     if len(pdf_paths) == 1:
         import shutil
@@ -195,13 +197,10 @@ def _merge_pdfs(pdf_paths: list[Path], output: Path) -> None:
     except ImportError:
         pass
 
-    # Last resort: just copy first batch (data loss but won't crash)
-    import shutil
-    logger.warning(
-        "Neither pikepdf nor pypdf installed. "
-        "Large PDF may be incomplete. Install: pip install pikepdf"
+    raise RuntimeError(
+        "Large PDF conversion requires pikepdf or pypdf to merge batch files; "
+        "refusing to create an incomplete PDF."
     )
-    shutil.copy2(pdf_paths[0], output)
 
 
 def convert(image_dir: Path, fmt: str = "cbz", *, optimize: bool = False) -> Path:

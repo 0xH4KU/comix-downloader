@@ -72,7 +72,7 @@ Key identifiers:
 
 ### `converters.py` — PDF / CBZ
 
-- **PDF**: Pillow-based, processes images in batches to limit memory usage
+- **PDF**: Pillow-based, processes images in batches to limit memory usage; fails fast if no PDF merge backend is available for multi-batch output
 - **CBZ**: ZIP archive with no compression (standard comic book format)
 
 ### `settings.py` — Persistent Configuration
