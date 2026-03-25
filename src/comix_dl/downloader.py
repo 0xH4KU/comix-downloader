@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from comix_dl.config import AppConfig
+from comix_dl.errors import PartialDownloadError
 from comix_dl.fileio import atomic_write_bytes, atomic_write_text
 
 if TYPE_CHECKING:
@@ -77,6 +78,15 @@ class _PageDownloadResult:
     url: str
     status: str
     error: str | None = None
+
+
+def ensure_complete_download(result: ChapterDownloadResult, *, chapter_title: str) -> None:
+    """Raise a domain error when a chapter result is incomplete."""
+    if result.status != "partial":
+        return
+    raise PartialDownloadError(
+        f"{chapter_title} is incomplete: {result.failed}/{result.total} pages failed.",
+    )
 
 
 def sanitize_dirname(name: str) -> str:

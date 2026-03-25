@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
 from comix_dl.config import AppConfig
+from comix_dl.errors import ConfigurationError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -142,7 +143,7 @@ class BrowserSessionManager:
             max_pages if max_pages is not None else self._config.download.max_concurrent_images
         )
         if resolved_max_pages < 1:
-            raise ValueError("Browser page pool size must be at least 1.")
+            raise ConfigurationError("Browser page pool size must be at least 1.")
 
         self._playwright: Playwright | None = None
         self._context: BrowserContext | None = None

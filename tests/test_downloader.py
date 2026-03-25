@@ -6,8 +6,17 @@ import json
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from comix_dl.config import AppConfig
-from comix_dl.downloader import ChapterDownloadResult, Downloader, DownloadProgress, sanitize_dirname
+from comix_dl.downloader import (
+    ChapterDownloadResult,
+    Downloader,
+    DownloadProgress,
+    ensure_complete_download,
+    sanitize_dirname,
+)
+from comix_dl.errors import PartialDownloadError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -462,3 +471,9 @@ class TestChapterDownloadResult:
         assert ChapterDownloadResult(tmp_path, total=2, downloaded=2, skipped=0, failed=0).status == "complete"
         assert ChapterDownloadResult(tmp_path, total=2, downloaded=1, skipped=0, failed=1).status == "partial"
         assert ChapterDownloadResult(tmp_path, total=2, downloaded=0, skipped=0, failed=2).status == "failed"
+
+    def test_ensure_complete_download_raises_partial_domain_error(self, tmp_path: Path):
+        result = ChapterDownloadResult(tmp_path, total=3, downloaded=2, skipped=0, failed=1)
+
+        with pytest.raises(PartialDownloadError, match=r"1/3 pages failed"):
+            ensure_complete_download(result, chapter_title="Chapter 1")

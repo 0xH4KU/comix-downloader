@@ -7,7 +7,7 @@ comix-downloader is a desktop-first manga downloader for `comix.to`. It uses a r
 1. Presentation: `cli/__init__.py`, `cli/interactive.py`, `cli/display.py`
 2. Workflow orchestration: `cli/flows.py`
 3. Domain/service logic: `comix_service.py`, `downloader.py`, `converters.py`
-4. Infrastructure: `browser_session.py`, `cdp_browser.py`, `settings.py`, `history.py`, `fileio.py`, `notify.py`
+4. Infrastructure: `browser_session.py`, `cdp_browser.py`, `settings.py`, `history.py`, `fileio.py`, `notify.py`, `errors.py`
 
 This is the real structure today, not the target end-state. There is still no dedicated application layer, and `cli/flows.py` remains the main orchestration hotspot.
 
@@ -107,6 +107,18 @@ The service client talks to the `comix.to` v2 REST API and normalizes chapter me
 - Multi-batch PDF merge uses the bundled `pypdf` runtime dependency by default
 - `pikepdf` remains an optional faster backend when present
 - Missing merge support is treated as a hard failure instead of producing a truncated PDF
+
+### `errors.py`
+
+Core workflow failures now have explicit domain error types instead of relying on generic `RuntimeError`:
+
+- `ConfigurationError`
+- `CloudflareChallengeError`
+- `RemoteApiError`
+- `PartialDownloadError`
+- `ConversionError`
+
+This keeps orchestration code readable and makes future application-layer extraction less dependent on fragile string matching.
 
 ## Download State Model
 
@@ -246,7 +258,7 @@ The following debts remain real and are intentionally documented here:
 
 - `cli/flows.py` still mixes orchestration, UI, and infrastructure calls
 - Runtime config is still threaded manually through `cli/flows.py` instead of dedicated application/use-case boundaries
-- Domain errors are still too generic in several flows
+- CLI still renders several failures with generic text instead of a single centralized error presenter
 - Overall test coverage is still below the desired long-term threshold
 
 The point of this document is to describe the current system honestly so the next refactor slices have a stable reference point.

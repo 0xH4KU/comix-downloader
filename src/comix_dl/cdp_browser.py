@@ -22,6 +22,7 @@ from comix_dl.browser_session import (
     _find_free_port,
     _is_port_in_use,
 )
+from comix_dl.errors import CloudflareChallengeError
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -108,7 +109,7 @@ class CdpBrowser(BrowserSessionManager):
                             reason=f"{action} received HTTP 403 from {url}.",
                         )
                         continue
-                    raise RuntimeError(
+                    raise CloudflareChallengeError(
                         "Cloudflare clearance refresh did not recover browser access "
                         f"to {url} after HTTP 403.",
                     ) from exc
@@ -172,7 +173,7 @@ class CdpBrowser(BrowserSessionManager):
                         reason=f"Cloudflare challenge detected while loading {url}.",
                     )
                     continue
-                raise RuntimeError(
+                raise CloudflareChallengeError(
                     f"Cloudflare challenge persisted after clearance refresh for {url}.",
                 )
 

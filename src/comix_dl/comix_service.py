@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 from comix_dl.config import AppConfig
+from comix_dl.errors import RemoteApiError
 
 if TYPE_CHECKING:
     from comix_dl.cdp_browser import CdpBrowser
@@ -175,7 +176,7 @@ class ComixService:
         falls back to a keyword search and matches the slug.
 
         Raises:
-            RuntimeError: If the slug cannot be resolved.
+            RemoteApiError: If the slug cannot be resolved.
         """
         # Try direct lookup
         api_url = f"{self._base}/api/v2/manga/{slug}"
@@ -193,7 +194,7 @@ class ComixService:
         if matched:
             return await self.get_series(matched.hash_id)
 
-        raise RuntimeError(f"Could not find manga with slug '{slug}'")
+        raise RemoteApiError(f"Could not find manga with slug '{slug}'")
 
     async def get_series(self, hash_id: str) -> SeriesInfo:
         """Fetch series info and chapter list by hash_id."""
@@ -202,7 +203,7 @@ class ComixService:
         try:
             info_resp = await self._client.get_json(api_url)
         except Exception as exc:
-            raise RuntimeError(
+            raise RemoteApiError(
                 self._describe_api_error(exc, action=f"Fetch series info for '{hash_id}'"),
             ) from exc
 

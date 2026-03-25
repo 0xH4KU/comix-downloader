@@ -28,6 +28,7 @@ comix-downloader/
     config.py             # AppConfig dataclasses used for runtime injection
     converters.py         # PDF / CBZ conversion
     downloader.py         # Image downloader
+    errors.py             # Domain error types
     fileio.py            # Atomic file write helpers
     history.py            # Download history persistence
     notify.py             # Desktop notifications
@@ -120,6 +121,7 @@ comix.to uses several identifiers:
 2. **New CLI command** — add parser wiring in `src/comix_dl/cli/__init__.py` and flow logic in `src/comix_dl/cli/flows.py`
 3. **New output format** — add converter in `converters.py`
 4. **New setting** — add field to `Settings` in `settings.py`
+5. **New user-meaningful failure mode** — add or reuse a domain error in `errors.py`, then catch/render it at the CLI boundary
 
 ## Commit Conventions
 

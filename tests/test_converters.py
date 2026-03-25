@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from comix_dl.converters import collect_images, convert, to_cbz, to_pdf
+from comix_dl.errors import ConversionError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -133,7 +134,7 @@ class TestToCbz:
     def test_empty_directory_raises(self, tmp_path: Path):
         img_dir = tmp_path / "empty"
         img_dir.mkdir()
-        with pytest.raises(RuntimeError, match="No images found"):
+        with pytest.raises(ConversionError, match="No images found"):
             to_cbz(img_dir)
 
 
@@ -167,7 +168,7 @@ class TestToPdf:
     def test_empty_directory_raises(self, tmp_path: Path):
         img_dir = tmp_path / "empty"
         img_dir.mkdir()
-        with pytest.raises(RuntimeError, match="No images found"):
+        with pytest.raises(ConversionError, match="No images found"):
             to_pdf(img_dir)
 
     def test_rgba_images_converted(self, tmp_path: Path):
@@ -191,7 +192,7 @@ class TestToPdf:
         with (
             patch("builtins.__import__", side_effect=_block_pdf_merge_backends),
             pytest.raises(
-                RuntimeError,
+                ConversionError,
                 match=r"Install one of them and retry; refusing to create an incomplete PDF",
             ),
         ):

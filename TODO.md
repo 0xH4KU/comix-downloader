@@ -140,7 +140,7 @@
 - [ ] 讓 CLI 僅負責輸入解析與輸出渲染
 完成標準：Rich prompt、table、panel 僅存在於 presentation layer。
 
-- [ ] 建立明確的 domain errors
+- [x] 建立明確的 domain errors
 說明：目前大量使用 `RuntimeError` 與裸 `Exception`。
 完成標準：至少區分：
 1. `ConfigurationError`

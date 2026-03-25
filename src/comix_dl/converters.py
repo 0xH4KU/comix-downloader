@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from comix_dl.config import AppConfig
+from comix_dl.errors import ConversionError
 
 logger = logging.getLogger(__name__)
 
@@ -44,11 +45,11 @@ def to_cbz(image_dir: Path, output_path: Path | None = None, config: AppConfig |
         Path to the created CBZ file.
 
     Raises:
-        RuntimeError: If no images are found.
+        ConversionError: If no images are found.
     """
     images = collect_images(image_dir, config=config)
     if not images:
-        raise RuntimeError(f"No images found in {image_dir}")
+        raise ConversionError(f"No images found in {image_dir}")
 
     out = output_path or (image_dir.parent / (image_dir.name + ".cbz"))
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -75,12 +76,12 @@ def to_pdf(image_dir: Path, output_path: Path | None = None, config: AppConfig |
         Path to the created PDF file.
 
     Raises:
-        RuntimeError: If no images are found.
+        ConversionError: If no images are found.
     """
     cfg = _resolve_config(config)
     images = collect_images(image_dir, config=cfg)
     if not images:
-        raise RuntimeError(f"No images found in {image_dir}")
+        raise ConversionError(f"No images found in {image_dir}")
 
     out = output_path or (image_dir.parent / (image_dir.name + ".pdf"))
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +128,7 @@ def _build_pdf_batched(
     if len(image_paths) <= batch_size:
         loaded = _load_batch(image_paths)
         if not loaded:
-            raise RuntimeError("No valid images to create PDF")
+            raise ConversionError("No valid images to create PDF")
         first, *rest = loaded
         first.save(output, "PDF", resolution=dpi, save_all=True, append_images=rest)
         for img in loaded:
@@ -158,7 +159,7 @@ def _build_pdf_batched(
             temp_pdfs.append(tmp_path)
 
         if not temp_pdfs:
-            raise RuntimeError("No valid images to create PDF")
+            raise ConversionError("No valid images to create PDF")
 
         # Merge all batch PDFs into the final output
         _merge_pdfs(temp_pdfs, output)
@@ -202,7 +203,7 @@ def _merge_pdfs(pdf_paths: list[Path], output: Path) -> None:
     except ImportError:
         pass
 
-    raise RuntimeError(
+    raise ConversionError(
         "Large PDF conversion requires a PDF merge backend (`pypdf` or `pikepdf`). "
         "Install one of them and retry; refusing to create an incomplete PDF."
     )

@@ -13,6 +13,7 @@ import comix_dl.browser_session as browser_session_module
 from comix_dl.browser_session import BrowserSessionManager
 from comix_dl.cdp_browser import CdpBrowser, _atexit_kill_chrome, _find_free_port, _is_port_in_use
 from comix_dl.config import AppConfig, BrowserConfig, DownloadConfig
+from comix_dl.errors import CloudflareChallengeError, ConfigurationError
 
 
 def _make_config(
@@ -92,7 +93,7 @@ class TestBrowserTimeouts:
     def test_rejects_zero_page_pool_size(self):
         config = _make_config(download=DownloadConfig(max_concurrent_images=0))
 
-        with pytest.raises(ValueError, match=r"Browser page pool size must be at least 1\."):
+        with pytest.raises(ConfigurationError, match=r"Browser page pool size must be at least 1\."):
             BrowserSessionManager(config=config)
 
     async def test_connect_over_cdp_uses_connect_timeout(self, monkeypatch: pytest.MonkeyPatch):
@@ -352,7 +353,7 @@ class TestCloudflareRecovery:
         browser._all_pages = [page]
 
         with pytest.raises(
-            RuntimeError,
+            CloudflareChallengeError,
             match=(
                 r"Cloudflare clearance refresh did not recover browser access to "
                 r"https://api\.example\.com/data after HTTP 403\."

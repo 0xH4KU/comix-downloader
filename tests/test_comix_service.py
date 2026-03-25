@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from comix_dl.comix_service import ChapterImages, ChapterInfo, ComixService, SearchResult, SeriesInfo
+from comix_dl.errors import RemoteApiError
 
 if TYPE_CHECKING:
     from unittest.mock import AsyncMock
@@ -308,12 +309,12 @@ class TestGetChapterImages:
 
 
 class TestGetSeries:
-    async def test_403_raises_clear_runtime_error(self, mock_browser: AsyncMock):
+    async def test_403_raises_remote_api_error(self, mock_browser: AsyncMock):
         mock_browser.get_json.side_effect = Exception("HTTP 403 Forbidden")
         svc = _make_service(mock_browser)
 
         with pytest.raises(
-            RuntimeError,
+            RemoteApiError,
             match=(
                 r"Fetch series info for 'abc' failed: API request was blocked by HTTP 403\. "
                 r"Cloudflare clearance may have expired\."

@@ -16,7 +16,8 @@ from comix_dl.cdp_browser import CdpBrowser
 from comix_dl.cli.display import console, format_bytes, print_chapters_table, print_search_table, print_series_header
 from comix_dl.cli.interactive import filter_chapters_interactive, parse_chapter_selection
 from comix_dl.comix_service import ComixService
-from comix_dl.downloader import Downloader, DownloadProgress
+from comix_dl.downloader import Downloader, DownloadProgress, ensure_complete_download
+from comix_dl.errors import ConversionError, PartialDownloadError, RemoteApiError
 from comix_dl.settings import Settings, SettingsRepository, build_runtime_config
 
 if TYPE_CHECKING:
@@ -186,7 +187,7 @@ async def flow_url_download(url: str) -> int:
         with console.status("[bold cyan]Fetching series info…"):
             try:
                 info = await service.get_series_by_slug(slug)
-            except RuntimeError:
+            except RemoteApiError:
                 # Direct lookup failed — try search as fallback
                 results = await service.search(slug, limit=10)
                 matched = next((r for r in results if r.slug == slug), None)
@@ -268,7 +269,7 @@ async def flow_noninteractive_download(
         console.print(f"[bold]Looking up '{slug}'…[/bold]")
         try:
             info = await service.get_series_by_slug(slug)
-        except RuntimeError:
+        except RemoteApiError:
             console.print("[red]Manga not found.[/red]")
             return 1
 
@@ -306,7 +307,7 @@ async def flow_info(url: str) -> int:
         with console.status("[bold cyan]Fetching info…"):
             try:
                 info = await service.get_series_by_slug(slug)
-            except RuntimeError:
+            except RemoteApiError:
                 console.print("[red]Manga not found.[/red]")
                 return 1
 
@@ -545,14 +546,10 @@ async def download_chapters(
                 failed_count += 1
                 return
 
-            if download_result.status == "partial":
-                progress.update(
-                    task_id,
-                    description=(
-                        f"  [yellow]⚠ {ch.title} "
-                        f"({download_result.failed}/{download_result.total} pages failed)[/yellow]"
-                    ),
-                )
+            try:
+                ensure_complete_download(download_result, chapter_title=ch.title)
+            except PartialDownloadError as exc:
+                progress.update(task_id, description=f"  [yellow]⚠ {exc}[/yellow]")
                 partial_count += 1
                 return
 
@@ -560,7 +557,7 @@ async def download_chapters(
                 out = convert(download_result.chapter_dir, fmt, optimize=optimize, config=config)
                 progress.update(task_id, description=f"  [green]✓ {out.name}[/green]")
                 completed_ok += 1
-            except RuntimeError:
+            except ConversionError:
                 progress.update(task_id, description=f"  [yellow]⚠ {ch.title} (convert failed)[/yellow]")
                 failed_count += 1
 
