@@ -20,16 +20,19 @@ import socket
 import subprocess
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from comix_dl.config import CONFIG
 
 if TYPE_CHECKING:
-    from playwright.async_api import BrowserContext, Page, Playwright
+    from collections.abc import Awaitable
+
+    from playwright.async_api import Browser, BrowserContext, Page, Playwright
 
     from comix_dl.config import AppConfig
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 # Module-level reference for atexit cleanup
 _active_chrome: subprocess.Popen[bytes] | None = None
@@ -211,34 +214,44 @@ class CdpBrowser:
         # Clean up any orphaned Chrome from a previous crash
         _cleanup_stale_chrome()
 
-        self._user_data_dir.mkdir(parents=True, exist_ok=True)
-        self._launch_chrome()
+        try:
+            self._user_data_dir.mkdir(parents=True, exist_ok=True)
+            self._launch_chrome()
 
-        from playwright.async_api import async_playwright
+            from playwright.async_api import async_playwright
 
-        self._playwright = await async_playwright().start()
+            self._playwright = await async_playwright().start()
 
-        # Connect to the Chrome we just launched
-        browser = await self._playwright.chromium.connect_over_cdp(
-            f"http://127.0.0.1:{self._cdp_port}",
-        )
-        # Get the default context (which is Chrome's real context)
-        contexts = browser.contexts
-        self._context = contexts[0] if contexts else await browser.new_context()
+            # Connect to the Chrome we just launched
+            browser = await self._connect_over_cdp_with_timeout()
+            # Get the default context (which is Chrome's real context)
+            contexts = browser.contexts
+            self._context = (
+                contexts[0]
+                if contexts
+                else await self._new_context_with_timeout(browser, action="Creating a browser context")
+            )
 
-        # Get existing page or create new one
-        pages = self._context.pages
-        self._page = pages[0] if pages else await self._context.new_page()
-        self._started = True
+            # Get existing page or create new one
+            pages = self._context.pages
+            self._page = (
+                pages[0]
+                if pages
+                else await self._new_page_with_timeout(action="Creating the main browser page")
+            )
+            self._started = True
 
-        # Initialise page pool with additional pages
-        for _ in range(self._max_pages):
-            try:
-                page = await self._context.new_page()
-                self._all_pages.append(page)
-                self._page_pool.put_nowait(page)
-            except Exception:
-                break
+            # Initialise page pool with additional pages
+            for _ in range(self._max_pages):
+                try:
+                    page = await self._new_page_with_timeout(action="Creating a pooled browser page")
+                    self._all_pages.append(page)
+                    self._page_pool.put_nowait(page)
+                except Exception:
+                    break
+        except Exception:
+            await self.close()
+            raise
 
         logger.info("Connected to Chrome via CDP (port %d, %d pool pages)",
                      self._cdp_port, self._page_pool.qsize())
@@ -289,19 +302,83 @@ class CdpBrowser:
                 "Install Google Chrome to use comix-dl."
             ) from None
 
-    def _wait_for_cdp_ready(self, timeout: float = 10.0) -> None:
+    def _wait_for_cdp_ready(self, timeout: float | None = None) -> None:
         """Wait until Chrome's CDP port is accepting connections."""
-        deadline = time.monotonic() + timeout
+        actual_timeout = timeout or (self._config.download.connect_timeout_ms / 1000)
+        deadline = time.monotonic() + actual_timeout
         while time.monotonic() < deadline:
+            if self._chrome_process is not None and self._chrome_process.poll() is not None:
+                raise RuntimeError(
+                    f"Chrome exited before CDP port {self._cdp_port} became ready."
+                )
             try:
-                with socket.create_connection(("127.0.0.1", self._cdp_port), timeout=1):
+                connect_timeout = min(1.0, max(deadline - time.monotonic(), 0.1))
+                with socket.create_connection(("127.0.0.1", self._cdp_port), timeout=connect_timeout):
                     return
             except (ConnectionRefusedError, OSError):
                 time.sleep(0.3)
 
         raise RuntimeError(
-            f"Chrome did not start within {timeout}s. "
-            f"Check if another process is using port {self._cdp_port}."
+            f"Chrome CDP port {self._cdp_port} did not become ready "
+            f"within {int(actual_timeout * 1000)}ms."
+        )
+
+    async def _run_with_timeout(self, awaitable: Awaitable[T], *, timeout_ms: int, action: str) -> T:
+        """Run an awaitable with a clear timeout boundary."""
+        try:
+            return await asyncio.wait_for(awaitable, timeout=timeout_ms / 1000)
+        except TimeoutError as exc:
+            raise RuntimeError(f"{action} timed out after {timeout_ms}ms.") from exc
+
+    async def _connect_over_cdp_with_timeout(self) -> Browser:
+        """Connect Playwright to Chrome's CDP endpoint with a bounded timeout."""
+        assert self._playwright is not None
+        endpoint = f"http://127.0.0.1:{self._cdp_port}"
+        return await self._run_with_timeout(
+            self._playwright.chromium.connect_over_cdp(endpoint),
+            timeout_ms=self._config.download.connect_timeout_ms,
+            action=f"Connecting to Chrome CDP at {endpoint}",
+        )
+
+    async def _new_context_with_timeout(self, browser: Browser, *, action: str) -> BrowserContext:
+        """Create a browser context with an explicit timeout."""
+        return await self._run_with_timeout(
+            browser.new_context(),
+            timeout_ms=self._config.browser.timeout_ms,
+            action=action,
+        )
+
+    async def _new_page_with_timeout(self, *, action: str) -> Page:
+        """Create a new page with an explicit timeout."""
+        assert self._context is not None
+        return await self._run_with_timeout(
+            self._context.new_page(),
+            timeout_ms=self._config.browser.timeout_ms,
+            action=action,
+        )
+
+    async def _goto_with_timeout(self, page: Page, url: str, *, action: str) -> None:
+        """Navigate with an explicit timeout."""
+        await self._run_with_timeout(
+            page.goto(url, wait_until="domcontentloaded"),
+            timeout_ms=self._config.browser.timeout_ms,
+            action=f"{action} to {url}",
+        )
+
+    async def _evaluate_with_timeout(
+        self,
+        page: Page,
+        expression: str,
+        arg: object,
+        *,
+        timeout_ms: int,
+        action: str,
+    ) -> object:
+        """Evaluate browser-side JavaScript with an explicit timeout."""
+        return await self._run_with_timeout(
+            page.evaluate(expression, arg),
+            timeout_ms=timeout_ms,
+            action=action,
         )
 
     async def close(self) -> None:
@@ -380,11 +457,15 @@ class CdpBrowser:
         # Try to create a replacement
         if self._context is not None:
             try:
-                new_page = await self._context.new_page()
+                new_page = await self._new_page_with_timeout(action="Creating a replacement browser page")
                 # Navigate to the correct origin so fetch() works
                 base = self._config.service.base_url
                 with contextlib.suppress(Exception):
-                    await new_page.goto(base, wait_until="domcontentloaded")
+                    await self._goto_with_timeout(
+                        new_page,
+                        base,
+                        action="Navigating replacement browser page",
+                    )
                 self._all_pages.append(new_page)
                 self._page_pool.put_nowait(new_page)
                 logger.info("Replaced dead page with new one (%d pool pages)", self._page_pool.qsize())
@@ -399,7 +480,7 @@ class CdpBrowser:
         """
         async def _nav(page: Page) -> None:
             with contextlib.suppress(Exception):
-                await page.goto(url, wait_until="domcontentloaded")
+                await self._goto_with_timeout(page, url, action="Initializing pooled browser page")
 
         # Drain pool, navigate all pages, put them back
         pages: list[Page] = []
@@ -434,15 +515,21 @@ class CdpBrowser:
             logger.info("Checking CF clearance at %s", url)
             page = await self._ensure_page()
 
-            await page.goto(url, wait_until="domcontentloaded")
+            await self._goto_with_timeout(page, url, action="Checking Cloudflare clearance")
 
             if await self._is_cf_challenge(page):
                 logger.info("CF challenge detected — bringing Chrome to front for manual solve")
                 with contextlib.suppress(Exception):
-                    await page.evaluate("""() => {
-                        window.moveTo(100, 100);
-                        window.resizeTo(800, 600);
-                    }""")
+                    await self._evaluate_with_timeout(
+                        page,
+                        """() => {
+                            window.moveTo(100, 100);
+                            window.resizeTo(800, 600);
+                        }""",
+                        None,
+                        timeout_ms=self._config.browser.timeout_ms,
+                        action="Moving Chrome window for Cloudflare challenge",
+                    )
                 await self._wait_for_cf_clearance(page)
 
             self._cf_cleared = True
@@ -456,12 +543,19 @@ class CdpBrowser:
     async def fetch_page(self, url: str) -> str:
         """Navigate to *url* and return HTML."""
         page = await self._ensure_page()
-        await page.goto(url, wait_until="domcontentloaded")
+        await self._goto_with_timeout(page, url, action="Navigating browser page")
 
         if await self._is_cf_challenge(page):
             await self._wait_for_cf_clearance(page)
 
-        return await page.content()
+        return cast(
+            "str",
+            await self._run_with_timeout(
+                page.content(),
+                timeout_ms=self._config.browser.timeout_ms,
+                action=f"Reading page content from {url}",
+            ),
+        )
 
     async def get_bytes(self, url: str, *, referer: str | None = None) -> bytes:
         """Download binary content via page.evaluate(fetch()) with base64 encoding.
@@ -476,7 +570,8 @@ class CdpBrowser:
 
         page = await self.acquire_page()
         try:
-            result = await page.evaluate(
+            result = await self._evaluate_with_timeout(
+                page,
                 """async ([url, headers]) => {
                     const resp = await fetch(url, { headers: headers || {} });
                     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -490,6 +585,8 @@ class CdpBrowser:
                     return btoa(binary);
                 }""",
                 [url, {"Referer": referer} if referer else {}],
+                timeout_ms=self._config.download.read_timeout_ms,
+                action=f"Fetching binary response from {url}",
             )
         except Exception:
             # Page may be corrupted — don't return it to the pool
@@ -497,7 +594,7 @@ class CdpBrowser:
             raise
         else:
             self.release_page(page)
-        return base64.b64decode(result)
+        return base64.b64decode(cast("str", result))
 
     async def post_json(self, url: str, payload: dict[str, object]) -> dict[str, object]:
         """POST JSON via page.evaluate(fetch())."""
@@ -506,7 +603,8 @@ class CdpBrowser:
         await self.ensure_cf_clearance()
         page = await self._ensure_page()
 
-        result = await page.evaluate(
+        result = await self._evaluate_with_timeout(
+            page,
             """async ([url, body]) => {
                 const resp = await fetch(url, {
                     method: 'POST',
@@ -517,8 +615,10 @@ class CdpBrowser:
                 return await resp.json();
             }""",
             [url, payload],
+            timeout_ms=self._config.download.read_timeout_ms,
+            action=f"Posting JSON to {url}",
         )
-        return result  # type: ignore[no-any-return]
+        return cast("dict[str, object]", result)
 
     async def get_json(self, url: str) -> dict[str, object]:
         """GET JSON via page.evaluate(fetch()).
@@ -532,20 +632,23 @@ class CdpBrowser:
 
         page = await self.acquire_page()
         try:
-            result = await page.evaluate(
+            result = await self._evaluate_with_timeout(
+                page,
                 """async (url) => {
                     const resp = await fetch(url);
                     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                     return await resp.json();
                 }""",
                 url,
+                timeout_ms=self._config.download.read_timeout_ms,
+                action=f"Fetching JSON from {url}",
             )
         except Exception:
             await self._replace_dead_page(page)
             raise
         else:
             self.release_page(page)
-        return result  # type: ignore[no-any-return]
+        return cast("dict[str, object]", result)
 
     # -- CF detection ---------------------------------------------------------
 

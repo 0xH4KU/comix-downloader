@@ -37,7 +37,8 @@ The core of the CF bypass strategy:
 5. All network requests go through `page.evaluate(fetch())`, inheriting Chrome's real TLS fingerprint, cookies, and headers
 6. **Binary data** (images) transferred as **base64** for 3-4x less overhead than JSON arrays
 7. **Page pool** — multiple browser pages for parallel downloads without contention
-8. **Graceful shutdown** — `atexit` handler ensures Chrome is cleaned up even on crash
+8. **Explicit timeout boundaries** — CDP connect, page navigation, HTML reads, and in-browser `fetch()` calls all fail with config-backed timeouts instead of hanging indefinitely
+9. **Graceful shutdown** — `atexit` handler ensures Chrome is cleaned up even on crash
 
 This defeats CF's multi-layer detection:
 - **JS challenge** — Chrome executes it natively
@@ -130,7 +131,7 @@ History: download finishes → record to history.json → send desktop notificat
 
 ## Threading Model
 
-All operations are async (`asyncio`). The only subprocess is Chrome itself. Image downloads run as concurrent async tasks limited by semaphore, using a pool of browser pages for parallelism. Chapter downloads are also parallelized (default: 2 concurrent).
+All operations are async (`asyncio`). The only subprocess is Chrome itself. Image downloads run as concurrent async tasks limited by semaphore, using a pool of browser pages for parallelism. Chapter downloads are also parallelized (default: 2 concurrent). Browser-facing await points are wrapped in explicit timeout boundaries so stuck CDP connects, navigations, and `page.evaluate(fetch())` calls fail predictably.
 
 ## Why Not httpx / curl_cffi?
 

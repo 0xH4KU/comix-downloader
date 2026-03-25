@@ -94,7 +94,7 @@
 說明：目前 `CdpBrowser` 同時處理啟動、清理、CF 檢測、頁面池、傳輸。
 完成標準：啟動、恢復、關閉、頁面池、CF 管理職責拆開，降低單類別複雜度。
 
-- [ ] 為所有 browser request 加入 timeout 與 cancellation
+- [x] 為所有 browser request 加入 timeout 與 cancellation
 說明：目前 config 定義了 timeout，但未真正接線。
 完成標準：`get_json/get_bytes/post_json/fetch_page` 都有 request timeout、取消傳播與明確錯誤類型。
 
