@@ -118,7 +118,7 @@
 - [ ] 抽出 `SettingsRepository`
 完成標準：設定讀寫、預設值、驗證、migration 集中在 repository，不再散落在 CLI 與 module import side effects。
 
-- [ ] 抽出 `HistoryRepository`
+- [x] 抽出 `HistoryRepository`
 完成標準：history 的讀寫、排序、trim、清除集中管理，CLI 不直接碰 JSON 細節。
 
 - [x] 將 JSON 寫入改為原子寫入

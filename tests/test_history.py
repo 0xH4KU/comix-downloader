@@ -10,6 +10,7 @@ import pytest
 from comix_dl.history import (
     MAX_ENTRIES,
     HistoryEntry,
+    HistoryRepository,
     clear_history,
     list_history,
     record_download,
@@ -52,6 +53,15 @@ class TestRecordDownload:
         assert entry.partial == 1
         assert entry.failed == 1
         assert entry.skipped == 1
+
+    def test_repository_records_download(self, tmp_path):
+        repository = HistoryRepository(tmp_path / "history.json")
+
+        repository.record_download("Manga Repo", 3, "cbz")
+
+        entries = repository.list_entries()
+        assert len(entries) == 1
+        assert entries[0].title == "Manga Repo"
 
 
 class TestAutoTrim:

@@ -458,7 +458,7 @@ async def download_chapters(
 ) -> None:
     """Download and convert multiple chapters in parallel."""
     from comix_dl.converters import convert
-    from comix_dl.history import record_download
+    from comix_dl.history import HistoryRepository
     from comix_dl.notify import send_notification
 
     if optimize is None:
@@ -591,7 +591,7 @@ async def download_chapters(
     ))
 
     # Record to history
-    record_download(
+    HistoryRepository().record_download(
         title=series_title,
         chapters_count=total_chapters,
         fmt=fmt,

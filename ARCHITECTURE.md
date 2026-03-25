@@ -165,7 +165,7 @@ Only active user-facing controls remain wired here:
 
 ### `history.py`
 
-Download history is stored in `~/.config/comix-dl/history.json` and written atomically. Entries record:
+Download history is stored in `~/.config/comix-dl/history.json` and written atomically. `HistoryRepository` owns load, sort, trim, append, and clear behavior. Entries record:
 
 - title
 - chapter count

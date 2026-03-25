@@ -83,14 +83,16 @@ def flow_settings() -> None:
 
 def flow_history(*, action: str | None = None) -> int:
     """Show or clear download history."""
-    from comix_dl.history import clear_history, list_history
+    from comix_dl.history import HistoryRepository
+
+    repository = HistoryRepository()
 
     if action == "clear":
-        clear_history()
+        repository.clear()
         console.print("[green]✓ History cleared[/green]")
         return 0
 
-    entries = list_history()
+    entries = repository.list_entries()
     if not entries:
         console.print("[dim]No download history.[/dim]")
         return 0
