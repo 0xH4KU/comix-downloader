@@ -85,6 +85,7 @@ The service client talks to the `comix.to` v2 REST API and normalizes chapter me
 - Chapter numbers are preserved as normalized strings and sorted via a dedicated natural-sort key instead of `float`
 - Deduplication keeps language variants distinct
 - Same-language duplicates compete on `image_count`
+- Deduplication now emits a `DedupDecision` report so the CLI can show which variants were dropped and why
 
 ### `downloader.py`
 
@@ -169,6 +170,7 @@ This file is the source of truth for interrupted or degraded runs. It prevents t
 - notifications
 - cleanup prompts
 - Rich progress rendering
+- dedup decision presentation
 
 This is the main architecture debt left in the project. The code works, but maintenance cost remains high because presentation concerns and business workflow are still tangled together.
 

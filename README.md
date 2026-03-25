@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.32-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.33-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -28,6 +28,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Recovery-safe reruns** — stale temp artifacts are cleaned up and partial chapters resume from the missing pages instead of restarting from scratch
 - **Cheaper resume scans** — existing chapter files are indexed once per run instead of re-scanning the directory for every page
 - **Smart dedup** — chapter dedup keeps language variants distinct and only collapses true same-language duplicates by image count
+- **Visible dedup decisions** — before download, CLI now shows which duplicate chapter variants were dropped, why they were dropped, and which variant was kept
 - **Sharper failure diagnostics** — Cloudflare expiry, API 403, image timeouts, page-pool exhaustion, and PDF merge-backend gaps now surface as targeted errors
 - **Typed domain errors** — Cloudflare, remote API, partial-download, conversion, and configuration failures now have distinct exception types instead of collapsing into generic `RuntimeError`
 - **Reliable large PDF merge** — normal installs now include `pypdf`, so multi-batch PDF output works without hidden extra dependencies
@@ -167,6 +168,7 @@ comix-dl -q download "manga-slug"
 1. Enter a search query
 2. Select a manga from the results (`1` for direct, `1i` to show info first)
 3. View available chapters (with page counts and automatic deduplication)
+   Dedup decisions are shown before selection when duplicate uploads were merged
 4. **Filter chapters** by keyword (optional — press Enter to skip)
 5. Select chapters to download (`all`, `1-5`, `1,3,5`)
 6. Choose output format (`pdf`, `cbz`, `both`)

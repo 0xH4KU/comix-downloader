@@ -94,6 +94,16 @@ class ChapterImages:
 
 
 @dataclass
+class DedupDecision:
+    """Human-readable explanation of a deduplication decision."""
+
+    chapter_number: str
+    reason: str
+    kept: tuple[str, ...]
+    dropped: tuple[str, ...]
+
+
+@dataclass
 class SeriesInfo:
     """Full series metadata with chapters."""
 
@@ -104,6 +114,7 @@ class SeriesInfo:
     chapters: list[ChapterInfo]
     url: str
     hash_id: str
+    dedup_decisions: list[DedupDecision] = field(default_factory=list)
 
 
 # -- service ------------------------------------------------------------------
@@ -216,7 +227,7 @@ class ComixService:
         synopsis = data.get("synopsis", "") or data.get("description", "") or ""
 
         # Fetch chapters
-        chapters = await self._fetch_chapters(hash_id)
+        chapters, dedup_decisions = await self._fetch_chapters(hash_id)
 
         return SeriesInfo(
             title=title,
@@ -224,11 +235,12 @@ class ComixService:
             genres=[],
             description=synopsis,
             chapters=chapters,
+            dedup_decisions=dedup_decisions,
             url=f"{self._base}/manga/{slug or hash_id}",
             hash_id=hash_id,
         )
 
-    async def _fetch_chapters(self, hash_id: str) -> list[ChapterInfo]:
+    async def _fetch_chapters(self, hash_id: str) -> tuple[list[ChapterInfo], list[DedupDecision]]:
         """Fetch all chapters for a manga by hash_id."""
 
 
@@ -264,7 +276,7 @@ class ComixService:
 
         # Sort + deduplicate
         all_chapters.sort(key=lambda c: c.number_sort_key)
-        all_chapters = await self._deduplicate_chapters(all_chapters)
+        all_chapters, dedup_decisions = await self._deduplicate_chapters_with_report(all_chapters)
 
         # Fetch image counts in parallel for the final (deduplicated) list
         missing = [ch for ch in all_chapters if ch.image_count == 0]
@@ -277,7 +289,7 @@ class ComixService:
             await asyncio.gather(*[_fetch_count(ch) for ch in missing])
 
         logger.info("Fetched %d chapters for '%s'", len(all_chapters), hash_id)
-        return all_chapters
+        return all_chapters, dedup_decisions
 
     def _parse_chapter_items(self, items: list[dict[str, object]]) -> list[ChapterInfo]:
         """Parse raw API chapter items into ChapterInfo objects."""
@@ -308,6 +320,36 @@ class ComixService:
         return chapters
 
     async def _deduplicate_chapters(self, chapters: list[ChapterInfo]) -> list[ChapterInfo]:
+        """Backward-compatible wrapper returning only the final chapter list."""
+        deduplicated, _ = await self._deduplicate_chapters_with_report(chapters)
+        return deduplicated
+
+    @staticmethod
+    def _format_dedup_variant(chapter: ChapterInfo) -> str:
+        """Return a readable variant label for dedup audit output."""
+        pages = f"{chapter.image_count}p" if chapter.image_count > 0 else "pages=?"
+        return f"{chapter.title} [{chapter.language}, {pages}, id={chapter.chapter_id}]"
+
+    def _build_dedup_decision(
+        self,
+        *,
+        chapter_number: str,
+        reason: str,
+        kept: list[ChapterInfo],
+        dropped: list[ChapterInfo],
+    ) -> DedupDecision:
+        """Build a user-facing dedup decision snapshot."""
+        return DedupDecision(
+            chapter_number=chapter_number,
+            reason=reason,
+            kept=tuple(self._format_dedup_variant(chapter) for chapter in kept),
+            dropped=tuple(self._format_dedup_variant(chapter) for chapter in dropped),
+        )
+
+    async def _deduplicate_chapters_with_report(
+        self,
+        chapters: list[ChapterInfo],
+    ) -> tuple[list[ChapterInfo], list[DedupDecision]]:
         """Remove duplicate chapters, keeping the one with the most images.
 
         Chapters with the same number but *different* subtitles or languages are
@@ -320,16 +362,17 @@ class ComixService:
         Only falls back to per-chapter API calls if ``pages_count`` was missing.
         """
         if not chapters:
-            return chapters
+            return chapters, []
 
         groups: dict[str, list[ChapterInfo]] = defaultdict(list)
         for ch in chapters:
             groups[ch.number].append(ch)
 
         result: list[ChapterInfo] = []
+        decisions: list[DedupDecision] = []
         dup_count = 0
 
-        for _num, chs in groups.items():
+        for chapter_number, chs in groups.items():
             if len(chs) == 1:
                 result.append(chs[0])
                 continue
@@ -347,22 +390,60 @@ class ComixService:
                 for language_group in unnamed.values():
                     best = await self._pick_best(language_group)
                     result.append(best)
-                    dup_count += len(language_group) - 1
+                    dropped = [chapter for chapter in language_group if chapter is not best]
+                    dup_count += len(dropped)
+                    if dropped:
+                        decisions.append(
+                            self._build_dedup_decision(
+                                chapter_number=chapter_number,
+                                reason="same-language duplicate; kept the variant with the highest page count",
+                                kept=[best],
+                                dropped=dropped,
+                            )
+                        )
             else:
+                kept_for_number: list[ChapterInfo] = []
                 for name_group in named.values():
                     if len(name_group) == 1:
-                        result.append(name_group[0])
+                        best = name_group[0]
+                        result.append(best)
+                        kept_for_number.append(best)
                     else:
                         best = await self._pick_best(name_group)
                         result.append(best)
-                        dup_count += len(name_group) - 1
-                dup_count += sum(len(language_group) for language_group in unnamed.values())
+                        kept_for_number.append(best)
+                        dropped = [chapter for chapter in name_group if chapter is not best]
+                        dup_count += len(dropped)
+                        if dropped:
+                            decisions.append(
+                                self._build_dedup_decision(
+                                    chapter_number=chapter_number,
+                                    reason=(
+                                        "same-language duplicate with the same subtitle; "
+                                        "kept the highest page count"
+                                    ),
+                                    kept=[best],
+                                    dropped=dropped,
+                                )
+                            )
+
+                dropped_unnamed = [chapter for language_group in unnamed.values() for chapter in language_group]
+                dup_count += len(dropped_unnamed)
+                if dropped_unnamed:
+                    decisions.append(
+                        self._build_dedup_decision(
+                            chapter_number=chapter_number,
+                            reason="unnamed uploads were dropped because named variants exist for this chapter number",
+                            kept=kept_for_number,
+                            dropped=dropped_unnamed,
+                        )
+                    )
 
         result.sort(key=lambda c: c.number_sort_key)
         if dup_count:
             logger.info("Removed %d duplicate chapter(s)", dup_count)
 
-        return result
+        return result, decisions
 
     async def _pick_best(self, candidates: list[ChapterInfo]) -> ChapterInfo:
         """From a list of true duplicates, pick the one with the most images.

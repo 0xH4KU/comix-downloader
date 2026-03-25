@@ -13,7 +13,14 @@ from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn
 from rich.prompt import Prompt
 
 from comix_dl.cdp_browser import CdpBrowser
-from comix_dl.cli.display import console, format_bytes, print_chapters_table, print_search_table, print_series_header
+from comix_dl.cli.display import (
+    console,
+    format_bytes,
+    print_chapters_table,
+    print_dedup_report,
+    print_search_table,
+    print_series_header,
+)
 from comix_dl.cli.interactive import filter_chapters_interactive, parse_chapter_selection
 from comix_dl.comix_service import ComixService
 from comix_dl.downloader import Downloader, DownloadProgress, ensure_complete_download
@@ -130,6 +137,7 @@ async def flow_search(query: str) -> int:
             return 0
 
         print_series_header(info)
+        print_dedup_report(info.dedup_decisions)
         print_chapters_table(info.chapters)
 
         # 4. Filter chapters (optional)
@@ -213,6 +221,7 @@ async def flow_url_download(url: str) -> int:
                 info = await service.get_series(matched.hash_id)
 
         print_series_header(info)
+        print_dedup_report(info.dedup_decisions)
         print_chapters_table(info.chapters)
 
         filtered = filter_chapters_interactive(info.chapters)

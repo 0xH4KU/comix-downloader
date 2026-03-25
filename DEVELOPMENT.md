@@ -122,6 +122,7 @@ comix.to uses several identifiers:
 3. **New output format** — add converter in `converters.py`
 4. **New setting** — add field to `Settings` in `settings.py`
 5. **New user-meaningful failure mode** — add or reuse a domain error in `errors.py`, then catch/render it at the CLI boundary
+6. **New dedup rule** — update `ComixService` to emit `DedupDecision` entries and keep the CLI dedup report aligned with the actual rule
 
 ## Commit Conventions
 

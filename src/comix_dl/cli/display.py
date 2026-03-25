@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 if TYPE_CHECKING:
-    from comix_dl.comix_service import ChapterInfo, SearchResult, SeriesInfo
+    from comix_dl.comix_service import ChapterInfo, DedupDecision, SearchResult, SeriesInfo
 
 console = Console()
 
@@ -44,6 +45,18 @@ def print_series_header(info: SeriesInfo) -> None:
             desc += "…"
         console.print(f"[dim]{desc}[/dim]")
     console.print(f"\n[bold]{len(info.chapters)} chapters available[/bold]\n")
+
+
+def print_dedup_report(decisions: list[DedupDecision]) -> None:
+    """Print chapter dedup decisions before chapter selection."""
+    if not decisions:
+        return
+
+    console.print(f"[bold yellow]Dedup decisions ({len(decisions)})[/bold yellow]")
+    for decision in decisions:
+        console.print(f"[yellow]Chapter {decision.chapter_number}[/yellow] {decision.reason}")
+        console.print(f"  [red]Dropped:[/red] {escape('; '.join(decision.dropped))}")
+        console.print(f"  [green]Kept:[/green] {escape('; '.join(decision.kept))}")
 
 
 def print_chapters_table(chapters: list[ChapterInfo]) -> None:

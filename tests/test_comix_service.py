@@ -179,6 +179,38 @@ class TestDeduplicateChapters:
 
         assert [ch.number for ch in result] == ["2", "2.1", "10.5"]
 
+    async def test_report_records_kept_and_dropped_variants(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        chapters = [
+            _make_chapter(5, 100, image_count=10),
+            _make_chapter(5, 200, image_count=25),
+            _make_chapter(5, 300, image_count=15),
+        ]
+
+        result, decisions = await svc._deduplicate_chapters_with_report(chapters)
+
+        assert len(result) == 1
+        assert len(decisions) == 1
+        assert decisions[0].chapter_number == "5"
+        assert "highest page count" in decisions[0].reason
+        assert "id=200" in decisions[0].kept[0]
+        assert {item.split("id=")[1].rstrip("]") for item in decisions[0].dropped} == {"100", "300"}
+
+    async def test_report_explains_unnamed_variants_dropped_when_named_exists(self, mock_browser: AsyncMock):
+        svc = _make_service(mock_browser)
+        chapters = [
+            _make_chapter(7, 100, name="Special", image_count=20, language="en"),
+            _make_chapter(7, 200, image_count=15, language="en"),
+        ]
+
+        result, decisions = await svc._deduplicate_chapters_with_report(chapters)
+
+        assert len(result) == 1
+        assert len(decisions) == 1
+        assert "named variants exist" in decisions[0].reason
+        assert "Special" in decisions[0].kept[0]
+        assert "id=200" in decisions[0].dropped[0]
+
 
 # ---------------------------------------------------------------------------
 # search
