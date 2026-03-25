@@ -217,6 +217,26 @@ class TestBrowserTimeouts:
         ):
             await browser.acquire_page()
 
+    async def test_acquire_page_creates_pooled_page_lazily(self):
+        browser = BrowserSessionManager(config=AppConfig())
+        page = MagicMock()
+        page.is_closed.return_value = False
+        browser._context = MagicMock()
+        browser._new_page_with_timeout = AsyncMock(return_value=page)
+        browser._goto_with_timeout = AsyncMock()
+
+        result = await browser.acquire_page()
+
+        assert result is page
+        assert browser._all_pages == [page]
+        browser._new_page_with_timeout.assert_awaited_once_with(action="Creating a pooled browser page")
+        browser._goto_with_timeout.assert_awaited_once_with(
+            page,
+            browser._config.service.base_url,
+            action="Initializing pooled browser page",
+        )
+        assert browser._page_pool.empty()
+
     async def test_release_page_skips_closed_page_and_replaces_it(self):
         browser = BrowserSessionManager(config=AppConfig())
         page = MagicMock()

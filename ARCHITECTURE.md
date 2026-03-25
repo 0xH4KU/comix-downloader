@@ -56,7 +56,7 @@ cli/__init__.py
 - Launches Chrome with `--remote-debugging-port`
 - Applies a single-instance lock file under the config directory
 - Connects Playwright over CDP
-- Owns the main page plus the pooled download pages
+- Owns the main page plus lazily-created pooled download pages
 - Applies timeout boundaries to connect, page creation, navigation, and `page.evaluate()`
 - Replaces dead pooled pages instead of re-queuing broken objects
 - Cleans up only the Chrome started by the current Python process

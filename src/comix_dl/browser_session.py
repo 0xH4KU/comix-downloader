@@ -27,7 +27,7 @@ T = TypeVar("T")
 
 _POOL_UNAVAILABLE_MESSAGE = (
     "Browser page pool is unavailable; pooled download requests cannot proceed. "
-    "This usually means pooled page creation failed during browser startup."
+    "This usually means pooled page creation failed or the browser context is unavailable."
 )
 
 # Module-level reference for current-process atexit cleanup
@@ -156,6 +156,7 @@ class BrowserSessionManager:
         self._max_pages = resolved_max_pages
         self._page_pool: asyncio.Queue[Page] = asyncio.Queue()
         self._all_pages: list[Page] = []
+        self._page_creation_lock = asyncio.Lock()
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._instance_lock_handle: TextIOWrapper | None = None
 
@@ -189,16 +190,6 @@ class BrowserSessionManager:
                 else await self._new_page_with_timeout(action="Creating the main browser page")
             )
             self._started = True
-
-            for _ in range(self._max_pages):
-                try:
-                    page = await self._new_page_with_timeout(action="Creating a pooled browser page")
-                    self._all_pages.append(page)
-                    self._page_pool.put_nowait(page)
-                except Exception:
-                    break
-            if not self._all_pages:
-                raise RuntimeError("Failed to create any pooled browser pages for downloads.")
         except Exception:
             await self.close()
             raise
@@ -433,8 +424,40 @@ class BrowserSessionManager:
     async def acquire_page(self) -> Page:
         """Get a page from the pool, waiting if all pooled pages are busy."""
         while True:
+            try:
+                page = self._page_pool.get_nowait()
+            except asyncio.QueueEmpty:
+                page = None
+
+            if page is not None:
+                if self._page_is_healthy(page):
+                    return page
+                logger.warning("Discarded unhealthy pooled page before reuse")
+                await self._replace_dead_page(page)
+                continue
+
+            if len(self._all_pages) < self._max_pages and self._context is not None:
+                async with self._page_creation_lock:
+                    try:
+                        page = self._page_pool.get_nowait()
+                    except asyncio.QueueEmpty:
+                        page = None
+                    if page is not None:
+                        if self._page_is_healthy(page):
+                            return page
+                        logger.warning("Discarded unhealthy pooled page before reuse")
+                        await self._replace_dead_page(page)
+                        continue
+
+                    if len(self._all_pages) < self._max_pages:
+                        return await self._create_pooled_page(
+                            action="Creating a pooled browser page",
+                            navigate_to_base=True,
+                        )
+
             if not self._all_pages:
                 raise RuntimeError(_POOL_UNAVAILABLE_MESSAGE)
+
             page = await self._page_pool.get()
             if self._page_is_healthy(page):
                 return page
@@ -472,16 +495,11 @@ class BrowserSessionManager:
 
         if self._context is not None:
             try:
-                new_page = await self._new_page_with_timeout(action="Creating a replacement browser page")
-                base = self._config.service.base_url
-                with contextlib.suppress(Exception):
-                    await self._goto_with_timeout(
-                        new_page,
-                        base,
-                        action="Navigating replacement browser page",
-                    )
-                self._all_pages.append(new_page)
-                self._page_pool.put_nowait(new_page)
+                new_page = await self._create_pooled_page(
+                    action="Creating a replacement browser page",
+                    navigate_to_base=True,
+                )
+                self.release_page(new_page)
                 logger.info("Replaced dead page with new one (%d pool pages)", self._page_pool.qsize())
             except Exception as exc:
                 logger.warning("Failed to create replacement page: %s", exc)
@@ -511,3 +529,21 @@ class BrowserSessionManager:
             await self.start()
         assert self._page is not None
         return self._page
+
+    async def _create_pooled_page(self, *, action: str, navigate_to_base: bool) -> Page:
+        """Create one pooled page lazily and optionally warm it on the service origin."""
+        new_page = await self._new_page_with_timeout(action=action)
+        try:
+            if navigate_to_base:
+                await self._goto_with_timeout(
+                    new_page,
+                    self._config.service.base_url,
+                    action="Initializing pooled browser page",
+                )
+        except Exception:
+            with contextlib.suppress(Exception):
+                await new_page.close()
+            raise
+
+        self._all_pages.append(new_page)
+        return new_page

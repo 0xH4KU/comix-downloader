@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.42-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.43-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -15,6 +15,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **REST API integration** — uses comix.to's v2 API directly, no HTML scraping
 - **Interactive & non-interactive CLI** — main menu, quick search, or full CLI flags
 - **Parallel downloads** — concurrent chapter and image downloads with a bounded page pool sized to the configured image concurrency
+- **Lazy page pool** — browser download tabs are created on demand instead of opening the full pool up front during startup
 - **Bounded browser operations** — CDP connect, page navigation, HTML reads, and in-browser fetches fail with explicit timeouts instead of hanging indefinitely
 - **Clearance self-healing** — HTTP 403 or a renewed Cloudflare challenge resets cached clearance, re-checks the session, and retries once before failing clearly
 - **No false-empty search** — API / Cloudflare failures in search and info flows now surface as explicit errors instead of being misreported as “No results found”
