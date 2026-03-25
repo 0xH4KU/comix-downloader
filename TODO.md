@@ -98,7 +98,7 @@
 說明：目前 config 定義了 timeout，但未真正接線。
 完成標準：`get_json/get_bytes/post_json/fetch_page` 都有 request timeout、取消傳播與明確錯誤類型。
 
-- [ ] 403 / CF 過期後自動重置 clearance 並有限次重試
+- [x] 403 / CF 過期後自動重置 clearance 並有限次重試
 說明：目前 `_cf_cleared` 一旦設為 True 就幾乎不會自癒。
 完成標準：偵測 403 或 challenge 信號後能 reset session state，重新檢查 clearance，再重試一次。
 
@@ -229,6 +229,6 @@
 - [x] 大章節 PDF 無少頁
 - [ ] 中途中斷可安全恢復
 - [ ] 多實例策略明確且受測
-- [ ] 403 / CF 過期可自動恢復或明確失敗
+- [x] 403 / CF 過期可自動恢復或明確失敗
 - [x] history / notification 不再誤報成功
 - [ ] 文件與實作一致

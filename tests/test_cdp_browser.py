@@ -103,6 +103,7 @@ class TestBrowserTimeouts:
         page = MagicMock()
         page.goto = AsyncMock(side_effect=_hang)
         browser._page = page
+        browser.ensure_cf_clearance = AsyncMock()
         browser._is_cf_challenge = AsyncMock(return_value=False)
 
         with pytest.raises(
@@ -165,3 +166,83 @@ class TestBrowserTimeouts:
             match=r"Chrome CDP port 9222 did not become ready within 600ms\.",
         ):
             browser._wait_for_cdp_ready()
+
+
+class TestCloudflareRecovery:
+    async def test_get_json_retries_once_after_http_403(self):
+        config = AppConfig()
+        browser = CdpBrowser(config=config)
+        browser._started = True
+        browser._cf_cleared = True
+        browser.release_page = MagicMock()
+        browser._replace_dead_page = AsyncMock()
+
+        async def ensure() -> None:
+            browser._cf_cleared = True
+
+        browser.ensure_cf_clearance = AsyncMock(side_effect=ensure)
+
+        page = MagicMock()
+        page.evaluate = AsyncMock(side_effect=[RuntimeError("HTTP 403 Forbidden"), {"ok": True}])
+        browser.acquire_page = AsyncMock(return_value=page)
+        browser._all_pages = [page]
+
+        result = await browser.get_json("https://api.example.com/data")
+
+        assert result == {"ok": True}
+        assert browser.ensure_cf_clearance.await_count == 2
+        assert browser.release_page.call_count == 2
+        browser._replace_dead_page.assert_not_awaited()
+
+    async def test_get_json_raises_clear_error_after_second_http_403(self):
+        config = AppConfig()
+        browser = CdpBrowser(config=config)
+        browser._started = True
+        browser._cf_cleared = True
+        browser.release_page = MagicMock()
+        browser._replace_dead_page = AsyncMock()
+
+        async def ensure() -> None:
+            browser._cf_cleared = True
+
+        browser.ensure_cf_clearance = AsyncMock(side_effect=ensure)
+
+        page = MagicMock()
+        page.evaluate = AsyncMock(
+            side_effect=[RuntimeError("HTTP 403 Forbidden"), RuntimeError("HTTP 403 Forbidden")],
+        )
+        browser.acquire_page = AsyncMock(return_value=page)
+        browser._all_pages = [page]
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"Cloudflare clearance refresh did not recover access to https://api\.example\.com/data\.",
+        ):
+            await browser.get_json("https://api.example.com/data")
+
+        assert browser.ensure_cf_clearance.await_count == 2
+        assert browser.release_page.call_count == 2
+        browser._replace_dead_page.assert_not_awaited()
+
+    async def test_fetch_page_retries_after_cloudflare_challenge(self):
+        config = AppConfig()
+        browser = CdpBrowser(config=config)
+        browser._started = True
+        browser._cf_cleared = True
+
+        async def ensure() -> None:
+            browser._cf_cleared = True
+
+        browser.ensure_cf_clearance = AsyncMock(side_effect=ensure)
+
+        page = MagicMock()
+        page.goto = AsyncMock(return_value=None)
+        page.content = AsyncMock(return_value="<html>ok</html>")
+        browser._page = page
+        browser._is_cf_challenge = AsyncMock(side_effect=[True, False])
+
+        result = await browser.fetch_page("https://example.com")
+
+        assert result == "<html>ok</html>"
+        assert browser.ensure_cf_clearance.await_count == 2
+        assert page.goto.await_count == 2

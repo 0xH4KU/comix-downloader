@@ -38,14 +38,15 @@ The core of the CF bypass strategy:
 6. **Binary data** (images) transferred as **base64** for 3-4x less overhead than JSON arrays
 7. **Page pool** — multiple browser pages for parallel downloads without contention
 8. **Explicit timeout boundaries** — CDP connect, page navigation, HTML reads, and in-browser `fetch()` calls all fail with config-backed timeouts instead of hanging indefinitely
-9. **Graceful shutdown** — `atexit` handler ensures Chrome is cleaned up even on crash
+9. **Clearance self-healing** — if API/image requests start returning HTTP 403 or a challenge page reappears, cached clearance is reset, reacquired once, and the request is retried once
+10. **Graceful shutdown** — `atexit` handler ensures Chrome is cleaned up even on crash
 
 This defeats CF's multi-layer detection:
 - **JS challenge** — Chrome executes it natively
 - **TLS fingerprint (JA3/JA4)** — real Chrome TLS stack, not httpx/curl
 - **Automation detection** — no `navigator.webdriver` flag, no automation banner
 
-A persistent Chrome profile at `~/.config/comix-dl/chrome-profile/` preserves CF clearance cookies across runs.
+A persistent Chrome profile at `~/.config/comix-dl/chrome-profile/` preserves CF clearance cookies across runs, while the browser client can invalidate its cached `_cf_cleared` state and reacquire clearance if the session expires mid-run.
 
 ### `comix_service.py` — REST API Client
 
