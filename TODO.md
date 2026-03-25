@@ -130,7 +130,7 @@
 
 ## P1 CLI 與應用層解耦
 
-- [ ] 將 `cli/flows.py` 拆分為 application use cases
+- [x] 將 `cli/flows.py` 拆分為 application use cases
 說明：目前 CLI 同時負責 UI、下載協調、轉檔、history、通知、清理。
 完成標準：至少拆為：
 1. `application/download_usecase.py`

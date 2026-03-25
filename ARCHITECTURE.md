@@ -5,11 +5,11 @@
 comix-downloader is a desktop-first manga downloader for `comix.to`. It uses a real Chrome instance over CDP to survive Cloudflare, then fetches API metadata and image bytes through that browser session. The current codebase is split across four practical layers:
 
 1. Presentation: `cli/__init__.py`, `cli/interactive.py`, `cli/display.py`
-2. Workflow orchestration: `cli/flows.py`
-3. Domain/service logic: `comix_service.py`, `downloader.py`, `converters.py`
-4. Infrastructure: `browser_session.py`, `cdp_browser.py`, `settings.py`, `history.py`, `fileio.py`, `notify.py`, `errors.py`
+2. Application use cases: `application/query_usecase.py`, `application/download_usecase.py`, `application/cleanup_usecase.py`
+3. Workflow/presentation glue: `cli/flows.py`
+4. Domain/service logic and infrastructure: `comix_service.py`, `downloader.py`, `converters.py`, `browser_session.py`, `cdp_browser.py`, `settings.py`, `history.py`, `fileio.py`, `notify.py`, `errors.py`
 
-This is the real structure today, not the target end-state. There is still no dedicated application layer, and `cli/flows.py` remains the main orchestration hotspot.
+This is the real structure today, not an aspirational diagram. The application layer now owns query/download/cleanup orchestration, while `cli/flows.py` has become a thinner presentation-oriented adapter. The remaining debt is that interactive control flow and Rich rendering are still coupled in that adapter.
 
 At process start, the CLI loads persisted settings once, builds a per-run `AppConfig`, and passes that config explicitly into the browser, service, downloader, and converter stack. Runtime behavior no longer depends on mutating a process-global config singleton.
 
@@ -25,12 +25,15 @@ cli/__init__.py
   +--> cli/display.py
   +--> cli/flows.py
            |
+           +--> application/query_usecase.py
+           +--> application/download_usecase.py
+           +--> application/cleanup_usecase.py
+           |
            +--> comix_service.py
            +--> downloader.py
            +--> converters.py
            +--> history.py
            +--> notify.py
-           |
            +--> cdp_browser.py
                     |
                     v
@@ -158,21 +161,52 @@ This file is the source of truth for interrupted or degraded runs. It prevents t
 
 ## Workflow Orchestration
 
+### `application/query_usecase.py`
+
+The query use case isolates series lookup rules that were previously duplicated in CLI flows:
+
+- normalize URL or slug input into a canonical slug
+- run search queries
+- load a series by `hash_id`
+- resolve slug input through direct lookup first, then search fallback
+
+This gives the CLI a single lookup contract instead of open-coded fallback logic.
+
+### `application/download_usecase.py`
+
+The download use case owns the batch chapter workflow:
+
+- bounded concurrent chapter scheduling
+- per-chapter progress event emission for the presentation layer
+- conversion gating so partial chapters never package
+- final summary aggregation
+- history recording
+- completion notification
+
+The key boundary is the event callback. The use case no longer needs Rich progress objects, but the CLI can still render a detailed progress view.
+
+### `application/cleanup_usecase.py`
+
+Cleanup planning is now separated from the CLI:
+
+- list downloaded series summaries
+- detect cleanup-safe raw image directories
+- compute aggregate reclaimable bytes
+- apply deletion plans and report failures
+
+This keeps filesystem scanning and deletion rules out of presentation code.
+
 ### `cli/flows.py`
 
-`cli/flows.py` is currently the orchestration center. It still does too much:
+`cli/flows.py` is no longer the core orchestration center, but it still owns interactive flow control:
 
-- browser/session creation
-- service calls
-- chapter download coordination
-- conversion
-- history recording
-- notifications
-- cleanup prompts
 - Rich progress rendering
-- dedup decision presentation
+- prompt loops and selection parsing
+- search result / metadata / dedup presentation
+- cleanup confirmation prompts
+- wiring runtime dependencies into application use cases
 
-This is the main architecture debt left in the project. The code works, but maintenance cost remains high because presentation concerns and business workflow are still tangled together.
+That is materially better than before, but not the final end-state. The CLI adapter still mixes interaction policy with rendering.
 
 ## Persistence
 
@@ -259,7 +293,8 @@ These boundaries are the difference between a recoverable run and silent damage.
 The following debts remain real and are intentionally documented here:
 
 - `cli/flows.py` still mixes orchestration, UI, and infrastructure calls
-- Runtime config is still threaded manually through `cli/flows.py` instead of dedicated application/use-case boundaries
+- `application/download_usecase.py` still talks to history and notification infrastructure directly instead of going through abstract ports
+- CLI and notification summaries are still assembled in separate places rather than a single shared formatter
 - CLI still renders several failures with generic text instead of a single centralized error presenter
 - Overall test coverage is still below the desired long-term threshold
 
