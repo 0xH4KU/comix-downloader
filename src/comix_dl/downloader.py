@@ -401,5 +401,9 @@ class Downloader:
                 continue
             if entry.name in {_COMPLETE_MARKER, _STATE_FILE}:
                 continue
+            if entry.name.endswith(".part") or (entry.name.startswith(".") and entry.name.endswith(".tmp")):
+                with contextlib.suppress(OSError):
+                    entry.unlink()
+                continue
             indexed.setdefault(entry.stem, []).append(entry)
         return indexed
