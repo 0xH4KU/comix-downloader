@@ -18,7 +18,7 @@ from comix_dl.cli.interactive import filter_chapters_interactive, parse_chapter_
 from comix_dl.comix_service import ComixService
 from comix_dl.config import CONFIG
 from comix_dl.downloader import Downloader, DownloadProgress
-from comix_dl.settings import Settings, load_settings
+from comix_dl.settings import Settings, SettingsRepository
 
 if TYPE_CHECKING:
     from comix_dl.comix_service import ChapterInfo
@@ -35,7 +35,7 @@ def _is_shutdown() -> bool:
 
 async def flow_search(query: str) -> int:
     """Interactive search → select → download."""
-    settings = load_settings()
+    settings = SettingsRepository().load()
     output_dir = Path(settings.output_dir)
 
     async with CdpBrowser() as browser:
@@ -172,7 +172,7 @@ async def flow_search(query: str) -> int:
 
 async def flow_url_download(url: str) -> int:
     """Download from a manga URL (interactive mode)."""
-    settings = load_settings()
+    settings = SettingsRepository().load()
     output_dir = Path(settings.output_dir)
 
     # Extract slug from the URL
@@ -273,7 +273,7 @@ async def flow_noninteractive_download(
             return 1
 
         console.print(f"[bold]Downloading {len(to_download)} chapter(s) as {fmt.upper()}…[/bold]\n")
-        settings = load_settings()
+        settings = SettingsRepository().load()
         await download_chapters(
             browser, service, info.title, to_download, output_dir, fmt, settings,
             optimize=optimize,
@@ -330,7 +330,7 @@ def flow_list() -> int:
     """List downloaded manga and chapters."""
     from rich.table import Table
 
-    settings = load_settings()
+    settings = SettingsRepository().load()
     output_dir = Path(settings.output_dir)
 
     if not output_dir.exists():
@@ -382,7 +382,7 @@ def flow_list() -> int:
 
 def flow_clean(*, force: bool = False) -> int:
     """Remove raw image directories that have corresponding PDF/CBZ files."""
-    settings = load_settings()
+    settings = SettingsRepository().load()
     output_dir = Path(settings.output_dir)
 
     if not output_dir.exists():

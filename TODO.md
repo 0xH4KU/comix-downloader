@@ -115,7 +115,7 @@
 說明：目前 `load_settings()` 會直接修改全域 singleton，狀態來源不透明。
 完成標準：啟動時載入 immutable runtime config，透過 constructor 注入給 service/use case。
 
-- [ ] 抽出 `SettingsRepository`
+- [x] 抽出 `SettingsRepository`
 完成標準：設定讀寫、預設值、驗證、migration 集中在 repository，不再散落在 CLI 與 module import side effects。
 
 - [x] 抽出 `HistoryRepository`

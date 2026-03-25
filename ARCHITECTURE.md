@@ -151,7 +151,7 @@ This is the main architecture debt left in the project. The code works, but main
 
 ### `settings.py`
 
-Settings are stored in `~/.config/comix-dl/settings.json` and written atomically. The current implementation still mutates the global `CONFIG` singleton at startup and save time. That matches the code today, but it is also a known design debt scheduled for removal.
+Settings are stored in `~/.config/comix-dl/settings.json` and written atomically. `SettingsRepository` now owns load/save/default fallback behavior. The current implementation still mutates the global `CONFIG` singleton at startup and save time. That matches the code today, but it is also a known design debt scheduled for removal.
 
 Only active user-facing controls remain wired here:
 

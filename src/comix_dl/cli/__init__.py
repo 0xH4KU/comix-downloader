@@ -39,7 +39,7 @@ from comix_dl.cli.flows import (
     flow_url_download,
 )
 from comix_dl.cli.interactive import flow_history, flow_settings, parse_chapter_selection, run_doctor
-from comix_dl.settings import load_settings
+from comix_dl.settings import SettingsRepository
 
 _shutdown_requested = False
 
@@ -126,7 +126,7 @@ def main() -> int:
         return _run_async(flow_search(args.query))
 
     if args.command == "download":
-        settings = load_settings()
+        settings = SettingsRepository().load()
         fmt = args.format or settings.default_format
         output = args.output or settings.output_dir
         optimize = settings.optimize_images and not args.no_optimize
@@ -184,7 +184,7 @@ def _run_async(coro: object) -> int:
 
 def _main_menu() -> int:
     """Interactive main menu."""
-    settings = load_settings()
+    settings = SettingsRepository().load()
 
     console.print(Text(BANNER, style="bold cyan"), highlight=False)
     console.print(

@@ -7,7 +7,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from comix_dl.config import CONFIG
-from comix_dl.settings import Settings, apply_settings_to_config, load_settings, save_settings
+from comix_dl.settings import (
+    Settings,
+    SettingsRepository,
+    apply_settings_to_config,
+    load_settings,
+    save_settings,
+)
 
 
 class TestSettingsDefaults:
@@ -117,6 +123,17 @@ class TestSaveSettings:
         assert loaded.concurrent_images == original.concurrent_images
         assert loaded.max_retries == original.max_retries
         assert loaded.download_delay == original.download_delay
+
+    def test_repository_round_trip(self, tmp_path: Path):
+        repository = SettingsRepository(tmp_path / "settings.json")
+        original = Settings(default_format="both", concurrent_images=4, optimize_images=False)
+
+        repository.save(original)
+        loaded = repository.load()
+
+        assert loaded.default_format == "both"
+        assert loaded.concurrent_images == 4
+        assert loaded.optimize_images is False
 
 
 class TestApplySettingsToConfig:

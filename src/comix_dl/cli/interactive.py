@@ -12,7 +12,7 @@ from rich.prompt import IntPrompt, Prompt
 from rich.table import Table
 
 from comix_dl.cli.display import console, format_bytes, print_chapters_table
-from comix_dl.settings import load_settings, save_settings
+from comix_dl.settings import SettingsRepository
 
 if TYPE_CHECKING:
     from comix_dl.comix_service import ChapterInfo
@@ -20,7 +20,8 @@ if TYPE_CHECKING:
 
 def flow_settings() -> None:
     """Interactive settings editor."""
-    settings = load_settings()
+    repository = SettingsRepository()
+    settings = repository.load()
 
     while True:
         console.print()
@@ -43,7 +44,7 @@ def flow_settings() -> None:
             return
 
         if choice == "s":
-            save_settings(settings)
+            repository.save(settings)
             console.print("[green]✓ Settings saved![/green]")
             return
 
@@ -317,7 +318,7 @@ def run_doctor() -> int:
         console.print("  [red]✗[/red] Chrome not found — install Google Chrome")
         all_ok = False
 
-    settings = load_settings()
+    settings = SettingsRepository().load()
     out = Path(settings.output_dir)
     try:
         out.mkdir(parents=True, exist_ok=True)
