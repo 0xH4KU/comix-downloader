@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.37-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.38-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -25,6 +25,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Consistent result reporting** — CLI summaries, desktop notifications, and persisted history now derive from the same download report, and failure reasons are retained in history
 - **Structured logging** — download-path logs now carry stable JSON fields such as `series`, `chapter_id`, `chapter_title`, `retry_count`, `status`, `bytes`, and `elapsed`
 - **Thin CLI adapter** — the CLI entry now sticks to argument parsing and command dispatch, while browser/session/runtime wiring lives under `application/session.py`
+- **Environment tuning profiles** — download concurrency can now switch between `desktop`, `low_resource`, `ci`, and `custom` profiles without patching code
 - **Resume / skip** — automatically skips already-downloaded chapters and images
 - **Corrupt-page recovery** — invalid existing image files are discarded and re-downloaded instead of being trusted by resume
 - **No false-success conversion** — chapters with failed page downloads stay unconverted and are reported as partial instead of completed
@@ -204,13 +205,23 @@ Accessible from the main menu (`5`) or `comix-dl settings`. Configurable options
 | -------------------- | -------------------------------- | ----------------------------------- |
 | Download directory   | `~/Downloads/comix-dl`           | Where files are saved               |
 | Default format       | `pdf`                            | Output format (pdf/cbz/both)        |
-| Concurrent chapters  | `2`                              | Chapters downloaded in parallel     |
-| Concurrent images    | `8`                              | Images per chapter in parallel, and browser page-pool size |
+| Concurrency profile  | `desktop`                        | Preset tuning for `desktop`, `low_resource`, `ci`, or `custom` |
+| Concurrent chapters  | `2`                              | Used when profile is `custom`; otherwise derived from the selected profile |
+| Concurrent images    | `8`                              | Used when profile is `custom`; otherwise derived from the selected profile |
 | Max retries          | `3`                              | Retry count for failed images       |
-| Download delay       | `on`                             | Random delays to avoid rate limits  |
+| Download delay       | `on`                             | Used when profile is `custom`; otherwise derived from the selected profile |
 | Optimize images      | `on`                             | Convert images to WebP before packaging |
 
 Settings persist to `~/.config/comix-dl/settings.json`.
+
+Built-in tuning profiles:
+
+| Profile | Chapters | Images | Delay | Intended use |
+|---------|----------|--------|-------|--------------|
+| `desktop` | 2 | 8 | on | Normal desktop usage |
+| `low_resource` | 1 | 2 | on | Low-memory or thermally constrained machines |
+| `ci` | 1 | 4 | off | Predictable automated environments |
+| `custom` | user-set | user-set | user-set | Manual tuning |
 
 ### Diagnostics
 

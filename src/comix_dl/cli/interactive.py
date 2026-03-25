@@ -25,17 +25,24 @@ def flow_settings() -> None:
     settings = repository.load()
 
     while True:
+        tuning = repository.resolve_download_tuning(settings)
         console.print()
         console.print(Panel("[bold]Settings[/bold]", border_style="cyan"))
-        delay_status = "[green]on[/green]" if settings.download_delay else "[red]off[/red]"
+        delay_status = "[green]on[/green]" if tuning.download_delay else "[red]off[/red]"
         optimize_status = "[green]on[/green]" if settings.optimize_images else "[red]off[/red]"
+        profile_note = "" if settings.concurrency_profile == "custom" else " [dim](managed by profile)[/dim]"
         console.print(f"  [cyan]1[/cyan]  Download directory:    [bold]{settings.output_dir}[/bold]")
         console.print(f"  [cyan]2[/cyan]  Default format:        [bold]{settings.default_format}[/bold]")
-        console.print(f"  [cyan]3[/cyan]  Concurrent chapters:   [bold]{settings.concurrent_chapters}[/bold]")
-        console.print(f"  [cyan]4[/cyan]  Concurrent images:     [bold]{settings.concurrent_images}[/bold]")
-        console.print(f"  [cyan]5[/cyan]  Max retries:           [bold]{settings.max_retries}[/bold]")
-        console.print(f"  [cyan]6[/cyan]  Download delay:        {delay_status}")
-        console.print(f"  [cyan]7[/cyan]  Optimize images:       {optimize_status}")
+        console.print(f"  [cyan]3[/cyan]  Concurrency profile:   [bold]{settings.concurrency_profile}[/bold]")
+        console.print(
+            f"  [cyan]4[/cyan]  Concurrent chapters:   [bold]{tuning.concurrent_chapters}[/bold]{profile_note}"
+        )
+        console.print(
+            f"  [cyan]5[/cyan]  Concurrent images:     [bold]{tuning.concurrent_images}[/bold]{profile_note}"
+        )
+        console.print(f"  [cyan]6[/cyan]  Max retries:           [bold]{settings.max_retries}[/bold]")
+        console.print(f"  [cyan]7[/cyan]  Download delay:        {delay_status}{profile_note}")
+        console.print(f"  [cyan]8[/cyan]  Optimize images:       {optimize_status}")
         console.print("  [cyan]s[/cyan]  Save & return")
         console.print("  [cyan]q[/cyan]  Discard & return")
 
@@ -61,23 +68,39 @@ def flow_settings() -> None:
             )
 
         elif choice == "3":
+            settings.concurrency_profile = Prompt.ask(
+                "  Concurrency profile",
+                choices=["desktop", "low_resource", "ci", "custom"],
+                default=settings.concurrency_profile,
+            )
+
+        elif choice == "4":
+            if settings.concurrency_profile != "custom":
+                settings.concurrency_profile = "custom"
+                console.print("  [cyan]Switched concurrency profile to custom[/cyan]")
             val = IntPrompt.ask("  Concurrent chapters (1-5)", default=settings.concurrent_chapters)
             settings.concurrent_chapters = max(1, min(5, val))
 
-        elif choice == "4":
+        elif choice == "5":
+            if settings.concurrency_profile != "custom":
+                settings.concurrency_profile = "custom"
+                console.print("  [cyan]Switched concurrency profile to custom[/cyan]")
             val = IntPrompt.ask("  Concurrent images (1-16)", default=settings.concurrent_images)
             settings.concurrent_images = max(1, min(16, val))
 
-        elif choice == "5":
+        elif choice == "6":
             val = IntPrompt.ask("  Max retries (0-10)", default=settings.max_retries)
             settings.max_retries = max(0, min(10, val))
 
-        elif choice == "6":
+        elif choice == "7":
+            if settings.concurrency_profile != "custom":
+                settings.concurrency_profile = "custom"
+                console.print("  [cyan]Switched concurrency profile to custom[/cyan]")
             settings.download_delay = not settings.download_delay
             state = "enabled" if settings.download_delay else "disabled"
             console.print(f"  [bold]Download delay {state}[/bold]")
 
-        elif choice == "7":
+        elif choice == "8":
             settings.optimize_images = not settings.optimize_images
             state = "enabled" if settings.optimize_images else "disabled"
             console.print(f"  [bold]Image optimization {state}[/bold]")

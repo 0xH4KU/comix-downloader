@@ -241,11 +241,14 @@ Only active user-facing controls remain wired here:
 
 - output directory
 - default format
-- chapter concurrency
-- image concurrency
+- concurrency profile (`desktop`, `low_resource`, `ci`, `custom`)
+- chapter concurrency (for `custom` profile)
+- image concurrency (for `custom` profile)
 - retry count
-- rate-limit delay toggle
+- rate-limit delay toggle (for `custom` profile)
 - image optimization toggle
+
+The profile mechanism is important because it turns environment-sensitive tuning into data instead of ad hoc code changes. Legacy settings with non-default concurrency values are migrated to `custom` so existing behavior is preserved.
 
 ### `history.py`
 

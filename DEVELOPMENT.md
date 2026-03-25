@@ -14,6 +14,7 @@ playwright install chromium
 The editable install includes the runtime `pypdf` dependency, so large PDF chapters do not require a separate merge-backend install.
 
 Settings are loaded into a per-run `AppConfig` via `build_runtime_config()` and injected into runtime components. `load_settings()` now returns normalized settings only; it does not mutate any process-global config object.
+Download tuning is profile-driven: `desktop`, `low_resource`, and `ci` presets map to effective chapter/image concurrency and delay values, while `custom` preserves explicit user overrides.
 
 ## Project Layout
 
@@ -128,6 +129,7 @@ comix.to uses several identifiers:
 2. **New CLI command** — add parser wiring in `src/comix_dl/cli/__init__.py`; keep orchestration/runtime setup in `src/comix_dl/application/` and leave `src/comix_dl/cli/flows.py` as a presentation adapter
 3. **New output format** — add converter in `converters.py`
 4. **New setting** — add field to `Settings` in `settings.py`
+   If it affects runtime tuning, either map it into an existing profile or update the profile-resolution tests.
 5. **New user-meaningful failure mode** — add or reuse a domain error in `errors.py`, then catch/render it at the CLI boundary
 6. **New dedup rule** — update `ComixService` to emit `DedupDecision` entries and keep the CLI dedup report aligned with the actual rule
 7. **New download summary wording** — update `application/download_reporting.py` and keep CLI/history/notification tests aligned with the shared report output

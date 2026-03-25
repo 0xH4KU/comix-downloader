@@ -15,7 +15,16 @@ logger = logging.getLogger(__name__)
 
 _SETTINGS_DIR = Path.home() / ".config" / "comix-dl"
 _SETTINGS_FILE = _SETTINGS_DIR / "settings.json"
-_CURRENT_SETTINGS_VERSION = 1
+_CURRENT_SETTINGS_VERSION = 2
+
+
+@dataclass(frozen=True)
+class DownloadTuning:
+    """Effective download tuning resolved from one profile."""
+
+    concurrent_chapters: int
+    concurrent_images: int
+    download_delay: bool
 
 
 @dataclass
@@ -24,6 +33,7 @@ class Settings:
 
     output_dir: str = str(Path.home() / "Downloads" / "comix-dl")
     default_format: str = "pdf"
+    concurrency_profile: str = "desktop"
     concurrent_chapters: int = 2
     concurrent_images: int = 8
     max_retries: int = 3
@@ -35,6 +45,13 @@ class SettingsRepository:
     """Repository for reading and writing persisted user settings."""
 
     _ALLOWED_FORMATS: ClassVar[set[str]] = {"pdf", "cbz", "both"}
+    _PROFILE_PRESETS: ClassVar[dict[str, DownloadTuning]] = {
+        "desktop": DownloadTuning(concurrent_chapters=2, concurrent_images=8, download_delay=True),
+        "low_resource": DownloadTuning(concurrent_chapters=1, concurrent_images=2, download_delay=True),
+        "ci": DownloadTuning(concurrent_chapters=1, concurrent_images=4, download_delay=False),
+    }
+    _CUSTOM_PROFILE: ClassVar[str] = "custom"
+    _ALLOWED_PROFILES: ClassVar[set[str]] = set(_PROFILE_PRESETS) | {_CUSTOM_PROFILE}
 
     def __init__(self, settings_file: Path | None = None) -> None:
         self._settings_file = settings_file or _SETTINGS_FILE
@@ -68,16 +85,17 @@ class SettingsRepository:
     def build_runtime_config(settings: Settings, base_config: AppConfig | None = None) -> AppConfig:
         """Build a per-run AppConfig from persisted user settings."""
         base = base_config if base_config is not None else AppConfig()
-        image_delay = 0.15 if settings.download_delay else 0.0
-        chapter_delay = 0.8 if settings.download_delay else 0.0
+        tuning = SettingsRepository.resolve_download_tuning(settings)
+        image_delay = 0.15 if tuning.download_delay else 0.0
+        chapter_delay = 0.8 if tuning.download_delay else 0.0
         return AppConfig(
             browser=replace(base.browser),
             service=replace(base.service),
             download=replace(
                 base.download,
                 default_output_dir=Path(settings.output_dir),
-                max_concurrent_chapters=settings.concurrent_chapters,
-                max_concurrent_images=settings.concurrent_images,
+                max_concurrent_chapters=tuning.concurrent_chapters,
+                max_concurrent_images=tuning.concurrent_images,
                 max_retries=settings.max_retries,
                 image_delay=image_delay,
                 chapter_delay=chapter_delay,
@@ -116,23 +134,36 @@ class SettingsRepository:
     def _normalize_settings(self, data: dict[str, Any]) -> Settings:
         """Validate and normalize persisted settings values."""
         defaults = Settings()
+        concurrent_chapters = self._normalize_int(
+            data.get("concurrent_chapters"),
+            default=defaults.concurrent_chapters,
+            minimum=1,
+            maximum=5,
+            field_name="concurrent_chapters",
+        )
+        concurrent_images = self._normalize_int(
+            data.get("concurrent_images"),
+            default=defaults.concurrent_images,
+            minimum=1,
+            maximum=16,
+            field_name="concurrent_images",
+        )
+        download_delay = self._normalize_bool(
+            data.get("download_delay"),
+            default=defaults.download_delay,
+            field_name="download_delay",
+        )
         return Settings(
             output_dir=self._normalize_output_dir(data.get("output_dir"), defaults.output_dir),
             default_format=self._normalize_format(data.get("default_format"), defaults.default_format),
-            concurrent_chapters=self._normalize_int(
-                data.get("concurrent_chapters"),
-                default=defaults.concurrent_chapters,
-                minimum=1,
-                maximum=5,
-                field_name="concurrent_chapters",
+            concurrency_profile=self._normalize_profile(
+                data.get("concurrency_profile"),
+                concurrent_chapters=concurrent_chapters,
+                concurrent_images=concurrent_images,
+                download_delay=download_delay,
             ),
-            concurrent_images=self._normalize_int(
-                data.get("concurrent_images"),
-                default=defaults.concurrent_images,
-                minimum=1,
-                maximum=16,
-                field_name="concurrent_images",
-            ),
+            concurrent_chapters=concurrent_chapters,
+            concurrent_images=concurrent_images,
             max_retries=self._normalize_int(
                 data.get("max_retries"),
                 default=defaults.max_retries,
@@ -140,17 +171,24 @@ class SettingsRepository:
                 maximum=10,
                 field_name="max_retries",
             ),
-            download_delay=self._normalize_bool(
-                data.get("download_delay"),
-                default=defaults.download_delay,
-                field_name="download_delay",
-            ),
+            download_delay=download_delay,
             optimize_images=self._normalize_bool(
                 data.get("optimize_images"),
                 default=defaults.optimize_images,
                 field_name="optimize_images",
             ),
         )
+
+    @classmethod
+    def resolve_download_tuning(cls, settings: Settings) -> DownloadTuning:
+        """Resolve effective concurrency/delay values from the selected profile."""
+        if settings.concurrency_profile == cls._CUSTOM_PROFILE:
+            return DownloadTuning(
+                concurrent_chapters=settings.concurrent_chapters,
+                concurrent_images=settings.concurrent_images,
+                download_delay=settings.download_delay,
+            )
+        return cls._PROFILE_PRESETS.get(settings.concurrency_profile, cls._PROFILE_PRESETS["desktop"])
 
     @staticmethod
     def _normalize_output_dir(value: object, default: str) -> str:
@@ -164,6 +202,29 @@ class SettingsRepository:
         if value is not None:
             logger.warning("Settings field default_format=%r is invalid; using %r.", value, default)
         return default
+
+    @classmethod
+    def _normalize_profile(
+        cls,
+        value: object,
+        *,
+        concurrent_chapters: int,
+        concurrent_images: int,
+        download_delay: bool,
+    ) -> str:
+        if isinstance(value, str) and value in cls._ALLOWED_PROFILES:
+            return value
+        if value is not None:
+            logger.warning("Settings field concurrency_profile=%r is invalid; inferring a safe profile.", value)
+
+        desktop = cls._PROFILE_PRESETS["desktop"]
+        if (
+            concurrent_chapters == desktop.concurrent_chapters
+            and concurrent_images == desktop.concurrent_images
+            and download_delay is desktop.download_delay
+        ):
+            return "desktop"
+        return cls._CUSTOM_PROFILE
 
     @staticmethod
     def _normalize_bool(value: object, *, default: bool, field_name: str) -> bool:
