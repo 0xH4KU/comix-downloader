@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.40-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.41-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -99,6 +99,7 @@ playwright install chromium
 Normal installs now pull in `pypdf`, which is the default merge backend for large multi-batch PDF output.
 
 For contributor workflow, local quality gates, and regression-test expectations, see `CONTRIBUTING.md`.
+For upgrade notes from the older monolithic runtime and for release-slice procedure, see `MIGRATION.md` and `RELEASE_CHECKLIST.md`.
 
 ## Update / Uninstall
 

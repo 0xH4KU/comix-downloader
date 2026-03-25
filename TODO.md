@@ -219,7 +219,7 @@
 - [x] Milestone 4：補齊測試與發布門檻
 範圍：async test、核心覆蓋率、CI gate、整合測試。
 
-- [ ] Milestone 5：更新文件與發版
+- [x] Milestone 5：更新文件與發版
 範圍：README、ARCHITECTURE、DEVELOPMENT、migration note、release checklist。
 
 ## 發版前驗收清單

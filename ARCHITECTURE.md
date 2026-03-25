@@ -333,12 +333,19 @@ Current structured fields include at least:
 
 This is intentionally lightweight: it keeps the standard library logging stack, but makes downstream filtering and debugging materially easier.
 
+## Release Docs
+
+Two repository-level documents now carry the operational context that does not belong inside module docs:
+
+- `MIGRATION.md` explains what changed for maintainers moving from the old global-config, partial-success, monolithic-CLI design to the current layered runtime
+- `RELEASE_CHECKLIST.md` is the source of truth for versioned slice release steps, validation order, and closeout checks
+
 ## Known Debt
 
 The following debts remain real and are intentionally documented here:
 
 - `application/download_usecase.py` still talks to history and notification infrastructure directly instead of going through abstract ports
 - CLI still renders several failures with generic text instead of a single centralized error presenter
-- Overall test coverage is still below the desired long-term threshold
+- `browser_session.py`, `cli/interactive.py`, and `notify.py` remain the main low-coverage areas after the 70% gate raise
 
 The point of this document is to describe the current system honestly so the next refactor slices have a stable reference point.
