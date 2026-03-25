@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from comix_dl.cdp_browser import CdpBrowser, _find_free_port, _is_port_in_use
+import comix_dl.cdp_browser as cdp_browser_module
+from comix_dl.cdp_browser import CdpBrowser, _atexit_kill_chrome, _find_free_port, _is_port_in_use
 from comix_dl.config import AppConfig
 
 
@@ -253,6 +254,16 @@ class TestBrowserTimeouts:
         assert browser._all_pages == [new_page]
         assert await browser.acquire_page() is new_page
         browser._goto_with_timeout.assert_awaited_once()
+
+    def test_atexit_cleanup_only_targets_current_process_chrome(self):
+        process = MagicMock()
+        cdp_browser_module._active_chrome = process
+
+        _atexit_kill_chrome()
+
+        process.terminate.assert_called_once()
+        process.wait.assert_called_once_with(timeout=3)
+        assert cdp_browser_module._active_chrome is None
 
 
 class TestCloudflareRecovery:

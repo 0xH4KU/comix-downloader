@@ -40,7 +40,7 @@ The core of the CF bypass strategy:
 8. **Explicit timeout boundaries** — CDP connect, page navigation, HTML reads, and in-browser `fetch()` calls all fail with config-backed timeouts instead of hanging indefinitely
 9. **Clearance self-healing** — if API/image requests start returning HTTP 403 or a challenge page reappears, cached clearance is reset, reacquired once, and the request is retried once
 10. **Dead-page eviction** — closed pooled pages are discarded on release or acquire and trigger replacement instead of being re-queued
-11. **Graceful shutdown** — `atexit` handler ensures Chrome is cleaned up even on crash
+11. **Graceful shutdown** — `atexit` only cleans Chrome started by the current Python process, avoiding shared PID-file cross-instance kills
 
 This defeats CF's multi-layer detection:
 - **JS challenge** — Chrome executes it natively

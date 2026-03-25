@@ -15,7 +15,6 @@ import base64
 import contextlib
 import logging
 import os
-import signal
 import socket
 import subprocess
 import time
@@ -34,73 +33,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
-# Module-level reference for atexit cleanup
+# Module-level reference for current-process atexit cleanup
 _active_chrome: subprocess.Popen[bytes] | None = None
-_PID_FILE: Path = Path.home() / ".config" / "comix-dl" / "chrome.pid"
-
-
-def _write_pid(pid: int) -> None:
-    """Write Chrome PID to disk for crash recovery."""
-    with contextlib.suppress(OSError):
-        _PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _PID_FILE.write_text(str(pid))
-
-
-def _remove_pid() -> None:
-    """Remove the PID file."""
-    with contextlib.suppress(OSError):
-        _PID_FILE.unlink(missing_ok=True)
-
-
-def _cleanup_stale_chrome() -> None:
-    """Kill orphaned Chrome from a previous crash (SIGKILL / OOM).
-
-    Reads the PID file left behind when Python couldn't run atexit,
-    checks if the process is still alive, and terminates it.
-    """
-    if not _PID_FILE.exists():
-        return
-    try:
-        pid = int(_PID_FILE.read_text().strip())
-    except (ValueError, OSError):
-        _remove_pid()
-        return
-
-    try:
-        # Check if process is alive (signal 0 = no-op probe)
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        # Already dead — just clean up the stale PID file
-        _remove_pid()
-        return
-    except PermissionError:
-        # Process exists but we can't signal it — leave it alone
-        _remove_pid()
-        return
-
-    # Process is alive — terminate it
-    logger.warning("Found orphaned Chrome (PID %d) from a previous crash, terminating", pid)
-    try:
-        os.kill(pid, signal.SIGTERM)
-        # Give it a moment to exit gracefully
-        for _ in range(10):
-            time.sleep(0.3)
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                break
-        else:
-            # Still alive — force kill
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGKILL)
-    except Exception as exc:
-        logger.debug("Failed to clean up stale Chrome PID %d: %s", pid, exc)
-    finally:
-        _remove_pid()
 
 
 def _atexit_kill_chrome() -> None:
-    """Last-resort cleanup: kill Chrome if still running."""
+    """Last-resort cleanup for Chrome started by this Python process only."""
     global _active_chrome
     if _active_chrome is not None:
         try:
@@ -110,7 +48,6 @@ def _atexit_kill_chrome() -> None:
             with contextlib.suppress(Exception):
                 _active_chrome.kill()
         _active_chrome = None
-    _remove_pid()
 
 
 atexit.register(_atexit_kill_chrome)
@@ -217,9 +154,6 @@ class CdpBrowser:
         if self._started:
             return
 
-        # Clean up any orphaned Chrome from a previous crash
-        _cleanup_stale_chrome()
-
         try:
             self._user_data_dir.mkdir(parents=True, exist_ok=True)
             self._launch_chrome()
@@ -302,7 +236,6 @@ class CdpBrowser:
                 stderr=subprocess.DEVNULL,
             )
             _active_chrome = self._chrome_process
-            _write_pid(self._chrome_process.pid)
             self._wait_for_cdp_ready()
         except FileNotFoundError:
             raise RuntimeError(
@@ -501,7 +434,6 @@ class CdpBrowser:
         _active_chrome = None
         self._started = False
         self._cf_cleared = False
-        _remove_pid()
         logger.info("Browser session closed")
 
     async def __aenter__(self) -> CdpBrowser:

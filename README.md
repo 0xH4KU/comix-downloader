@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.18-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.19-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -224,7 +224,7 @@ Checks Python version, dependencies, Chrome availability, and output directory.
 
 7. **Convert** — only fully successful chapters are packaged into PDF or CBZ. Multi-batch PDF conversion now fails fast if no merge backend is available, instead of emitting a truncated file.
 
-8. **Graceful shutdown** — `Ctrl+C` finishes current downloads then stops. An `atexit` handler ensures Chrome is cleaned up even on crashes.
+8. **Graceful shutdown** — `Ctrl+C` finishes current downloads then stops. An `atexit` handler ensures the Chrome started by the current Python process is cleaned up even on crashes, without using a shared global PID kill path.
 
 ## Project Structure
 
