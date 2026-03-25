@@ -7,7 +7,7 @@ comix-downloader is a desktop-first manga downloader for `comix.to`. It uses a r
 1. Presentation: `cli/__init__.py`, `cli/interactive.py`, `cli/display.py`
 2. Application use cases: `application/query_usecase.py`, `application/download_usecase.py`, `application/cleanup_usecase.py`, `application/download_reporting.py`
 3. Workflow/presentation glue: `cli/flows.py`
-4. Domain/service logic and infrastructure: `comix_service.py`, `downloader.py`, `converters.py`, `browser_session.py`, `cdp_browser.py`, `settings.py`, `history.py`, `fileio.py`, `notify.py`, `errors.py`
+4. Domain/service logic and infrastructure: `comix_service.py`, `downloader.py`, `converters.py`, `browser_session.py`, `cdp_browser.py`, `settings.py`, `history.py`, `fileio.py`, `notify.py`, `errors.py`, `logging_utils.py`
 
 This is the real structure today, not an aspirational diagram. The application layer now owns query/download/cleanup orchestration, while `cli/flows.py` has become a thinner presentation-oriented adapter. The remaining debt is that interactive control flow and Rich rendering are still coupled in that adapter.
 
@@ -299,6 +299,22 @@ The current implementation has several explicit high-availability boundaries:
 - High-risk failure modes now emit targeted diagnostics instead of generic transport errors
 
 These boundaries are the difference between a recoverable run and silent damage.
+
+## Observability
+
+`logging_utils.py` now installs a structured formatter at CLI startup. High-value download-path logs emit stable JSON context fields instead of burying identifiers inside free-form strings.
+
+Current structured fields include at least:
+
+- `series`
+- `chapter_id`
+- `chapter_title`
+- `retry_count`
+- `status`
+- `bytes`
+- `elapsed`
+
+This is intentionally lightweight: it keeps the standard library logging stack, but makes downstream filtering and debugging materially easier.
 
 ## Known Debt
 

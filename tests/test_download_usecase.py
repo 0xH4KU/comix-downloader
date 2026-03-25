@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
@@ -39,6 +40,7 @@ def _config() -> AppConfig:
 async def test_download_chapters_emits_events_records_history_and_formats_notification(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     events: list[download_usecase.DownloadChapterEvent] = []
     notifications: list[tuple[str, str]] = []
@@ -49,6 +51,7 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
             self._output_dir = output_dir
             self._on_progress = None
             self.bytes_downloaded = 2048
+            self.retry_count = 0
 
         def is_chapter_complete(self, _series_title: str, _chapter_title: str) -> bool:
             return False
@@ -88,19 +91,20 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
         image_urls=["https://img/1", "https://img/2"],
     )
 
-    summary = await download_usecase.download_chapters(
-        browser=object(),
-        service=service,
-        series_title="Series A",
-        chapters=[ChapterInfo(title="Chapter 1", chapter_id=101, number="1")],
-        output_dir=tmp_path,
-        fmt="pdf",
-        config=_config(),
-        optimize=True,
-        on_event=events.append,
-        history_repository=history,
-        notifier=lambda title, body: notifications.append((title, body)),
-    )
+    with caplog.at_level(logging.INFO, logger="comix_dl.application.download_usecase"):
+        summary = await download_usecase.download_chapters(
+            browser=object(),
+            service=service,
+            series_title="Series A",
+            chapters=[ChapterInfo(title="Chapter 1", chapter_id=101, number="1")],
+            output_dir=tmp_path,
+            fmt="pdf",
+            config=_config(),
+            optimize=True,
+            on_event=events.append,
+            history_repository=history,
+            notifier=lambda title, body: notifications.append((title, body)),
+        )
 
     assert summary.total_chapters == 1
     assert summary.completed == 1
@@ -123,6 +127,21 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
         "issues": [],
     }]
     assert notifications == [("comix-dl: Series A", "1 downloaded (2.0 KB)")]
+    assert any(
+        record.message == "chapter_download_finished"
+        and record.context["chapter_id"] == 101
+        and record.context["chapter_title"] == "Chapter 1"
+        and record.context["status"] == "converted"
+        and record.context["bytes"] == 2048
+        and record.context["retry_count"] == 0
+        for record in caplog.records
+    )
+    assert any(
+        record.message == "download_batch_finished"
+        and record.context["series"] == "Series A"
+        and record.context["status"] == "ok"
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
@@ -139,6 +158,7 @@ async def test_download_chapters_counts_skipped_partial_and_missing_images(
             self._output_dir = output_dir
             self._on_progress = None
             self.bytes_downloaded = 0
+            self.retry_count = 0
             created_downloaders.append(self)
 
         def is_chapter_complete(self, _series_title: str, chapter_title: str) -> bool:

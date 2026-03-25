@@ -179,7 +179,7 @@
 
 ## P2 可觀測性
 
-- [ ] 導入結構化 logging
+- [x] 導入結構化 logging
 說明：目前 log 雜訊多，但關鍵欄位少。
 完成標準：至少包含 series、chapter_id、chapter_title、retry_count、status、bytes、elapsed。
 

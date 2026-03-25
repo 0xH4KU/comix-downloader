@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import time
 from collections.abc import Callable
@@ -14,6 +15,7 @@ from comix_dl.converters import convert
 from comix_dl.downloader import Downloader, DownloadProgress, ensure_complete_download
 from comix_dl.errors import ConversionError, PartialDownloadError
 from comix_dl.history import HistoryRepository
+from comix_dl.logging_utils import log_context
 from comix_dl.notify import send_notification
 
 if TYPE_CHECKING:
@@ -22,6 +24,9 @@ if TYPE_CHECKING:
     from comix_dl.cdp_browser import CdpBrowser
     from comix_dl.comix_service import ChapterInfo, ComixService
     from comix_dl.config import AppConfig
+
+
+logger = logging.getLogger(__name__)
 
 
 DownloadEventKind = Literal[
@@ -125,9 +130,26 @@ async def download_chapters(
                 return
 
             downloader = Downloader(browser, output_dir=output_dir, config=config)
+            chapter_start = time.monotonic()
+
+            def log_chapter(status: str, *, bytes_downloaded: int, message: str | None = None) -> None:
+                logger.info(
+                    "chapter_download_finished",
+                    extra=log_context(
+                        series=series_title,
+                        chapter_id=chapter.chapter_id,
+                        chapter_title=chapter.title,
+                        status=status,
+                        bytes=bytes_downloaded,
+                        retry_count=downloader.retry_count,
+                        elapsed=time.monotonic() - chapter_start,
+                        message=message,
+                    ),
+                )
 
             if downloader.is_chapter_complete(series_title, chapter.title):
                 skipped_count += 1
+                log_chapter("skipped", bytes_downloaded=0)
                 _emit(
                     on_event,
                     DownloadChapterEvent(
@@ -159,6 +181,7 @@ async def download_chapters(
                         message="no images available from remote API",
                     )
                 )
+                log_chapter("missing_images", bytes_downloaded=0, message="no images available from remote API")
                 _emit(
                     on_event,
                     DownloadChapterEvent(
@@ -209,6 +232,11 @@ async def download_chapters(
                         message="all image downloads failed",
                     )
                 )
+                log_chapter(
+                    "failed",
+                    bytes_downloaded=downloader.bytes_downloaded,
+                    message="all image downloads failed",
+                )
                 _emit(
                     on_event,
                     DownloadChapterEvent(
@@ -230,6 +258,7 @@ async def download_chapters(
                         message=str(exc),
                     )
                 )
+                log_chapter("partial", bytes_downloaded=downloader.bytes_downloaded, message=str(exc))
                 _emit(
                     on_event,
                     DownloadChapterEvent(
@@ -244,6 +273,7 @@ async def download_chapters(
             try:
                 output = convert(download_result.chapter_dir, fmt, optimize=optimize, config=config)
                 completed_ok += 1
+                log_chapter("converted", bytes_downloaded=downloader.bytes_downloaded, message=output.name)
                 _emit(
                     on_event,
                     DownloadChapterEvent(
@@ -262,6 +292,7 @@ async def download_chapters(
                         message=str(exc),
                     )
                 )
+                log_chapter("conversion_failed", bytes_downloaded=downloader.bytes_downloaded, message=str(exc))
                 _emit(
                     on_event,
                     DownloadChapterEvent(
@@ -290,6 +321,19 @@ async def download_chapters(
         issues=tuple(sorted(issues, key=lambda issue: (issue.chapter_title, issue.kind, issue.message))),
     )
     report = build_download_report(summary)
+    logger.info(
+        "download_batch_finished",
+        extra=log_context(
+            series=series_title,
+            status="degraded" if summary.partial or summary.failed else "ok",
+            bytes=summary.total_bytes,
+            elapsed=summary.elapsed_seconds,
+            completed=summary.completed,
+            skipped=summary.skipped,
+            partial=summary.partial,
+            failed=summary.failed,
+        ),
+    )
 
     history.record_download(
         title=series_title,

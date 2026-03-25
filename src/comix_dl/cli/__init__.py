@@ -39,6 +39,7 @@ from comix_dl.cli.flows import (
     flow_url_download,
 )
 from comix_dl.cli.interactive import flow_history, flow_settings, parse_chapter_selection, run_doctor
+from comix_dl.logging_utils import configure_logging
 from comix_dl.settings import SettingsRepository, build_runtime_config
 
 _shutdown_requested = False
@@ -110,13 +111,13 @@ def main() -> int:
         and not sys.argv[1].startswith("-")
         and sys.argv[1] not in ("search", "download", "info", "list", "clean", "history", "doctor", "settings")
     ):
-        logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+        configure_logging(logging.INFO)
         return _run_async(flow_search(sys.argv[1]))
 
     args = parser.parse_args()
 
     log_level = logging.DEBUG if args.debug else logging.INFO
-    logging.basicConfig(level=log_level, format="%(levelname)s:%(name)s:%(message)s")
+    configure_logging(log_level)
 
     # Quiet mode
     if getattr(args, "quiet", False):

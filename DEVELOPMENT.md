@@ -36,6 +36,7 @@ comix-downloader/
     errors.py             # Domain error types
     fileio.py             # Atomic file write helpers
     history.py            # Download history persistence
+    logging_utils.py      # Structured logging formatter/helpers
     notify.py             # Desktop notifications
     settings.py           # Persistent settings
     cli/
@@ -129,6 +130,7 @@ comix.to uses several identifiers:
 5. **New user-meaningful failure mode** — add or reuse a domain error in `errors.py`, then catch/render it at the CLI boundary
 6. **New dedup rule** — update `ComixService` to emit `DedupDecision` entries and keep the CLI dedup report aligned with the actual rule
 7. **New download summary wording** — update `application/download_reporting.py` and keep CLI/history/notification tests aligned with the shared report output
+8. **New download-path log field** — update `logging_utils.py` and the download/use-case tests so structured logging stays stable
 
 ## Commit Conventions
 

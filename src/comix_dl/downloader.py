@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from comix_dl.config import AppConfig
 from comix_dl.errors import PartialDownloadError
 from comix_dl.fileio import atomic_write_bytes, atomic_write_text
+from comix_dl.logging_utils import log_context
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -118,6 +119,7 @@ class Downloader:
         self._output_dir = output_dir or self._config.download.default_output_dir
         self._on_progress = on_progress
         self.bytes_downloaded: int = 0
+        self.retry_count: int = 0
 
     @staticmethod
     def _describe_download_error(url: str, filename: str, exc: Exception) -> str:
@@ -319,17 +321,29 @@ class Downloader:
                 last_error = self._describe_download_error(url, filename, exc)
                 if attempt < max_retries:
                     wait = retry_delay * (2 ** attempt)
+                    self.retry_count += 1
                     logger.debug(
-                        "Retry %d/%d for %s after %.1fs: %s",
-                        attempt + 1, max_retries, filename, wait, last_error,
+                        "image_download_retry",
+                        extra=log_context(
+                            filename=filename,
+                            retry_count=self.retry_count,
+                            attempt=attempt + 1,
+                            max_retries=max_retries,
+                            wait_seconds=wait,
+                            error=last_error,
+                        ),
                     )
                     await asyncio.sleep(wait)
                 else:
                     logger.warning(
-                        "Failed to download %s after %d attempts: %s",
-                        url,
-                        max_retries + 1,
-                        last_error,
+                        "image_download_failed",
+                        extra=log_context(
+                            filename=filename,
+                            retry_count=self.retry_count,
+                            attempts=max_retries + 1,
+                            url=url,
+                            error=last_error,
+                        ),
                     )
 
         return False, last_error
