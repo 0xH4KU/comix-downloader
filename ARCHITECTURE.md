@@ -78,12 +78,14 @@ Key identifiers:
 ### `settings.py` — Persistent Configuration
 
 - Settings stored as JSON at `~/.config/comix-dl/settings.json`
+- Writes use atomic replace to reduce config corruption on interruption
 - Loaded at startup and **synced to CONFIG** so all modules use user's values
 - Controls: output directory, default format, concurrency, retry count, image optimization
 
 ### `history.py` — Download History
 
 - JSON storage at `~/.config/comix-dl/history.json`
+- Writes use atomic replace to reduce history corruption on interruption
 - Records each download session (title, chapter count, format, size, status)
 - Auto-trims oldest entries at 500 max
 - Accessed via `comix-dl history` / `comix-dl history clear`

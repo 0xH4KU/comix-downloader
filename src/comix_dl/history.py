@@ -12,6 +12,8 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from comix_dl.fileio import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 _HISTORY_DIR = Path.home() / ".config" / "comix-dl"
@@ -105,8 +107,7 @@ def _load_entries() -> list[dict[str, object]]:
 
 def _save_entries(entries: list[dict[str, object]]) -> None:
     """Write entries to disk."""
-    _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    _HISTORY_FILE.write_text(
+    atomic_write_text(
+        _HISTORY_FILE,
         json.dumps(entries, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
     )

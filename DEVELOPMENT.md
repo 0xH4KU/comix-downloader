@@ -23,6 +23,7 @@ comix-downloader/
     config.py             # Default config dataclasses
     converters.py         # PDF / CBZ conversion
     downloader.py         # Image downloader
+    fileio.py            # Atomic file write helpers
     history.py            # Download history persistence
     notify.py             # Desktop notifications
     settings.py           # Persistent settings

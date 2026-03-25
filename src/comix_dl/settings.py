@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from comix_dl.config import CONFIG
+from comix_dl.fileio import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +54,9 @@ def load_settings() -> Settings:
 
 def save_settings(settings: Settings) -> None:
     """Save settings to disk and update CONFIG."""
-    _SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-    _SETTINGS_FILE.write_text(
+    atomic_write_text(
+        _SETTINGS_FILE,
         json.dumps(asdict(settings), indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
     )
     apply_settings_to_config(settings)
     logger.debug("Settings saved to %s", _SETTINGS_FILE)
