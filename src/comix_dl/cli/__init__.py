@@ -40,7 +40,7 @@ from comix_dl.cli.flows import (
 )
 from comix_dl.cli.interactive import flow_history, flow_settings, parse_chapter_selection, run_doctor
 from comix_dl.logging_utils import configure_logging
-from comix_dl.settings import SettingsRepository, build_runtime_config
+from comix_dl.settings import SettingsRepository
 
 _shutdown_requested = False
 
@@ -124,23 +124,17 @@ def main() -> int:
         console.quiet = True
 
     if args.command == "search":
-        return _run_async(flow_search(args.query))
+        return _run_async(flow_search(args.query, quiet=args.quiet))
 
     if args.command == "download":
-        settings = SettingsRepository().load()
-        runtime_config = build_runtime_config(settings)
-        fmt = args.format or settings.default_format
-        output = args.output or settings.output_dir
-        optimize = settings.optimize_images and not args.no_optimize
         return _run_async(
             flow_noninteractive_download(
                 args.url,
                 args.chapters,
-                fmt,
-                output,
-                optimize=optimize,
-                settings=settings,
-                config=runtime_config,
+                args.format,
+                args.output,
+                optimize=None if not args.no_optimize else False,
+                quiet=args.quiet,
             )
         )
 
@@ -151,7 +145,7 @@ def main() -> int:
         return flow_list()
 
     if args.command == "clean":
-        return flow_clean(force=args.force)
+        return flow_clean(force=args.force, auto_confirm=args.quiet)
 
     if args.command == "history":
         return flow_history(action=args.action)

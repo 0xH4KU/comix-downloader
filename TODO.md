@@ -137,7 +137,7 @@
 2. `application/query_usecase.py`
 3. `application/cleanup_usecase.py`
 
-- [ ] 讓 CLI 僅負責輸入解析與輸出渲染
+- [x] 讓 CLI 僅負責輸入解析與輸出渲染
 完成標準：Rich prompt、table、panel 僅存在於 presentation layer。
 
 - [x] 建立明確的 domain errors
@@ -149,7 +149,7 @@
 4. `PartialDownloadError`
 5. `ConversionError`
 
-- [ ] 移除 application 層對 `console.quiet` 等 UI 細節的依賴
+- [x] 移除 application 層對 `console.quiet` 等 UI 細節的依賴
 完成標準：quiet mode 由 CLI 控制輸出，不再滲透進底層 use case。
 
 ## P1 章節模型與業務規則
@@ -213,7 +213,7 @@
 - [x] Milestone 2：修正瀏覽器高可用性
 範圍：session manager、timeout、CF reset、page pool、單實例/多實例策略。
 
-- [ ] Milestone 3：完成架構解耦
+- [x] Milestone 3：完成架構解耦
 範圍：移除全域 CONFIG、repository/use case 分層、domain errors。
 
 - [ ] Milestone 4：補齊測試與發布門檻

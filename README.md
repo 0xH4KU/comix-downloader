@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.36-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.37-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -24,6 +24,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Application use cases** — query resolution, download orchestration, and cleanup planning now live in `application/`, keeping the CLI focused on prompts, progress, and output rendering
 - **Consistent result reporting** — CLI summaries, desktop notifications, and persisted history now derive from the same download report, and failure reasons are retained in history
 - **Structured logging** — download-path logs now carry stable JSON fields such as `series`, `chapter_id`, `chapter_title`, `retry_count`, `status`, `bytes`, and `elapsed`
+- **Thin CLI adapter** — the CLI entry now sticks to argument parsing and command dispatch, while browser/session/runtime wiring lives under `application/session.py`
 - **Resume / skip** — automatically skips already-downloaded chapters and images
 - **Corrupt-page recovery** — invalid existing image files are discarded and re-downloaded instead of being trusted by resume
 - **No false-success conversion** — chapters with failed page downloads stay unconverted and are reported as partial instead of completed
@@ -249,6 +250,7 @@ src/comix_dl/
   __main__.py         # python -m comix_dl entry point
   application/        # Query, download, and cleanup use cases
   application/download_reporting.py  # Shared summary and issue formatting
+  application/session.py  # Runtime/session wiring for CLI adapters
   logging_utils.py    # Structured logging helpers and formatter
   cli/__init__.py     # CLI entry, parser, signal handling
   cli/flows.py        # CLI interaction flows delegating to application use cases

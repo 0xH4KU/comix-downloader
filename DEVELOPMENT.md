@@ -27,6 +27,7 @@ comix-downloader/
       download_usecase.py # Download orchestration + event emission
       cleanup_usecase.py  # Listing and cleanup planning
       download_reporting.py # Shared summary and issue formatting
+      session.py          # Runtime/session wiring for CLI adapters
     browser_session.py    # Chrome lifecycle, locks, CDP, page pool
     cdp_browser.py        # Cloudflare-aware browser request client
     comix_service.py      # REST API client
@@ -124,7 +125,7 @@ comix.to uses several identifiers:
 ### Adding New Features
 
 1. **New API call** — add method to `ComixService` in `comix_service.py`
-2. **New CLI command** — add parser wiring in `src/comix_dl/cli/__init__.py`; keep orchestration in `src/comix_dl/application/` and leave `src/comix_dl/cli/flows.py` as a presentation adapter
+2. **New CLI command** — add parser wiring in `src/comix_dl/cli/__init__.py`; keep orchestration/runtime setup in `src/comix_dl/application/` and leave `src/comix_dl/cli/flows.py` as a presentation adapter
 3. **New output format** — add converter in `converters.py`
 4. **New setting** — add field to `Settings` in `settings.py`
 5. **New user-meaningful failure mode** — add or reuse a domain error in `errors.py`, then catch/render it at the CLI boundary

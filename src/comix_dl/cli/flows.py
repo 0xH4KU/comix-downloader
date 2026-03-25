@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.panel import Panel
@@ -19,15 +18,7 @@ from rich.prompt import Prompt
 
 from comix_dl.application.cleanup_usecase import apply_cleanup_plan, build_cleanup_plan, list_downloaded_series
 from comix_dl.application.download_reporting import build_download_report
-from comix_dl.application.download_usecase import (
-    DownloadChapterEvent,
-    DownloadSummary,
-)
-from comix_dl.application.download_usecase import (
-    download_chapters as run_download_chapters,
-)
-from comix_dl.application.query_usecase import load_series, resolve_series_from_input, search_series
-from comix_dl.cdp_browser import CdpBrowser
+from comix_dl.application.session import ApplicationSession, load_runtime, open_application_session
 from comix_dl.cli.display import (
     console,
     format_bytes,
@@ -37,12 +28,14 @@ from comix_dl.cli.display import (
     print_series_header,
 )
 from comix_dl.cli.interactive import filter_chapters_interactive, parse_chapter_selection
-from comix_dl.comix_service import ComixService
-from comix_dl.settings import Settings, SettingsRepository, build_runtime_config
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
+    from comix_dl.application.download_usecase import DownloadChapterEvent, DownloadSummary
     from comix_dl.comix_service import ChapterInfo, SearchResult, SeriesInfo
     from comix_dl.config import AppConfig
+    from comix_dl.settings import Settings
 
 
 def _is_shutdown() -> bool:
@@ -191,18 +184,16 @@ def _render_download_summary(summary: DownloadSummary, output_dir: Path) -> None
 
 
 async def _download_with_progress(
-    browser: CdpBrowser,
-    service: ComixService,
+    session: ApplicationSession,
     *,
     series_title: str,
     chapters: list[ChapterInfo],
-    output_dir: Path,
     fmt: str,
-    config: AppConfig,
     optimize: bool,
+    auto_cleanup: bool,
 ) -> None:
     """Run the application download use case and render progress in the CLI."""
-    console.print(f"\n[bold green]Downloading {len(chapters)} chapter(s) → {output_dir}[/bold green]\n")
+    console.print(f"\n[bold green]Downloading {len(chapters)} chapter(s) → {session.output_dir}[/bold green]\n")
 
     progress = Progress(
         SpinnerColumn(),
@@ -215,39 +206,29 @@ async def _download_with_progress(
     task_ids: dict[int, TaskID] = {}
 
     with progress:
-        summary = await run_download_chapters(
-            browser,
-            service,
+        summary = await session.download(
             series_title=series_title,
             chapters=chapters,
-            output_dir=output_dir,
             fmt=fmt,
-            config=config,
             optimize=optimize,
             on_event=lambda event: _render_download_event(progress, task_ids, event),
             is_shutdown=_is_shutdown,
         )
 
-    _render_download_summary(summary, output_dir)
+    _render_download_summary(summary, session.output_dir)
 
     if summary.completed > 0:
-        _auto_cleanup_prompt(output_dir, series_title)
+        _auto_cleanup_prompt(session.output_dir, series_title, auto_confirm=auto_cleanup)
 
 
 # -- Flow: Search & Download --------------------------------------------------
 
 
-async def flow_search(query: str) -> int:
+async def flow_search(query: str, *, quiet: bool = False) -> int:
     """Interactive search → select → download."""
-    settings = SettingsRepository().load()
-    config = build_runtime_config(settings)
-    output_dir = config.download.default_output_dir
-
-    async with CdpBrowser(config=config) as browser:
-        service = ComixService(browser, config=config)
-
+    async with open_application_session() as session:
         with console.status("[bold cyan]Searching…"):
-            results = await search_series(service, query)
+            results = await session.search(query)
 
         if not results:
             console.print("[yellow]No results found.[/yellow]")
@@ -286,7 +267,7 @@ async def flow_search(query: str) -> int:
 
             if show_info:
                 with console.status("[bold cyan]Loading info…"):
-                    info = await load_series(service, selected.hash_id)
+                    info = await session.load_series(selected.hash_id)
                 _render_series_info_panel(info)
 
                 cont = Prompt.ask("[bold]Fetch chapters?[/bold] [dim](Y/n)[/dim]", default="y")
@@ -302,7 +283,7 @@ async def flow_search(query: str) -> int:
 
         if info is None:
             with console.status("[bold cyan]Loading chapters…"):
-                info = await load_series(service, selected.hash_id)
+                info = await session.load_series(selected.hash_id)
 
         if not info.chapters:
             console.print("[yellow]No chapters found.[/yellow]")
@@ -321,34 +302,26 @@ async def flow_search(query: str) -> int:
         fmt = Prompt.ask(
             "[bold]Output format[/bold]",
             choices=["pdf", "cbz", "both"],
-            default=settings.default_format,
+            default=session.settings.default_format,
         )
 
         await _download_with_progress(
-            browser,
-            service,
+            session,
             series_title=info.title,
             chapters=to_download,
-            output_dir=output_dir,
             fmt=fmt,
-            config=config,
-            optimize=settings.optimize_images,
+            optimize=session.settings.optimize_images,
+            auto_cleanup=quiet,
         )
 
     return 0
 
 
-async def flow_url_download(url: str) -> int:
+async def flow_url_download(url: str, *, quiet: bool = False) -> int:
     """Download from a manga URL (interactive mode)."""
-    settings = SettingsRepository().load()
-    config = build_runtime_config(settings)
-    output_dir = config.download.default_output_dir
-
-    async with CdpBrowser(config=config) as browser:
-        service = ComixService(browser, config=config)
-
+    async with open_application_session() as session:
         with console.status("[bold cyan]Fetching series info…"):
-            lookup = await resolve_series_from_input(service, url)
+            lookup = await session.resolve_series(url)
 
         info = lookup.series
         if info is None and lookup.suggestions:
@@ -367,7 +340,7 @@ async def flow_url_download(url: str) -> int:
                 return 1
 
             with console.status("[bold cyan]Loading chapters…"):
-                info = await load_series(service, selected.hash_id)
+                info = await session.load_series(selected.hash_id)
 
         if info is None:
             console.print("[yellow]Could not find manga. Try using search instead.[/yellow]")
@@ -386,18 +359,16 @@ async def flow_url_download(url: str) -> int:
         fmt = Prompt.ask(
             "[bold]Output format[/bold]",
             choices=["pdf", "cbz", "both"],
-            default=settings.default_format,
+            default=session.settings.default_format,
         )
 
         await _download_with_progress(
-            browser,
-            service,
+            session,
             series_title=info.title,
             chapters=to_download,
-            output_dir=output_dir,
             fmt=fmt,
-            config=config,
-            optimize=settings.optimize_images,
+            optimize=session.settings.optimize_images,
+            auto_cleanup=quiet,
         )
 
     return 0
@@ -406,21 +377,19 @@ async def flow_url_download(url: str) -> int:
 async def flow_noninteractive_download(
     url: str,
     chapters_sel: str,
-    fmt: str,
-    output: str,
+    fmt: str | None = None,
+    output: str | None = None,
     *,
-    optimize: bool = True,
+    optimize: bool | None = None,
     settings: Settings | None = None,
     config: AppConfig | None = None,
+    quiet: bool = False,
 ) -> int:
     """Fully non-interactive download flow."""
-    output_dir = Path(output)
-    resolved_settings = settings or SettingsRepository().load()
-    runtime_config = config or build_runtime_config(resolved_settings)
-
-    async with CdpBrowser(config=runtime_config) as browser:
-        service = ComixService(browser, config=runtime_config)
-        lookup = await resolve_series_from_input(service, url)
+    async with open_application_session(settings=settings, config=config, output=output) as session:
+        lookup = await session.resolve_series(url)
+        resolved_fmt = fmt or session.settings.default_format
+        resolved_optimize = session.settings.optimize_images if optimize is None else optimize
 
         console.print(f"[bold]Looking up '{lookup.slug}'…[/bold]")
         info = lookup.series
@@ -439,16 +408,14 @@ async def flow_noninteractive_download(
             console.print("[red]No valid chapters selected.[/red]")
             return 1
 
-        console.print(f"[bold]Downloading {len(to_download)} chapter(s) as {fmt.upper()}…[/bold]\n")
+        console.print(f"[bold]Downloading {len(to_download)} chapter(s) as {resolved_fmt.upper()}…[/bold]\n")
         await _download_with_progress(
-            browser,
-            service,
+            session,
             series_title=info.title,
             chapters=to_download,
-            output_dir=output_dir,
-            fmt=fmt,
-            config=runtime_config,
-            optimize=optimize,
+            fmt=resolved_fmt,
+            optimize=resolved_optimize,
+            auto_cleanup=quiet,
         )
 
     return 0
@@ -459,14 +426,9 @@ async def flow_noninteractive_download(
 
 async def flow_info(url: str) -> int:
     """Show manga metadata without downloading."""
-    settings = SettingsRepository().load()
-    config = build_runtime_config(settings)
-
-    async with CdpBrowser(config=config) as browser:
-        service = ComixService(browser, config=config)
-
+    async with open_application_session() as session:
         with console.status("[bold cyan]Fetching info…"):
-            lookup = await resolve_series_from_input(service, url)
+            lookup = await session.resolve_series(url)
 
         if lookup.series is None:
             console.print("[red]Manga not found.[/red]")
@@ -484,8 +446,8 @@ def flow_list() -> int:
     """List downloaded manga and chapters."""
     from rich.table import Table
 
-    settings = SettingsRepository().load()
-    output_dir = Path(settings.output_dir)
+    runtime = load_runtime()
+    output_dir = runtime.output_dir
 
     if not output_dir.exists():
         console.print("[yellow]Output directory does not exist.[/yellow]")
@@ -518,10 +480,10 @@ def flow_list() -> int:
 # -- Flow: Clean --------------------------------------------------------------
 
 
-def flow_clean(*, force: bool = False) -> int:
+def flow_clean(*, force: bool = False, auto_confirm: bool = False) -> int:
     """Remove raw image directories that have corresponding PDF/CBZ files."""
-    settings = SettingsRepository().load()
-    output_dir = Path(settings.output_dir)
+    runtime = load_runtime()
+    output_dir = runtime.output_dir
 
     if not output_dir.exists():
         console.print("[yellow]Output directory does not exist.[/yellow]")
@@ -541,7 +503,7 @@ def flow_clean(*, force: bool = False) -> int:
     if len(plan.candidates) > 10:
         console.print(f"  [dim]… and {len(plan.candidates) - 10} more[/dim]")
 
-    if not force:
+    if not (force or auto_confirm):
         confirm = Prompt.ask("\n[bold]Remove these directories?[/bold] [dim](y/N)[/dim]", default="n")
         if confirm.lower() not in ("y", "yes"):
             console.print("[dim]Cancelled.[/dim]")
@@ -560,13 +522,13 @@ def flow_clean(*, force: bool = False) -> int:
     return 0
 
 
-def _auto_cleanup_prompt(output_dir: Path, series_title: str) -> None:
+def _auto_cleanup_prompt(output_dir: Path, series_title: str, *, auto_confirm: bool) -> None:
     """After conversion, offer to remove raw image directories."""
     plan = build_cleanup_plan(output_dir, series_title=series_title)
     if not plan.candidates:
         return
 
-    if console.quiet:
+    if auto_confirm:
         do_clean = True
     else:
         console.print(

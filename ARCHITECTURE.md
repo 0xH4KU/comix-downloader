@@ -5,11 +5,11 @@
 comix-downloader is a desktop-first manga downloader for `comix.to`. It uses a real Chrome instance over CDP to survive Cloudflare, then fetches API metadata and image bytes through that browser session. The current codebase is split across four practical layers:
 
 1. Presentation: `cli/__init__.py`, `cli/interactive.py`, `cli/display.py`
-2. Application use cases: `application/query_usecase.py`, `application/download_usecase.py`, `application/cleanup_usecase.py`, `application/download_reporting.py`
+2. Application use cases: `application/query_usecase.py`, `application/download_usecase.py`, `application/cleanup_usecase.py`, `application/download_reporting.py`, `application/session.py`
 3. Workflow/presentation glue: `cli/flows.py`
 4. Domain/service logic and infrastructure: `comix_service.py`, `downloader.py`, `converters.py`, `browser_session.py`, `cdp_browser.py`, `settings.py`, `history.py`, `fileio.py`, `notify.py`, `errors.py`, `logging_utils.py`
 
-This is the real structure today, not an aspirational diagram. The application layer now owns query/download/cleanup orchestration, while `cli/flows.py` has become a thinner presentation-oriented adapter. The remaining debt is that interactive control flow and Rich rendering are still coupled in that adapter.
+This is the real structure today, not an aspirational diagram. The application layer now owns query/download/cleanup orchestration plus runtime/session wiring, while `cli/flows.py` has become a thinner presentation-oriented adapter. The remaining debt is that interactive control flow and Rich rendering are still coupled in that adapter.
 
 At process start, the CLI loads persisted settings once, builds a per-run `AppConfig`, and passes that config explicitly into the browser, service, downloader, and converter stack. Runtime behavior no longer depends on mutating a process-global config singleton.
 
@@ -28,9 +28,10 @@ cli/__init__.py
            +--> application/query_usecase.py
            +--> application/download_usecase.py
            +--> application/cleanup_usecase.py
-           |
-           +--> comix_service.py
-           +--> downloader.py
+           +--> application/session.py
+            |
+            +--> comix_service.py
+            +--> downloader.py
            +--> converters.py
            +--> history.py
            +--> notify.py
@@ -207,15 +208,26 @@ Cleanup planning is now separated from the CLI:
 
 This keeps filesystem scanning and deletion rules out of presentation code.
 
+### `application/session.py`
+
+Runtime/session setup for CLI commands is now centralized here:
+
+- load normalized settings and runtime config
+- resolve the effective output directory
+- open the browser/session boundary
+- build the `ComixService`
+- expose a small browser-backed session object to the CLI layer
+
+That removes browser/service/bootstrap code from command-dispatch paths and keeps `cli/__init__.py` focused on parsing and routing.
+
 ### `cli/flows.py`
 
-`cli/flows.py` is no longer the core orchestration center, but it still owns interactive flow control:
+`cli/flows.py` is no longer the core orchestration center, but it still owns interactive flow control and Rich rendering:
 
 - Rich progress rendering
 - prompt loops and selection parsing
 - search result / metadata / dedup presentation
 - cleanup confirmation prompts
-- wiring runtime dependencies into application use cases
 
 That is materially better than before, but not the final end-state. The CLI adapter still mixes interaction policy with rendering.
 
@@ -320,7 +332,6 @@ This is intentionally lightweight: it keeps the standard library logging stack, 
 
 The following debts remain real and are intentionally documented here:
 
-- `cli/flows.py` still mixes orchestration, UI, and infrastructure calls
 - `application/download_usecase.py` still talks to history and notification infrastructure directly instead of going through abstract ports
 - CLI still renders several failures with generic text instead of a single centralized error presenter
 - Overall test coverage is still below the desired long-term threshold
