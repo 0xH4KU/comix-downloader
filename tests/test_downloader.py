@@ -5,9 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
-from comix_dl.downloader import Downloader, DownloadProgress, sanitize_dirname
+from comix_dl.downloader import ChapterDownloadResult, Downloader, DownloadProgress, sanitize_dirname
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -138,25 +136,33 @@ class TestDownloadChapter:
         urls = ["https://cdn.com/1.jpg", "https://cdn.com/2.jpg"]
         result = await dl.download_chapter(urls, "Test Manga", "Chapter 1")
 
-        assert result == chapter_dir
+        assert result == ChapterDownloadResult(
+            chapter_dir=chapter_dir,
+            total=2,
+            downloaded=0,
+            skipped=2,
+            failed=0,
+        )
+        assert result.status == "skipped"
         assert len(progress_snapshots) == 1
         assert progress_snapshots[0].skipped == 2
 
-    async def test_all_failures_raises(self, tmp_path: Path, mock_browser: AsyncMock):
-        """If every image download fails, RuntimeError should be raised."""
+    async def test_all_failures_return_failed_status(self, tmp_path: Path, mock_browser: AsyncMock):
+        """If every image download fails, the chapter is marked failed."""
         mock_browser.get_bytes.side_effect = Exception("Network error")
         dl = Downloader(mock_browser, output_dir=tmp_path)
 
         # Disable retry delays for test speed
-        with (
-            patch.object(dl, "_download_image", return_value=False),
-            pytest.raises(RuntimeError, match=r"All .* downloads failed"),
-        ):
-            await dl.download_chapter(
+        with patch.object(dl, "_download_image", return_value=False):
+            result = await dl.download_chapter(
                 ["https://cdn.com/1.jpg"],
                 "Test Manga",
                 "Chapter 1",
             )
+
+        assert result.status == "failed"
+        assert result.failed == 1
+        assert not (result.chapter_dir / ".complete").exists()
 
     async def test_successful_download_creates_marker(self, tmp_path: Path, mock_browser: AsyncMock):
         """Successful download should create .complete marker."""
@@ -170,15 +176,16 @@ class TestDownloadChapter:
             patch("comix_dl.downloader.CONFIG.download.image_delay", 0),
             patch("comix_dl.downloader.CONFIG.download.max_retries", 0),
         ):
-            result_dir = await dl.download_chapter(
+            result = await dl.download_chapter(
                 ["https://cdn.com/1.jpg"],
                 "Test Manga",
                 "Chapter 1",
             )
 
-        assert (result_dir / ".complete").exists()
+        assert result.status == "complete"
+        assert (result.chapter_dir / ".complete").exists()
         # Should have one image file
-        images = [f for f in result_dir.iterdir() if f.suffix == ".jpg"]
+        images = [f for f in result.chapter_dir.iterdir() if f.suffix == ".jpg"]
         assert len(images) == 1
 
     async def test_resume_skips_existing_images(self, tmp_path: Path, mock_browser: AsyncMock):
@@ -196,14 +203,30 @@ class TestDownloadChapter:
             patch("comix_dl.downloader.CONFIG.download.image_delay", 0),
             patch("comix_dl.downloader.CONFIG.download.max_retries", 0),
         ):
-            await dl.download_chapter(
+            result = await dl.download_chapter(
                 ["https://cdn.com/1.jpg", "https://cdn.com/2.jpg"],
                 "Test Manga",
                 "Chapter 1",
             )
 
+        assert result.status == "complete"
         # get_bytes should only be called once (for image 2)
         assert mock_browser.get_bytes.call_count == 1
+
+    async def test_partial_failures_return_partial_status(self, tmp_path: Path, mock_browser: AsyncMock):
+        dl = Downloader(mock_browser, output_dir=tmp_path)
+
+        with patch.object(dl, "_download_image", side_effect=[True, False]):
+            result = await dl.download_chapter(
+                ["https://cdn.com/1.jpg", "https://cdn.com/2.jpg"],
+                "Test Manga",
+                "Chapter 1",
+            )
+
+        assert result.status == "partial"
+        assert result.downloaded == 1
+        assert result.failed == 1
+        assert not (result.chapter_dir / ".complete").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -269,3 +292,11 @@ class TestDownloadProgress:
         assert p.failed == 1
         assert p.skipped == 2
         assert p.current_file == "003"
+
+
+class TestChapterDownloadResult:
+    def test_status_values(self, tmp_path: Path):
+        assert ChapterDownloadResult(tmp_path, total=2, downloaded=0, skipped=2, failed=0).status == "skipped"
+        assert ChapterDownloadResult(tmp_path, total=2, downloaded=2, skipped=0, failed=0).status == "complete"
+        assert ChapterDownloadResult(tmp_path, total=2, downloaded=1, skipped=0, failed=1).status == "partial"
+        assert ChapterDownloadResult(tmp_path, total=2, downloaded=0, skipped=0, failed=2).status == "failed"

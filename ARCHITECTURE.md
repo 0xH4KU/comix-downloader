@@ -67,7 +67,7 @@ Key identifiers:
 - Downloads images via `CdpBrowser.get_bytes()` (fetch inside Chrome page, base64 encoded)
 - Concurrency controlled by `asyncio.Semaphore` (default: 8 images at once)
 - Automatic retry with exponential backoff
-- **Resume support** — skips existing images, writes `.complete` marker on chapter completion
+- **Resume support** — skips existing images, writes `.complete` marker only when every page succeeds
 - File extension detection from URL or magic bytes (including AVIF)
 
 ### `converters.py` — PDF / CBZ
@@ -116,7 +116,7 @@ Download: hash_id → API chapters → user selects → for each chapter:
 Resume:  chapter_dir/.complete exists? → skip
          image file already exists?    → skip
 
-Convert: image directory → (optional: optimize to WebP) → PDF/CBZ → output file
+Convert: fully-complete image directory → (optional: optimize to WebP) → PDF/CBZ → output file
 
 History: download finishes → record to history.json → send desktop notification
 ```

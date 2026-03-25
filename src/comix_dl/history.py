@@ -30,6 +30,7 @@ class HistoryEntry:
     format: str
     total_size_bytes: int = 0
     completed: int = 0
+    partial: int = 0
     failed: int = 0
     skipped: int = 0
 
@@ -40,6 +41,7 @@ def record_download(
     fmt: str,
     total_size_bytes: int = 0,
     completed: int = 0,
+    partial: int = 0,
     failed: int = 0,
     skipped: int = 0,
 ) -> None:
@@ -51,6 +53,7 @@ def record_download(
         format=fmt,
         total_size_bytes=total_size_bytes,
         completed=completed,
+        partial=partial,
         failed=failed,
         skipped=skipped,
     )

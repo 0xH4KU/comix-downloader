@@ -468,6 +468,7 @@ async def download_chapters(
     total_chapters = len(chapters)
     completed_ok = 0
     skipped_count = 0
+    partial_count = 0
     failed_count = 0
     total_bytes = 0
 
@@ -487,7 +488,7 @@ async def download_chapters(
     sem = asyncio.Semaphore(settings.concurrent_chapters)
 
     async def _one(ch: ChapterInfo) -> None:
-        nonlocal completed_ok, skipped_count, failed_count, total_bytes
+        nonlocal completed_ok, skipped_count, partial_count, failed_count, total_bytes
 
         if _is_shutdown():
             return
@@ -519,21 +520,32 @@ async def download_chapters(
                 progress.update(_tid, completed=p.completed)  # type: ignore[arg-type]
 
             downloader._on_progress = on_img
-            try:
-                image_dir = await downloader.download_chapter(
-                    chapter_data.image_urls,
-                    series_title,
-                    chapter_data.chapter_label,
-                )
-            except RuntimeError:
+            download_result = await downloader.download_chapter(
+                chapter_data.image_urls,
+                series_title,
+                chapter_data.chapter_label,
+            )
+
+            total_bytes += downloader.bytes_downloaded
+
+            if download_result.status == "failed":
                 progress.update(task_id, description=f"  [red]✗ {ch.title}[/red]")
                 failed_count += 1
                 return
 
-            total_bytes += downloader.bytes_downloaded
+            if download_result.status == "partial":
+                progress.update(
+                    task_id,
+                    description=(
+                        f"  [yellow]⚠ {ch.title} "
+                        f"({download_result.failed}/{download_result.total} pages failed)[/yellow]"
+                    ),
+                )
+                partial_count += 1
+                return
 
             try:
-                out = convert(image_dir, fmt, optimize=optimize)
+                out = convert(download_result.chapter_dir, fmt, optimize=optimize)
                 progress.update(task_id, description=f"  [green]✓ {out.name}[/green]")
                 completed_ok += 1
             except RuntimeError:
@@ -557,6 +569,8 @@ async def download_chapters(
         parts.append(f"[green]{completed_ok} downloaded[/green]")
     if skipped_count:
         parts.append(f"[dim]{skipped_count} skipped[/dim]")
+    if partial_count:
+        parts.append(f"[yellow]{partial_count} partial[/yellow]")
     if failed_count:
         parts.append(f"[red]{failed_count} failed[/red]")
 
@@ -573,7 +587,7 @@ async def download_chapters(
     console.print(Panel(
         summary_line,
         title="[bold]Download Summary[/bold]",
-        border_style="green" if failed_count == 0 else "yellow",
+        border_style="green" if failed_count == 0 and partial_count == 0 else "yellow",
     ))
 
     # Record to history
@@ -583,6 +597,7 @@ async def download_chapters(
         fmt=fmt,
         total_size_bytes=total_bytes,
         completed=completed_ok,
+        partial=partial_count,
         failed=failed_count,
         skipped=skipped_count,
     )
@@ -592,6 +607,8 @@ async def download_chapters(
         notify_body = f"{completed_ok} downloaded"
         if skipped_count:
             notify_body += f", {skipped_count} skipped"
+        if partial_count:
+            notify_body += f", {partial_count} partial"
         if failed_count:
             notify_body += f", {failed_count} failed"
         notify_body += f" ({size_str})"

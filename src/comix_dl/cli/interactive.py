@@ -116,6 +116,8 @@ def flow_history(*, action: str | None = None) -> int:
             parts.append(f"[green]{entry.completed} ok[/green]")
         if entry.skipped:
             parts.append(f"[dim]{entry.skipped} skip[/dim]")
+        if entry.partial:
+            parts.append(f"[yellow]{entry.partial} partial[/yellow]")
         if entry.failed:
             parts.append(f"[red]{entry.failed} fail[/red]")
         status = " ".join(parts)

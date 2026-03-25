@@ -46,9 +46,10 @@ class TestRecordDownload:
         assert entries[1].title == "Manga A"
 
     def test_record_with_stats(self, tmp_path):
-        record_download("Manga A", 10, "both", completed=8, failed=1, skipped=1)
+        record_download("Manga A", 10, "both", completed=7, partial=1, failed=1, skipped=1)
         entry = list_history()[0]
-        assert entry.completed == 8
+        assert entry.completed == 7
+        assert entry.partial == 1
         assert entry.failed == 1
         assert entry.skipped == 1
 
@@ -110,6 +111,7 @@ class TestHistoryEntry:
             format="pdf",
             total_size_bytes=2048,
             completed=4,
+            partial=1,
             failed=1,
             skipped=0,
         )

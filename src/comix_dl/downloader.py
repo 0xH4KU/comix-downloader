@@ -34,6 +34,31 @@ class DownloadProgress:
     total_bytes: int = 0
 
 
+@dataclass
+class ChapterDownloadResult:
+    """Final status for a chapter download attempt."""
+
+    chapter_dir: Path
+    total: int
+    downloaded: int
+    skipped: int
+    failed: int
+
+    @property
+    def success_count(self) -> int:
+        return self.downloaded + self.skipped
+
+    @property
+    def status(self) -> str:
+        if self.failed == self.total:
+            return "failed"
+        if self.failed > 0:
+            return "partial"
+        if self.downloaded == 0 and self.skipped == self.total:
+            return "skipped"
+        return "complete"
+
+
 # Type alias for progress callback
 ProgressCallback = Callable[[DownloadProgress], None]
 
@@ -80,7 +105,7 @@ class Downloader:
         chapter: str,
         *,
         referer: str | None = None,
-    ) -> Path:
+    ) -> ChapterDownloadResult:
         """Download all images for a chapter.
 
         Supports resume — if individual images already exist on disk they are
@@ -93,10 +118,7 @@ class Downloader:
             referer: Referer header for image requests.
 
         Returns:
-            Path to the directory containing downloaded images.
-
-        Raises:
-            RuntimeError: If all downloads fail.
+            Final download result for the chapter.
         """
         chapter_dir = self._output_dir / sanitize_dirname(title) / sanitize_dirname(chapter)
         chapter_dir.mkdir(parents=True, exist_ok=True)
@@ -112,7 +134,13 @@ class Downloader:
                     skipped=len(image_urls),
                     current_file="(skipped)",
                 ))
-            return chapter_dir
+            return ChapterDownloadResult(
+                chapter_dir=chapter_dir,
+                total=len(image_urls),
+                downloaded=0,
+                skipped=len(image_urls),
+                failed=0,
+            )
 
         total = len(image_urls)
         semaphore = asyncio.Semaphore(self._config.download.max_concurrent_images)
@@ -167,16 +195,26 @@ class Downloader:
         completed = results.count("ok")
         skipped = results.count("skip")
         failed = results.count("fail")
-        success_count = completed + skipped
-
-        if success_count == 0:
-            raise RuntimeError(f"All {total} image downloads failed for {title} - {chapter}")
+        result = ChapterDownloadResult(
+            chapter_dir=chapter_dir,
+            total=total,
+            downloaded=completed,
+            skipped=skipped,
+            failed=failed,
+        )
 
         # Mark as complete (only if no failures)
         if failed == 0:
             (chapter_dir / _COMPLETE_MARKER).touch()
 
-        if skipped > 0:
+        if result.status == "failed":
+            logger.warning("%s - %s: all %d images failed", title, chapter, total)
+        elif result.status == "partial":
+            logger.warning(
+                "%s - %s: %d downloaded, %d skipped, %d failed (not marked complete)",
+                title, chapter, completed, skipped, failed,
+            )
+        elif skipped > 0:
             logger.info(
                 "%s - %s: %d downloaded, %d skipped (resumed), %d failed",
                 title, chapter, completed, skipped, failed,
@@ -192,7 +230,7 @@ class Downloader:
                 title, chapter, total,
             )
 
-        return chapter_dir
+        return result
 
     async def _download_image(
         self,
