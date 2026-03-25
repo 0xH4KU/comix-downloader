@@ -96,6 +96,16 @@ The service client talks to the `comix.to` v2 REST API and normalizes chapter me
 - Partial/failed chapters write `chapter.state.json`
 - Only fully successful chapters get a `.complete` marker
 
+### `converters.py`
+
+`converters.py` packages only complete chapter directories into user-facing archives:
+
+- CBZ output is a direct stored archive of the validated image set
+- Large PDF output is rendered in batches to cap memory use
+- Multi-batch PDF merge uses the bundled `pypdf` runtime dependency by default
+- `pikepdf` remains an optional faster backend when present
+- Missing merge support is treated as a hard failure instead of producing a truncated PDF
+
 ## Download State Model
 
 The downloader now has an explicit result model instead of inferring success from scattered counters.
@@ -228,7 +238,6 @@ The following debts remain real and are intentionally documented here:
 
 - `cli/flows.py` still mixes orchestration, UI, and infrastructure calls
 - Global mutable `CONFIG` is still the configuration distribution mechanism
-- Settings and history do not yet have dedicated repository abstractions
 - Domain errors are still too generic in several flows
 - Overall test coverage is still below the desired long-term threshold
 

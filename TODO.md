@@ -21,7 +21,7 @@
 說明：目前大於 `batch_size` 的 PDF 在缺少 `pikepdf/pypdf` 時只會保留第一批頁面，這是資料遺失。
 完成標準：大章節 PDF 在任何支援路徑下都不能少頁；若依賴不足，必須明確失敗，不允許產出不完整檔案。
 
-- [ ] 將 PDF 合併依賴改為正式 runtime 依賴，或改寫為單一路徑實作
+- [x] 將 PDF 合併依賴改為正式 runtime 依賴，或改寫為單一路徑實作
 說明：目前合併能力依賴 optional import，但 `pyproject.toml` 沒有宣告。
 完成標準：`pip install -e .` 後即可可靠產生大 PDF，無隱含依賴。
 
@@ -207,7 +207,7 @@
 
 ## 建議實作順序
 
-- [ ] Milestone 1：修正資料正確性
+- [x] Milestone 1：修正資料正確性
 範圍：大 PDF、partial download、atomic write、resume 驗證、history/notification 修正。
 
 - [x] Milestone 2：修正瀏覽器高可用性
@@ -227,7 +227,7 @@
 - [x] `pytest` 可從乾淨環境直接通過
 - [ ] 核心模組覆蓋率達標
 - [x] 大章節 PDF 無少頁
-- [ ] 中途中斷可安全恢復
+- [x] 中途中斷可安全恢復
 - [x] 多實例策略明確且受測
 - [x] 403 / CF 過期可自動恢復或明確失敗
 - [x] history / notification 不再誤報成功

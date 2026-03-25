@@ -187,7 +187,7 @@ def _merge_pdfs(pdf_paths: list[Path], output: Path) -> None:
 
     # Fallback: if no pikepdf, use pypdf
     try:
-        from pypdf import PdfWriter  # type: ignore[import-not-found]
+        from pypdf import PdfWriter
         writer = PdfWriter()
         for p in pdf_paths:
             writer.append(str(p))

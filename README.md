@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.29-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.30-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -28,6 +28,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Cheaper resume scans** — existing chapter files are indexed once per run instead of re-scanning the directory for every page
 - **Smart dedup** — chapter dedup keeps language variants distinct and only collapses true same-language duplicates by image count
 - **Sharper failure diagnostics** — Cloudflare expiry, API 403, image timeouts, page-pool exhaustion, and PDF merge-backend gaps now surface as targeted errors
+- **Reliable large PDF merge** — normal installs now include `pypdf`, so multi-batch PDF output works without hidden extra dependencies
 - **Rate limiting** — randomized download delays to avoid triggering anti-scraping (toggleable)
 - **PDF / CBZ output** — convert downloaded images to PDF or CBZ archives
 - **Image optimization** — optional WebP conversion for 40-60% size savings (on by default)
@@ -84,6 +85,8 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 playwright install chromium
 ```
+
+Normal installs now pull in `pypdf`, which is the default merge backend for large multi-batch PDF output.
 
 For contributor workflow, local quality gates, and regression-test expectations, see `CONTRIBUTING.md`.
 
@@ -227,7 +230,7 @@ Checks Python version, dependencies, Chrome availability, and output directory.
 
 6. **Resume** — each chapter directory gets a `.complete` marker only after every page succeeds. Re-running the same download skips completed chapters and resumes partially-downloaded ones. Existing image files are validated before reuse, invalid files are re-downloaded, stale temp artifacts are cleaned up, and incomplete chapters keep `chapter.state.json` until a later successful rerun clears it.
 
-7. **Convert** — only fully successful chapters are packaged into PDF or CBZ. Multi-batch PDF conversion now fails fast if no merge backend is available, instead of emitting a truncated file.
+7. **Convert** — only fully successful chapters are packaged into PDF or CBZ. Large chapters are rendered in batches and merged with the bundled `pypdf` backend (or `pikepdf` if you install it), so a normal install can emit full PDFs without hidden setup. If the merge backend is missing in a broken environment, conversion fails fast instead of emitting a truncated file.
 
 8. **Graceful shutdown** — `Ctrl+C` finishes current downloads then stops. An `atexit` handler ensures the Chrome started by the current Python process is cleaned up even on crashes, without using a shared global PID kill path.
 

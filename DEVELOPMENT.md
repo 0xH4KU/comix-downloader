@@ -11,6 +11,8 @@ pip install -e ".[dev]"
 playwright install chromium
 ```
 
+The editable install includes the runtime `pypdf` dependency, so large PDF chapters do not require a separate merge-backend install.
+
 ## Project Layout
 
 ``` 

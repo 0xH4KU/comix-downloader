@@ -197,6 +197,18 @@ class TestToPdf:
         ):
             to_pdf(img_dir)
 
+    def test_large_pdf_merges_all_pages_when_backend_available(self, tmp_path: Path):
+        from pypdf import PdfReader
+
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=21)
+
+        result = to_pdf(img_dir)
+
+        assert result.exists()
+        assert len(PdfReader(str(result)).pages) == 21
+
 
 # ---------------------------------------------------------------------------
 # convert — format routing
