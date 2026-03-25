@@ -182,13 +182,7 @@ class BrowserSessionManager:
                 if contexts
                 else await self._new_context_with_timeout(browser, action="Creating a browser context")
             )
-
-            pages = self._context.pages
-            self._page = (
-                pages[0]
-                if pages
-                else await self._new_page_with_timeout(action="Creating the main browser page")
-            )
+            self._page = await self._prepare_main_page()
             self._started = True
         except Exception:
             await self.close()
@@ -344,6 +338,34 @@ class BrowserSessionManager:
             action=action,
         )
 
+    async def _close_page_quietly(self, page: Page) -> None:
+        """Close one page and suppress browser-side cleanup errors."""
+        with contextlib.suppress(Exception):
+            await page.close()
+
+    async def _prepare_main_page(self) -> Page:
+        """Reuse one healthy page as the primary tab and close any extras."""
+        assert self._context is not None
+        main_page: Page | None = None
+        extra_pages: list[Page] = []
+
+        for page in list(self._context.pages):
+            if not self._page_is_healthy(page):
+                extra_pages.append(page)
+                continue
+            if main_page is None:
+                main_page = page
+                continue
+            extra_pages.append(page)
+
+        if extra_pages:
+            await asyncio.gather(*[self._close_page_quietly(page) for page in extra_pages])
+            logger.info("Closed %d stray browser tab(s) before starting session", len(extra_pages))
+
+        if main_page is not None:
+            return main_page
+        return await self._new_page_with_timeout(action="Creating the main browser page")
+
     async def _goto_with_timeout(self, page: Page, url: str, *, action: str) -> None:
         """Navigate with an explicit timeout."""
         await self._run_with_timeout(
@@ -378,6 +400,9 @@ class BrowserSessionManager:
             with contextlib.suppress(Exception):
                 await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
+
+        if self._page is not None and self._page not in self._all_pages:
+            await self._close_page_quietly(self._page)
 
         for page in self._all_pages:
             with contextlib.suppress(Exception):

@@ -56,6 +56,7 @@ class CdpBrowser(BrowserSessionManager):
         super().__init__(max_pages=max_pages, config=config)
         self._cf_cleared = False
         self._cf_lock = asyncio.Lock()
+        self._main_page_lock = asyncio.Lock()
 
     async def close(self) -> None:
         try:
@@ -101,36 +102,110 @@ class CdpBrowser(BrowserSessionManager):
         await self.ensure_cf_clearance()
 
         for attempt in range(2):
-            page = await self.acquire_page() if use_page_pool else await self._ensure_page()
-            try:
-                result = await self._evaluate_with_timeout(
-                    page,
-                    expression,
-                    arg,
-                    timeout_ms=self._config.download.read_timeout_ms,
+            if use_page_pool:
+                should_retry, result = await self._evaluate_request_attempt(
+                    url=url,
+                    expression=expression,
+                    arg=arg,
                     action=action,
+                    attempt=attempt,
+                    use_page_pool=True,
                 )
-            except Exception as exc:
-                if self._is_cf_access_error(exc):
-                    self._release_page_if_pooled(page)
-                    if attempt == 0:
-                        await self._refresh_cf_clearance(
-                            reason=f"{action} received HTTP 403 from {url}.",
-                        )
-                        continue
-                    raise CloudflareChallengeError(
-                        "Cloudflare clearance refresh did not recover browser access "
-                        f"to {url} after HTTP 403.",
-                    ) from exc
-                if use_page_pool:
-                    await self._replace_dead_page(page)
-                raise
             else:
-                if use_page_pool:
-                    self.release_page(page)
-                return result
+                async with self._main_page_lock:
+                    should_retry, result = await self._evaluate_request_attempt(
+                        url=url,
+                        expression=expression,
+                        arg=arg,
+                        action=action,
+                        attempt=attempt,
+                        use_page_pool=False,
+                    )
+            if should_retry:
+                continue
+            return result
 
         raise AssertionError("CF retry loop exited unexpectedly")
+
+    async def _evaluate_request_attempt(
+        self,
+        *,
+        url: str,
+        expression: str,
+        arg: object,
+        action: str,
+        attempt: int,
+        use_page_pool: bool,
+    ) -> tuple[bool, object]:
+        """Run one browser request attempt and report whether the caller should retry."""
+        page = await self.acquire_page() if use_page_pool else await self._ensure_page()
+        try:
+            result = await self._evaluate_with_timeout(
+                page,
+                expression,
+                arg,
+                timeout_ms=self._config.download.read_timeout_ms,
+                action=action,
+            )
+        except Exception as exc:
+            if self._is_cf_access_error(exc):
+                self._release_page_if_pooled(page)
+                if attempt == 0:
+                    await self._refresh_cf_clearance(
+                        reason=f"{action} received HTTP 403 from {url}.",
+                    )
+                    return True, {}
+                raise CloudflareChallengeError(
+                    "Cloudflare clearance refresh did not recover browser access "
+                    f"to {url} after HTTP 403.",
+                ) from exc
+            if use_page_pool:
+                await self._replace_dead_page(page)
+            raise
+        else:
+            if use_page_pool:
+                self.release_page(page)
+            return False, result
+
+    async def _bring_page_to_front(self, page: Page) -> None:
+        """Try to focus the tab the user must solve Cloudflare in."""
+        with contextlib.suppress(Exception):
+            await self._run_with_timeout(
+                page.bring_to_front(),
+                timeout_ms=self._config.browser.timeout_ms,
+                action="Bringing Cloudflare challenge tab to front",
+            )
+
+    async def _probe_service_access(self, page: Page) -> bool:
+        """Verify that the current browser context can reach the service origin."""
+        probe_url = f"{self._config.service.base_url}/api/v2/manga?keyword=test&limit=1"
+        try:
+            result = await self._evaluate_with_timeout(
+                page,
+                """async (url) => {
+                    const resp = await fetch(url, { redirect: 'follow' });
+                    return {
+                        ok: resp.ok,
+                        url: resp.url,
+                        contentType: resp.headers.get('content-type') || '',
+                    };
+                }""",
+                probe_url,
+                timeout_ms=self._config.browser.timeout_ms,
+                action=f"Probing browser access to {probe_url}",
+            )
+        except Exception:
+            return False
+
+        if not isinstance(result, dict):
+            return False
+        if result.get("ok") is not True:
+            return False
+
+        final_url = str(result.get("url", "")).lower()
+        if "/cdn-cgi/challenge-platform/" in final_url or "__cf_chl_" in final_url:
+            return False
+        return "json" in str(result.get("contentType", "")).lower()
 
     async def ensure_cf_clearance(self) -> None:
         """Navigate to comix.to to pass CF challenge if needed."""
@@ -149,6 +224,7 @@ class CdpBrowser(BrowserSessionManager):
 
             if await self._is_cf_challenge(page):
                 logger.info("CF challenge detected - bringing Chrome to front for manual solve")
+                await self._bring_page_to_front(page)
                 with contextlib.suppress(Exception):
                     await self._evaluate_with_timeout(
                         page,
@@ -243,7 +319,7 @@ class CdpBrowser(BrowserSessionManager):
         )
         return cast("dict[str, object]", result)
 
-    async def get_json(self, url: str) -> dict[str, object]:
+    async def get_json(self, url: str, *, use_page_pool: bool = True) -> dict[str, object]:
         """GET JSON via page.evaluate(fetch())."""
         result = await self._evaluate_request_with_cf_retry(
             url=url,
@@ -254,7 +330,7 @@ class CdpBrowser(BrowserSessionManager):
             }""",
             arg=url,
             action=f"Fetching JSON from {url}",
-            use_page_pool=True,
+            use_page_pool=use_page_pool,
         )
         return cast("dict[str, object]", result)
 
@@ -307,6 +383,10 @@ class CdpBrowser(BrowserSessionManager):
 
         while time.monotonic() < deadline:
             await asyncio.sleep(1.0)
+
+            if await self._has_cf_clearance_cookie(page) and await self._probe_service_access(page):
+                logger.info("CF clearance cookie is present and service access probe succeeded")
+                return
 
             try:
                 still = await self._is_cf_challenge(page)

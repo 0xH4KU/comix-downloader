@@ -266,6 +266,40 @@ class TestBrowserTimeouts:
         assert result is healthy_page
         browser._replace_dead_page.assert_awaited_once_with(dead_page)
 
+    async def test_start_reuses_one_primary_page_and_closes_stray_tabs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        browser = BrowserSessionManager(config=AppConfig())
+        browser._acquire_instance_lock = MagicMock()
+        browser._release_instance_lock = MagicMock()
+        browser._launch_chrome = MagicMock()
+
+        primary_page = MagicMock()
+        primary_page.is_closed.return_value = False
+        primary_page.close = AsyncMock()
+        extra_page = MagicMock()
+        extra_page.is_closed.return_value = False
+        extra_page.close = AsyncMock()
+
+        context = SimpleNamespace(pages=[primary_page, extra_page])
+        browser_object = SimpleNamespace(contexts=[context])
+        browser._connect_over_cdp_with_timeout = AsyncMock(return_value=browser_object)
+
+        playwright = SimpleNamespace(chromium=SimpleNamespace(), stop=AsyncMock())
+        monkeypatch.setattr(
+            "playwright.async_api.async_playwright",
+            MagicMock(return_value=SimpleNamespace(start=AsyncMock(return_value=playwright))),
+        )
+
+        await browser.start()
+
+        assert browser._page is primary_page
+        extra_page.close.assert_awaited_once()
+
+        await browser.close()
+        primary_page.close.assert_awaited_once()
+
     async def test_replace_dead_page_enqueues_replacement_page(self):
         browser = BrowserSessionManager(config=AppConfig())
         dead_page = MagicMock()
@@ -531,6 +565,24 @@ class TestBrowserHelpers:
         assert call_kwargs["use_page_pool"] is False
         assert call_kwargs["arg"] == ["https://api.example.com/post", {"name": "value"}]
 
+    async def test_ensure_cf_clearance_brings_challenge_tab_to_front(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        page = MagicMock()
+        page.bring_to_front = AsyncMock()
+        browser._page = page
+        browser._ensure_page = AsyncMock(return_value=page)
+        browser._goto_with_timeout = AsyncMock()
+        browser._evaluate_with_timeout = AsyncMock(return_value=None)
+        browser._is_cf_challenge = AsyncMock(return_value=True)
+        browser._wait_for_cf_clearance = AsyncMock()
+        browser._init_pool_pages = AsyncMock()
+
+        await browser.ensure_cf_clearance()
+
+        page.bring_to_front.assert_awaited_once()
+        browser._wait_for_cf_clearance.assert_awaited_once_with(page)
+
     async def test_is_cf_challenge_returns_false_when_clearance_cookie_exists(self):
         browser = CdpBrowser(config=AppConfig())
         page = MagicMock()
@@ -603,6 +655,37 @@ class TestBrowserHelpers:
         await browser._wait_for_cf_clearance(page)
 
         browser._is_cf_challenge.assert_awaited_once_with(page)
+
+    async def test_wait_for_cf_clearance_accepts_probe_success_before_dom_fully_clears(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        browser = CdpBrowser(config=AppConfig())
+        browser._config.browser.cf_wait_seconds = 5
+        browser._has_cf_clearance_cookie = AsyncMock(return_value=True)
+        browser._probe_service_access = AsyncMock(return_value=True)
+        browser._is_cf_challenge = AsyncMock(return_value=True)
+        page = MagicMock()
+
+        class _Clock:
+            def __init__(self) -> None:
+                self.now = 0.0
+
+            def monotonic(self) -> float:
+                return self.now
+
+            async def sleep(self, seconds: float) -> None:
+                self.now += seconds
+
+        clock = _Clock()
+
+        monkeypatch.setattr("comix_dl.cdp_browser.time.monotonic", clock.monotonic)
+        monkeypatch.setattr("comix_dl.cdp_browser.asyncio.sleep", AsyncMock(side_effect=clock.sleep))
+
+        await browser._wait_for_cf_clearance(page)
+
+        browser._probe_service_access.assert_awaited_once_with(page)
+        browser._is_cf_challenge.assert_not_awaited()
 
     async def test_ensure_cf_clearance_warns_when_cookie_is_missing(
         self,

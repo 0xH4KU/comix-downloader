@@ -233,6 +233,7 @@ class TestSearch:
         assert results[0].hash_id == "abc123"
         assert results[0].slug == "one-piece"
         assert "one-piece" in results[0].url
+        assert mock_browser.get_json.await_args.kwargs["use_page_pool"] is False
 
     async def test_empty_result(self, mock_browser: AsyncMock):
         mock_browser.get_json.return_value = {"result": {"items": []}}
