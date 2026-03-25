@@ -98,6 +98,7 @@ Notes:
 - Low-level localhost socket tests auto-skip in restricted sandboxes that do not allow binding TCP ports.
 - Current high-risk module baselines are tracked in CI: `cli/__init__.py` 100%, `cli/flows.py` 89%, `cdp_browser.py` 78%, `converters.py` 70%.
 - `MIGRATION.md` captures maintainer-facing upgrade notes; `RELEASE_CHECKLIST.md` defines the slice release order and final verification sequence.
+- Search/info smoke tests should verify that API failures surface explicit `RemoteApiError` text rather than falling through to empty-result messaging.
 
 ## Key Concepts
 

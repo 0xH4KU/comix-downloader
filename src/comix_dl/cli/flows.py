@@ -28,6 +28,7 @@ from comix_dl.cli.display import (
     print_series_header,
 )
 from comix_dl.cli.interactive import filter_chapters_interactive, parse_chapter_selection
+from comix_dl.errors import RemoteApiError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -66,6 +67,11 @@ def _render_series_info_panel(info: SeriesInfo) -> None:
         title="[bold]Manga Info[/bold]",
         border_style="cyan",
     ))
+
+
+def _render_remote_api_error(exc: RemoteApiError) -> None:
+    """Render one user-meaningful API failure at the CLI boundary."""
+    console.print(f"[red]{exc}[/red]")
 
 
 def _prompt_chapter_selection(chapters: list[ChapterInfo]) -> list[ChapterInfo] | None:
@@ -227,8 +233,12 @@ async def _download_with_progress(
 async def flow_search(query: str, *, quiet: bool = False) -> int:
     """Interactive search → select → download."""
     async with open_application_session() as session:
-        with console.status("[bold cyan]Searching…"):
-            results = await session.search(query)
+        try:
+            with console.status("[bold cyan]Searching…"):
+                results = await session.search(query)
+        except RemoteApiError as exc:
+            _render_remote_api_error(exc)
+            return 1
 
         if not results:
             console.print("[yellow]No results found.[/yellow]")
@@ -266,8 +276,12 @@ async def flow_search(query: str, *, quiet: bool = False) -> int:
             console.print(f"\n[bold cyan]→ {selected.title}[/bold cyan]")
 
             if show_info:
-                with console.status("[bold cyan]Loading info…"):
-                    info = await session.load_series(selected.hash_id)
+                try:
+                    with console.status("[bold cyan]Loading info…"):
+                        info = await session.load_series(selected.hash_id)
+                except RemoteApiError as exc:
+                    _render_remote_api_error(exc)
+                    return 1
                 _render_series_info_panel(info)
 
                 cont = Prompt.ask("[bold]Fetch chapters?[/bold] [dim](Y/n)[/dim]", default="y")
@@ -282,8 +296,12 @@ async def flow_search(query: str, *, quiet: bool = False) -> int:
             return 1
 
         if info is None:
-            with console.status("[bold cyan]Loading chapters…"):
-                info = await session.load_series(selected.hash_id)
+            try:
+                with console.status("[bold cyan]Loading chapters…"):
+                    info = await session.load_series(selected.hash_id)
+            except RemoteApiError as exc:
+                _render_remote_api_error(exc)
+                return 1
 
         if not info.chapters:
             console.print("[yellow]No chapters found.[/yellow]")
@@ -320,8 +338,12 @@ async def flow_search(query: str, *, quiet: bool = False) -> int:
 async def flow_url_download(url: str, *, quiet: bool = False) -> int:
     """Download from a manga URL (interactive mode)."""
     async with open_application_session() as session:
-        with console.status("[bold cyan]Fetching series info…"):
-            lookup = await session.resolve_series(url)
+        try:
+            with console.status("[bold cyan]Fetching series info…"):
+                lookup = await session.resolve_series(url)
+        except RemoteApiError as exc:
+            _render_remote_api_error(exc)
+            return 1
 
         info = lookup.series
         if info is None and lookup.suggestions:
@@ -339,8 +361,12 @@ async def flow_url_download(url: str, *, quiet: bool = False) -> int:
                 console.print("[red]Invalid selection.[/red]")
                 return 1
 
-            with console.status("[bold cyan]Loading chapters…"):
-                info = await session.load_series(selected.hash_id)
+            try:
+                with console.status("[bold cyan]Loading chapters…"):
+                    info = await session.load_series(selected.hash_id)
+            except RemoteApiError as exc:
+                _render_remote_api_error(exc)
+                return 1
 
         if info is None:
             console.print("[yellow]Could not find manga. Try using search instead.[/yellow]")
@@ -387,7 +413,11 @@ async def flow_noninteractive_download(
 ) -> int:
     """Fully non-interactive download flow."""
     async with open_application_session(settings=settings, config=config, output=output) as session:
-        lookup = await session.resolve_series(url)
+        try:
+            lookup = await session.resolve_series(url)
+        except RemoteApiError as exc:
+            _render_remote_api_error(exc)
+            return 1
         resolved_fmt = fmt or session.settings.default_format
         resolved_optimize = session.settings.optimize_images if optimize is None else optimize
 
@@ -427,8 +457,12 @@ async def flow_noninteractive_download(
 async def flow_info(url: str) -> int:
     """Show manga metadata without downloading."""
     async with open_application_session() as session:
-        with console.status("[bold cyan]Fetching info…"):
-            lookup = await session.resolve_series(url)
+        try:
+            with console.status("[bold cyan]Fetching info…"):
+                lookup = await session.resolve_series(url)
+        except RemoteApiError as exc:
+            _render_remote_api_error(exc)
+            return 1
 
         if lookup.series is None:
             console.print("[red]Manga not found.[/red]")

@@ -515,6 +515,9 @@ class TestBrowserHelpers:
         browser = CdpBrowser(config=AppConfig())
         page = MagicMock()
         page.context.cookies = AsyncMock(return_value=[{"name": "cf_clearance"}])
+        page.title = AsyncMock(return_value="regular page")
+        page.query_selector = AsyncMock(return_value=None)
+        page.content = AsyncMock(return_value="<html>ok</html>")
 
         assert await browser._is_cf_challenge(page) is False
 
@@ -530,6 +533,26 @@ class TestBrowserHelpers:
         page.context.cookies = AsyncMock(side_effect=RuntimeError("no cookies"))
         page.title = AsyncMock(return_value="regular page")
         page.query_selector = AsyncMock(side_effect=[None, object()])
+
+        assert await browser._is_cf_challenge(page) is True
+
+    async def test_is_cf_challenge_prefers_live_challenge_signal_over_stale_cookie(self):
+        browser = CdpBrowser(config=AppConfig())
+        page = MagicMock()
+        page.context.cookies = AsyncMock(return_value=[{"name": "cf_clearance"}])
+        page.title = AsyncMock(return_value=browser._config.browser.cf_titles[0])
+
+        assert await browser._is_cf_challenge(page) is True
+
+    async def test_is_cf_challenge_detects_challenge_content_markers(self):
+        browser = CdpBrowser(config=AppConfig())
+        page = MagicMock()
+        page.context.cookies = AsyncMock(return_value=[])
+        page.title = AsyncMock(return_value="regular page")
+        page.query_selector = AsyncMock(return_value=None)
+        page.content = AsyncMock(
+            return_value="<script src='/cdn-cgi/challenge-platform/h/g/orchestrate'></script>",
+        )
 
         assert await browser._is_cf_challenge(page) is True
 
@@ -560,3 +583,23 @@ class TestBrowserHelpers:
         await browser._wait_for_cf_clearance(page)
 
         browser._is_cf_challenge.assert_awaited_once_with(page)
+
+    async def test_ensure_cf_clearance_warns_when_cookie_is_missing(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        page = MagicMock()
+        browser._page = page
+        browser._ensure_page = AsyncMock(return_value=page)
+        browser._goto_with_timeout = AsyncMock()
+        browser._is_cf_challenge = AsyncMock(return_value=False)
+        browser._has_cf_clearance_cookie = AsyncMock(return_value=False)
+        browser._init_pool_pages = AsyncMock()
+
+        with caplog.at_level("WARNING"):
+            await browser.ensure_cf_clearance()
+
+        assert "without a cf_clearance cookie" in caplog.text
+        browser._init_pool_pages.assert_awaited_once_with(browser._config.service.base_url)

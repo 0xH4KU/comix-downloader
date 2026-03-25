@@ -254,23 +254,30 @@ class TestSearch:
         assert len(results) == 1
         assert results[0].title == "Has Hash"
 
-    async def test_api_error_returns_empty(self, mock_browser: AsyncMock):
+    async def test_api_error_raises_remote_api_error(self, mock_browser: AsyncMock):
         mock_browser.get_json.side_effect = Exception("Network error")
         svc = _make_service(mock_browser)
-        results = await svc.search("test")
-        assert results == []
+        with pytest.raises(RemoteApiError, match=r"Search for 'test' failed: Network error"):
+            await svc.search("test")
 
-    async def test_403_error_returns_empty(self, mock_browser: AsyncMock):
+    async def test_403_error_raises_remote_api_error(self, mock_browser: AsyncMock):
         mock_browser.get_json.side_effect = Exception("HTTP 403 Forbidden")
         svc = _make_service(mock_browser)
-        results = await svc.search("test")
-        assert results == []
+        with pytest.raises(
+            RemoteApiError,
+            match=(
+                r"Search for 'test' failed: API request was blocked by HTTP 403\. "
+                r"Cloudflare clearance may have expired\."
+            ),
+        ):
+            await svc.search("test")
 
     async def test_403_error_logs_clearance_hint(self, mock_browser: AsyncMock, caplog: pytest.LogCaptureFixture):
         mock_browser.get_json.side_effect = Exception("HTTP 403 Forbidden")
         svc = _make_service(mock_browser)
 
-        await svc.search("test")
+        with pytest.raises(RemoteApiError):
+            await svc.search("test")
 
         assert "Cloudflare clearance may have expired." in caplog.text
 

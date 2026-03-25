@@ -158,8 +158,9 @@ class ComixService:
         try:
             resp = await self._client.get_json(api_url)
         except Exception as exc:
-            logger.error("%s", self._describe_api_error(exc, action=f"Search for '{query}'"))
-            return []
+            message = self._describe_api_error(exc, action=f"Search for '{query}'")
+            logger.error("%s", message)
+            raise RemoteApiError(message) from exc
 
         results: list[SearchResult] = []
         result_obj = resp.get("result", {})

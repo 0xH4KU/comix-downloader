@@ -21,6 +21,7 @@ from comix_dl.application.session import RuntimeContext
 from comix_dl.cli import flows
 from comix_dl.comix_service import ChapterInfo, SearchResult, SeriesInfo
 from comix_dl.config import AppConfig
+from comix_dl.errors import RemoteApiError
 from comix_dl.settings import Settings
 
 
@@ -149,6 +150,13 @@ def test_render_series_info_panel_includes_truncated_metadata() -> None:
     assert "Genres:" in output
     assert "https://comix.to/manga/series-a" in output
     assert "…" in output
+
+
+def test_render_remote_api_error_outputs_message() -> None:
+    with flows.console.capture() as capture:
+        flows._render_remote_api_error(RemoteApiError("Cloudflare challenge still active"))
+
+    assert "Cloudflare challenge still active" in capture.get()
 
 
 def test_prompt_chapter_selection_returns_none_for_quit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -340,6 +348,24 @@ async def test_flow_search_returns_zero_when_no_results(
 
 
 @pytest.mark.asyncio
+async def test_flow_search_surfaces_remote_api_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _make_session(tmp_path)
+    session.search.side_effect = RemoteApiError("Search for 'omori' failed")
+
+    monkeypatch.setattr(flows, "open_application_session", lambda: _SessionContext(session))
+    monkeypatch.setattr(flows.console, "status", lambda *_args, **_kwargs: nullcontext())
+
+    with flows.console.capture() as capture:
+        result = await flows.flow_search("omori")
+
+    assert result == 1
+    assert "Search for 'omori' failed" in capture.get()
+
+
+@pytest.mark.asyncio
 async def test_flow_search_reloads_after_info_preview_and_downloads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -456,6 +482,24 @@ async def test_flow_url_download_returns_one_when_series_is_missing(
 
 
 @pytest.mark.asyncio
+async def test_flow_url_download_surfaces_remote_api_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _make_session(tmp_path)
+    session.resolve_series.side_effect = RemoteApiError("API blocked")
+
+    monkeypatch.setattr(flows, "open_application_session", lambda: _SessionContext(session))
+    monkeypatch.setattr(flows.console, "status", lambda *_args, **_kwargs: nullcontext())
+
+    with flows.console.capture() as capture:
+        result = await flows.flow_url_download("series-a")
+
+    assert result == 1
+    assert "API blocked" in capture.get()
+
+
+@pytest.mark.asyncio
 async def test_flow_noninteractive_download_returns_one_when_series_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -466,6 +510,23 @@ async def test_flow_noninteractive_download_returns_one_when_series_is_missing(
     monkeypatch.setattr(flows, "open_application_session", lambda **_kwargs: _SessionContext(session))
 
     assert await flows.flow_noninteractive_download("missing", "all") == 1
+
+
+@pytest.mark.asyncio
+async def test_flow_noninteractive_download_surfaces_remote_api_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _make_session(tmp_path)
+    session.resolve_series.side_effect = RemoteApiError("lookup failed")
+
+    monkeypatch.setattr(flows, "open_application_session", lambda **_kwargs: _SessionContext(session))
+
+    with flows.console.capture() as capture:
+        result = await flows.flow_noninteractive_download("missing", "all")
+
+    assert result == 1
+    assert "lookup failed" in capture.get()
 
 
 @pytest.mark.asyncio
@@ -539,6 +600,24 @@ async def test_flow_info_handles_missing_and_success(
 
     assert await flows.flow_info("series-a") == 0
     render_panel.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_flow_info_surfaces_remote_api_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _make_session(tmp_path)
+    session.resolve_series.side_effect = RemoteApiError("info failed")
+
+    monkeypatch.setattr(flows, "open_application_session", lambda: _SessionContext(session))
+    monkeypatch.setattr(flows.console, "status", lambda *_args, **_kwargs: nullcontext())
+
+    with flows.console.capture() as capture:
+        result = await flows.flow_info("series-a")
+
+    assert result == 1
+    assert "info failed" in capture.get()
 
 
 def test_flow_list_handles_missing_output_dir(tmp_path: Path) -> None:

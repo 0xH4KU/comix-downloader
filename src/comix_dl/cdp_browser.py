@@ -31,6 +31,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_CF_CONTENT_MARKERS = (
+    "/cdn-cgi/challenge-platform/",
+    "__cf_chl_",
+    "cf-browser-verification",
+    "cf-chl-widget",
+    "checking your browser",
+    "verify you are human",
+)
+
 __all__ = [
     "BrowserSessionManager",
     "CdpBrowser",
@@ -152,6 +161,11 @@ class CdpBrowser(BrowserSessionManager):
                         action="Moving Chrome window for Cloudflare challenge",
                     )
                 await self._wait_for_cf_clearance(page)
+            elif not await self._has_cf_clearance_cookie(page):
+                logger.warning(
+                    "Cloudflare clearance check completed without a cf_clearance cookie; "
+                    "subsequent API requests may still be challenged.",
+                )
 
             self._cf_cleared = True
             logger.info("CF clearance confirmed")
@@ -244,20 +258,27 @@ class CdpBrowser(BrowserSessionManager):
         )
         return cast("dict[str, object]", result)
 
-    async def _is_cf_challenge(self, page: Page) -> bool:
+    async def _has_cf_clearance_cookie(self, page: Page) -> bool:
+        """Return whether the current browser context has a cf_clearance cookie."""
         try:
             cookies = await page.context.cookies()
-            if any(cookie.get("name") == "cf_clearance" for cookie in cookies):
-                return False
         except Exception:
-            pass
+            return False
+        return any(cookie.get("name") == "cf_clearance" for cookie in cookies)
 
+    async def _is_cf_challenge(self, page: Page) -> bool:
         try:
             title = await page.title()
         except Exception:
-            return False
+            title = ""
 
         if title in self._config.browser.cf_titles:
+            return True
+
+        page_url = ""
+        with contextlib.suppress(Exception):
+            page_url = str(page.url).lower()
+        if any(marker in page_url for marker in ("/cdn-cgi/challenge-platform/", "__cf_chl_")):
             return True
 
         for selector in self._config.browser.cf_selectors:
@@ -265,7 +286,19 @@ class CdpBrowser(BrowserSessionManager):
                 if await page.query_selector(selector):
                     return True
             except Exception:
-                return False
+                break
+
+        with contextlib.suppress(Exception):
+            content = cast(
+                "str",
+                await self._run_with_timeout(
+                    page.content(),
+                    timeout_ms=self._config.browser.timeout_ms,
+                    action="Inspecting Cloudflare challenge state",
+                ),
+            ).lower()
+            if any(marker in content for marker in _CF_CONTENT_MARKERS):
+                return True
 
         return False
 

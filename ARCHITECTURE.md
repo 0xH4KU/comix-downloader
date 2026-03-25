@@ -70,6 +70,7 @@ This separation matters because lifecycle logic is stateful and failure-prone. K
 - Ensures clearance before browser-backed API/image requests
 - Detects renewed challenges and HTTP 403 responses
 - Resets cached clearance once and retries once
+- Prefers live challenge signals over stale `cf_clearance` cookies when deciding whether manual solve is needed
 - Fetches bytes/JSON via `page.evaluate(fetch())`
 - Keeps Cloudflare heuristics separate from Chrome startup and shutdown
 
@@ -230,6 +231,7 @@ That removes browser/service/bootstrap code from command-dispatch paths and keep
 - prompt loops and selection parsing
 - search result / metadata / dedup presentation
 - cleanup confirmation prompts
+- CLI-boundary rendering for `RemoteApiError`, so API failures are surfaced directly instead of being flattened into empty-state UI
 
 That is materially better than before, but not the final end-state. The CLI adapter still mixes interaction policy with rendering.
 
