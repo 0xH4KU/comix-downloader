@@ -307,6 +307,22 @@ class TestGetChapterImages:
         assert result.chapter_label == "Chapter 5 - The Beginning"
         assert mock_browser.get_json.await_args.kwargs["use_page_pool"] is True
 
+    async def test_normalizes_chapter_label_number_from_detail_payload(self, mock_browser: AsyncMock):
+        mock_browser.get_json.return_value = {
+            "result": {
+                "number": 1.0,
+                "name": "",
+                "images": [{"url": "https://cdn.example.com/img1.webp"}],
+            }
+        }
+        svc = _make_service(mock_browser)
+
+        result = await svc.get_chapter_images(12345)
+
+        assert result is not None
+        assert result.chapter_label == "Chapter 1"
+        assert result.title == "Chapter 1"
+
     async def test_empty_images_returns_none(self, mock_browser: AsyncMock):
         mock_browser.get_json.return_value = {
             "result": {"number": 1, "name": "", "images": []}

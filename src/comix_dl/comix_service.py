@@ -497,8 +497,8 @@ class ComixService:
         if not isinstance(data, dict):
             return None
 
-        number = data.get("number", 0)
-        name = data.get("name", "")
+        number = _normalize_chapter_number(data.get("number", 0))
+        name = str(data.get("name", "") or "")
         images = data.get("images", [])
 
         label = f"Chapter {number}"

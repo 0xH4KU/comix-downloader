@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import signal
 import socket
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -357,6 +358,32 @@ class TestBrowserTimeouts:
         process.terminate.assert_called_once()
         process.wait.assert_called_once_with(timeout=3)
         assert browser_session_module._active_chrome is None
+
+    def test_cleanup_stale_profile_chrome_terminates_matching_process(self, tmp_path, monkeypatch):
+        pid_file = tmp_path / "chrome.pid"
+        pid_file.write_text("4242\n", encoding="utf-8")
+        user_data_dir = tmp_path / "chrome-profile"
+        alive = True
+
+        def fake_kill(pid: int, sig: int) -> None:
+            nonlocal alive
+            assert pid == 4242
+            if sig == 0:
+                if alive:
+                    return
+                raise ProcessLookupError
+            if sig == signal.SIGTERM:
+                alive = False
+                return
+            raise AssertionError(f"unexpected signal {sig}")
+
+        monkeypatch.setattr(browser_session_module.os, "kill", fake_kill)
+        monkeypatch.setattr(browser_session_module.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(browser_session_module, "_pid_matches_profile_chrome", lambda pid, path: True)
+
+        browser_session_module._cleanup_stale_profile_chrome(pid_file, user_data_dir)
+
+        assert not pid_file.exists()
 
     def test_single_instance_lock_rejects_second_browser(self, tmp_path):
         config = _make_config(browser=BrowserConfig(cookie_dir=tmp_path))

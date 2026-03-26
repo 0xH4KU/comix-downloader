@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.43-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.44-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -11,43 +11,18 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 
 ## Features
 
-- **Cloudflare bypass** — launches a real Chrome instance via CDP, no automation detection
-- **REST API integration** — uses comix.to's v2 API directly, no HTML scraping
-- **Interactive & non-interactive CLI** — main menu, quick search, or full CLI flags
-- **Parallel downloads** — concurrent chapter and image downloads with a bounded page pool sized to the configured image concurrency
-- **Lazy page pool** — browser download tabs are created on demand instead of opening the full pool up front during startup
-- **Bounded browser operations** — CDP connect, page navigation, HTML reads, and in-browser fetches fail with explicit timeouts instead of hanging indefinitely
-- **Clearance self-healing** — HTTP 403 or a renewed Cloudflare challenge resets cached clearance, re-checks the session, and retries once before failing clearly
-- **No false-empty search** — API / Cloudflare failures in search and info flows now surface as explicit errors instead of being misreported as “No results found”
-- **Dead-page eviction** — closed browser pages are discarded and replaced instead of being returned to the pool
-- **Single-instance browser lock** — a second comix-dl process is rejected cleanly instead of racing over the same Chrome profile
-- **Lifecycle split** — `BrowserSessionManager` owns Chrome startup, page pooling, and cleanup while `CdpBrowser` focuses on Cloudflare-aware request flow
-- **Explicit runtime config** — user settings are normalized into a per-run `AppConfig` and injected into runtime components instead of mutating process-global state
-- **Application use cases** — query resolution, download orchestration, and cleanup planning now live in `application/`, keeping the CLI focused on prompts, progress, and output rendering
-- **Consistent result reporting** — CLI summaries, desktop notifications, and persisted history now derive from the same download report, and failure reasons are retained in history
-- **Structured logging** — download-path logs now carry stable JSON fields such as `series`, `chapter_id`, `chapter_title`, `retry_count`, `status`, `bytes`, and `elapsed`
-- **Thin CLI adapter** — the CLI entry now sticks to argument parsing and command dispatch, while browser/session/runtime wiring lives under `application/session.py`
-- **Environment tuning profiles** — download concurrency can now switch between `desktop`, `low_resource`, `ci`, and `custom` profiles without patching code
-- **Bounded PDF batching** — large PDF conversion now uses a configurable batch size and an isolated temp workspace that is cleaned even on failure
-- **Stricter release gate** — CI now enforces 70% total coverage, with focused regression tests over CLI orchestration, browser retries, and converter boundaries
-- **Resume / skip** — automatically skips already-downloaded chapters and images
-- **Corrupt-page recovery** — invalid existing image files are discarded and re-downloaded instead of being trusted by resume
-- **No false-success conversion** — chapters with failed page downloads stay unconverted and are reported as partial instead of completed
-- **Partial-state manifest** — incomplete chapters keep a machine-readable `chapter.state.json` for diagnostics and future recovery
-- **Recovery-safe reruns** — stale temp artifacts are cleaned up and partial chapters resume from the missing pages instead of restarting from scratch
-- **Cheaper resume scans** — existing chapter files are indexed once per run instead of re-scanning the directory for every page
-- **Smart dedup** — chapter dedup keeps language variants distinct and only collapses true same-language duplicates by image count
-- **Visible dedup decisions** — before download, CLI now shows which duplicate chapter variants were dropped, why they were dropped, and which variant was kept
-- **Sharper failure diagnostics** — Cloudflare expiry, API 403, image timeouts, page-pool exhaustion, and PDF merge-backend gaps now surface as targeted errors
-- **Typed domain errors** — Cloudflare, remote API, partial-download, conversion, and configuration failures now have distinct exception types instead of collapsing into generic `RuntimeError`
-- **Reliable large PDF merge** — normal installs now include `pypdf`, so multi-batch PDF output works without hidden extra dependencies
-- **Rate limiting** — randomized download delays to avoid triggering anti-scraping (toggleable)
-- **PDF / CBZ output** — convert downloaded images to PDF or CBZ archives
-- **Image optimization** — optional WebP conversion for 40-60% size savings (on by default)
-- **Download speed stats** — shows total size and average speed in download summary
-- **Desktop notifications** — system notification on download completion (macOS/Linux)
-- **Download history** — tracks what you've downloaded with `comix-dl history`
-- **Persistent settings** — saves preferences to `~/.config/comix-dl/settings.json`
+- **Cloudflare-aware real browser** — launches a real Chrome via CDP, retries once on expired clearance, and keeps challenge handling explicit
+- **API-first workflow** — uses comix.to's v2 API directly for search, metadata, chapters, and images instead of scraping HTML
+- **Interactive and scriptable CLI** — main menu, quick search, URL/slug download, and non-interactive commands share the same runtime path
+- **Bounded parallel downloads** — concurrent chapter/image work runs through a lazy page pool with explicit connect, navigation, and read timeouts
+- **Recovery-safe browser lifecycle** — dead pooled pages are replaced, a second process is blocked by a lock file, and stale Chrome for the same profile is cleaned up after abnormal exits
+- **Resume-safe downloads** — completed chapters are skipped, corrupt/stale files are discarded, temp artifacts are cleaned, and partial runs keep a `chapter.state.json`
+- **Clear partial semantics** — incomplete chapters stay unconverted, surface as partial failures, and keep their failure details in history and notifications
+- **Smart chapter dedup** — language variants stay distinct while true duplicates are collapsed by page count, with dedup decisions shown before download
+- **PDF / CBZ conversion** — supports optional image optimization plus safe large-PDF batching with a bundled merge backend
+- **Injected runtime config** — settings are normalized into an explicit `AppConfig` with `desktop`, `low_resource`, `ci`, and `custom` tuning profiles
+- **Thinner architecture** — CLI prompting, application use cases, repositories, and browser/session code are split into testable layers
+- **Stronger operational quality** — structured logs, shared reporting across CLI/history/notifications, docs checks, typing, and a 70% coverage gate
 
 ## Platform Support
 

@@ -7,6 +7,7 @@ import atexit
 import contextlib
 import logging
 import os
+import signal
 import socket
 import subprocess
 import time
@@ -32,6 +33,7 @@ _POOL_UNAVAILABLE_MESSAGE = (
 
 # Module-level reference for current-process atexit cleanup
 _active_chrome: subprocess.Popen[bytes] | None = None
+_active_pid_file: Path | None = None
 _active_instance_lock: TextIOWrapper | None = None
 
 
@@ -65,7 +67,7 @@ def _unlock_file_handle(fileobj: TextIOWrapper) -> None:
 
 def _atexit_kill_chrome() -> None:
     """Last-resort cleanup for Chrome started by this Python process only."""
-    global _active_chrome
+    global _active_chrome, _active_pid_file
     if _active_chrome is not None:
         try:
             _active_chrome.terminate()
@@ -74,6 +76,8 @@ def _atexit_kill_chrome() -> None:
             with contextlib.suppress(Exception):
                 _active_chrome.kill()
         _active_chrome = None
+    _remove_pid_file(_active_pid_file)
+    _active_pid_file = None
 
 
 atexit.register(_atexit_kill_chrome)
@@ -94,6 +98,113 @@ def _is_port_in_use(port: int) -> bool:
             return True
         except (ConnectionRefusedError, OSError):
             return False
+
+
+def _write_pid_file(pid_file: Path, pid: int) -> None:
+    """Persist the most recently launched Chrome PID for crash recovery."""
+    with contextlib.suppress(OSError):
+        pid_file.parent.mkdir(parents=True, exist_ok=True)
+        pid_file.write_text(f"{pid}\n", encoding="utf-8")
+
+
+def _remove_pid_file(pid_file: Path | None) -> None:
+    """Remove a persisted Chrome PID file if present."""
+    if pid_file is None:
+        return
+    with contextlib.suppress(OSError):
+        pid_file.unlink(missing_ok=True)
+
+
+def _command_line_for_pid(pid: int) -> str | None:
+    """Best-effort command line lookup for a live PID."""
+    proc_cmdline = Path(f"/proc/{pid}/cmdline")
+    if proc_cmdline.exists():
+        with contextlib.suppress(OSError):
+            raw = proc_cmdline.read_bytes().replace(b"\0", b" ").decode("utf-8", errors="ignore").strip()
+            if raw:
+                return raw
+
+    if os.name == "nt":
+        return None
+
+    with contextlib.suppress(Exception):
+        result = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            check=False,
+        )
+        command = result.stdout.strip()
+        if command:
+            return command
+
+    return None
+
+
+def _pid_matches_profile_chrome(pid: int, user_data_dir: Path) -> bool:
+    """Return whether *pid* still looks like our Chrome for *user_data_dir*."""
+    command = _command_line_for_pid(pid)
+    if not command:
+        return False
+
+    expected_flag = f"--user-data-dir={user_data_dir}"
+    lowered = command.lower()
+    return expected_flag in command and ("chrome" in lowered or "chromium" in lowered)
+
+
+def _terminate_pid(pid: int) -> None:
+    """Terminate a live process, escalating to SIGKILL when available."""
+    os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.3)
+
+    kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(pid, kill_signal)
+
+
+def _cleanup_stale_profile_chrome(pid_file: Path, user_data_dir: Path) -> None:
+    """Terminate a stale Chrome process previously launched for *user_data_dir*."""
+    if not pid_file.exists():
+        return
+
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        _remove_pid_file(pid_file)
+        return
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        _remove_pid_file(pid_file)
+        return
+    except PermissionError as exc:
+        raise RuntimeError(
+            f"Chrome profile {user_data_dir} appears to still be in use by PID {pid}. "
+            "Close the stale Chrome process and retry.",
+        ) from exc
+
+    if not _pid_matches_profile_chrome(pid, user_data_dir):
+        _remove_pid_file(pid_file)
+        return
+
+    logger.warning("Found stale Chrome for %s (PID %d), terminating before startup", user_data_dir, pid)
+    try:
+        _terminate_pid(pid)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Chrome profile {user_data_dir} is still being used by stale process {pid}. "
+            "Close it and retry.",
+        ) from exc
+
+    _remove_pid_file(pid_file)
 
 
 def _find_chrome(system: str) -> str:
@@ -152,6 +263,7 @@ class BrowserSessionManager:
         self._started = False
         self._user_data_dir = self._config.browser.cookie_dir / "chrome-profile"
         self._lock_file = self._config.browser.cookie_dir / "browser.lock"
+        self._pid_file = self._config.browser.cookie_dir / "chrome.pid"
         self._cdp_port: int = 0
         self._max_pages = resolved_max_pages
         self._page_pool: asyncio.Queue[Page] = asyncio.Queue()
@@ -170,6 +282,7 @@ class BrowserSessionManager:
         try:
             self._config.browser.cookie_dir.mkdir(parents=True, exist_ok=True)
             self._acquire_instance_lock()
+            _cleanup_stale_profile_chrome(self._pid_file, self._user_data_dir)
             self._user_data_dir.mkdir(parents=True, exist_ok=True)
             self._launch_chrome()
 
@@ -248,7 +361,7 @@ class BrowserSessionManager:
 
     def _launch_chrome(self) -> None:
         """Launch Chrome subprocess with remote debugging enabled."""
-        global _active_chrome
+        global _active_chrome, _active_pid_file
         import platform
 
         system = platform.system()
@@ -278,6 +391,8 @@ class BrowserSessionManager:
                 stderr=subprocess.DEVNULL,
             )
             _active_chrome = self._chrome_process
+            _active_pid_file = self._pid_file
+            _write_pid_file(self._pid_file, self._chrome_process.pid)
             self._wait_for_cdp_ready()
         except FileNotFoundError:
             raise RuntimeError(
@@ -394,7 +509,7 @@ class BrowserSessionManager:
 
     async def close(self) -> None:
         """Disconnect from Chrome and close the subprocess."""
-        global _active_chrome
+        global _active_chrome, _active_pid_file
         if self._closing:
             return
 
@@ -442,6 +557,9 @@ class BrowserSessionManager:
             self._playwright = None
             self._chrome_process = None
             _active_chrome = None
+            if _active_pid_file == self._pid_file:
+                _active_pid_file = None
+            _remove_pid_file(self._pid_file)
             self._started = False
             self._release_instance_lock()
             self._closing = False
