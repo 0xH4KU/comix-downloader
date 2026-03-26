@@ -376,6 +376,23 @@ def test_run_async_returns_130_on_keyboard_interrupt(monkeypatch: pytest.MonkeyP
     assert "Interrupted." in printed[0]
 
 
+def test_main_returns_130_on_keyboard_interrupt_from_main_menu(monkeypatch: pytest.MonkeyPatch):
+    printed: list[str] = []
+
+    monkeypatch.setattr(
+        cli_module,
+        "_build_parser",
+        lambda: SimpleNamespace(parse_args=lambda: SimpleNamespace(command=None, debug=False, quiet=False)),
+    )
+    monkeypatch.setattr(cli_module.sys, "argv", ["comix-dl"])
+    monkeypatch.setattr(cli_module, "configure_logging", lambda _level: None)
+    monkeypatch.setattr(cli_module, "_main_menu", MagicMock(side_effect=KeyboardInterrupt))
+    monkeypatch.setattr(cli_module.console, "print", lambda message: printed.append(str(message)))
+
+    assert cli_module.main() == 130
+    assert "Interrupted." in printed[0]
+
+
 def test_shutdown_loop_runs_async_cleanup_hooks() -> None:
     class _Loop:
         def __init__(self) -> None:

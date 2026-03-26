@@ -104,6 +104,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     """CLI entry point."""
+    try:
+        return _main_impl()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted.[/yellow]")
+        return 130
+
+
+def _main_impl() -> int:
+    """CLI entry point implementation."""
     parser = _build_parser()
 
     # Special case: bare `comix-dl "query"` (no subcommand, positional arg)
