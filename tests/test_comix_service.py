@@ -233,7 +233,7 @@ class TestSearch:
         assert results[0].hash_id == "abc123"
         assert results[0].slug == "one-piece"
         assert "one-piece" in results[0].url
-        assert mock_browser.get_json.await_args.kwargs["use_page_pool"] is False
+        assert mock_browser.get_json.await_args.kwargs["use_page_pool"] is True
 
     async def test_empty_result(self, mock_browser: AsyncMock):
         mock_browser.get_json.return_value = {"result": {"items": []}}
@@ -305,6 +305,7 @@ class TestGetChapterImages:
         assert result is not None
         assert len(result.image_urls) == 3
         assert result.chapter_label == "Chapter 5 - The Beginning"
+        assert mock_browser.get_json.await_args.kwargs["use_page_pool"] is True
 
     async def test_empty_images_returns_none(self, mock_browser: AsyncMock):
         mock_browser.get_json.return_value = {

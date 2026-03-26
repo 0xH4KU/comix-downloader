@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import logging
 import signal
 import sys
@@ -167,6 +168,8 @@ def _run_async(coro: object) -> int:
     _shutdown_requested = False
 
     loop = asyncio.new_event_loop()
+    with contextlib.suppress(Exception):
+        asyncio.set_event_loop(loop)
 
     def _on_sigint(*_: object) -> None:
         global _shutdown_requested
@@ -181,8 +184,36 @@ def _run_async(coro: object) -> int:
         console.print("\n[yellow]Interrupted.[/yellow]")
         return 130
     finally:
-        loop.close()
+        _shutdown_loop(loop)
+        with contextlib.suppress(Exception):
+            asyncio.set_event_loop(None)
         signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+
+def _shutdown_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Drain pending tasks before closing the event loop."""
+    pending: set[asyncio.Task[object]] = set()
+    with contextlib.suppress(Exception):
+        pending = {task for task in asyncio.all_tasks(loop) if not task.done()}
+
+    for task in pending:
+        task.cancel()
+
+    if pending:
+        with contextlib.suppress(Exception):
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+    shutdown_asyncgens = getattr(loop, "shutdown_asyncgens", None)
+    if callable(shutdown_asyncgens):
+        with contextlib.suppress(Exception):
+            loop.run_until_complete(shutdown_asyncgens())
+
+    shutdown_default_executor = getattr(loop, "shutdown_default_executor", None)
+    if callable(shutdown_default_executor):
+        with contextlib.suppress(Exception):
+            loop.run_until_complete(shutdown_default_executor())
+
+    loop.close()
 
 
 # -- Main Menu ----------------------------------------------------------------

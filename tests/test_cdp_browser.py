@@ -250,6 +250,20 @@ class TestBrowserTimeouts:
         assert browser._page_pool.empty()
         browser._replace_dead_page.assert_awaited_once_with(page)
 
+    async def test_release_page_does_not_replace_pages_while_session_is_closing(self):
+        browser = BrowserSessionManager(config=AppConfig())
+        page = MagicMock()
+        page.is_closed.return_value = True
+        browser._all_pages = [page]
+        browser._replace_dead_page = AsyncMock()
+        browser._closing = True
+
+        browser.release_page(page)
+        await asyncio.sleep(0)
+
+        assert browser._page_pool.empty()
+        browser._replace_dead_page.assert_not_awaited()
+
     async def test_acquire_page_discards_closed_page_from_queue(self):
         browser = BrowserSessionManager(config=AppConfig())
         dead_page = MagicMock()
@@ -316,6 +330,22 @@ class TestBrowserTimeouts:
         assert browser._all_pages == [new_page]
         assert await browser.acquire_page() is new_page
         browser._goto_with_timeout.assert_awaited_once()
+
+    async def test_replace_dead_page_skips_replacement_while_session_is_closing(self):
+        browser = BrowserSessionManager(config=AppConfig())
+        dead_page = MagicMock()
+        dead_page.is_closed.return_value = True
+        dead_page.close = AsyncMock()
+        browser._all_pages = [dead_page]
+        browser._context = MagicMock()
+        browser._started = True
+        browser._closing = True
+        browser._create_pooled_page = AsyncMock()
+
+        await browser._replace_dead_page(dead_page)
+
+        assert browser._all_pages == []
+        browser._create_pooled_page.assert_not_awaited()
 
     def test_atexit_cleanup_only_targets_current_process_chrome(self):
         process = MagicMock()

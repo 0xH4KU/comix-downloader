@@ -156,7 +156,7 @@ class ComixService:
         )
 
         try:
-            resp = await self._client.get_json(api_url, use_page_pool=False)
+            resp = await self._client.get_json(api_url, use_page_pool=True)
         except Exception as exc:
             message = self._describe_api_error(exc, action=f"Search for '{query}'")
             logger.error("%s", message)
@@ -193,7 +193,7 @@ class ComixService:
         # Try direct lookup
         api_url = f"{self._base}/api/v2/manga/{slug}"
         try:
-            resp = await self._client.get_json(api_url, use_page_pool=False)
+            resp = await self._client.get_json(api_url, use_page_pool=True)
             data = resp.get("result", {})
             if isinstance(data, dict) and data.get("hash_id"):
                 return await self.get_series(data["hash_id"])
@@ -213,7 +213,7 @@ class ComixService:
         # Fetch manga details
         api_url = f"{self._base}/api/v2/manga/{hash_id}"
         try:
-            info_resp = await self._client.get_json(api_url, use_page_pool=False)
+            info_resp = await self._client.get_json(api_url, use_page_pool=True)
         except Exception as exc:
             raise RemoteApiError(
                 self._describe_api_error(exc, action=f"Fetch series info for '{hash_id}'"),
@@ -256,7 +256,7 @@ class ComixService:
                 f"?limit={limit}&page={page}"
             )
             try:
-                resp = await self._client.get_json(api_url, use_page_pool=False)
+                resp = await self._client.get_json(api_url, use_page_pool=True)
             except Exception as exc:
                 logger.error(
                     "%s",
@@ -467,7 +467,7 @@ class ComixService:
         """Fetch the number of images in a chapter (lightweight dedup check)."""
         api_url = f"{self._base}/api/v2/chapters/{chapter_id}"
         try:
-            resp = await self._client.get_json(api_url, use_page_pool=False)
+            resp = await self._client.get_json(api_url, use_page_pool=True)
             data = resp.get("result", {})
             if isinstance(data, dict):
                 images = data.get("images", [])
@@ -485,7 +485,7 @@ class ComixService:
         api_url = f"{self._base}/api/v2/chapters/{chapter_id}"
 
         try:
-            resp = await self._client.get_json(api_url, use_page_pool=False)
+            resp = await self._client.get_json(api_url, use_page_pool=True)
         except Exception as exc:
             logger.error(
                 "%s",

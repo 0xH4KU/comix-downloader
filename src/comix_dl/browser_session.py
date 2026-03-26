@@ -159,12 +159,14 @@ class BrowserSessionManager:
         self._page_creation_lock = asyncio.Lock()
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._instance_lock_handle: TextIOWrapper | None = None
+        self._closing = False
 
     async def start(self) -> None:
         """Launch Chrome and connect via CDP."""
         if self._started:
             return
 
+        self._closing = False
         try:
             self._config.browser.cookie_dir.mkdir(parents=True, exist_ok=True)
             self._acquire_instance_lock()
@@ -393,51 +395,57 @@ class BrowserSessionManager:
     async def close(self) -> None:
         """Disconnect from Chrome and close the subprocess."""
         global _active_chrome
+        if self._closing:
+            return
 
-        for task in list(self._background_tasks):
-            task.cancel()
-        if self._background_tasks:
-            with contextlib.suppress(Exception):
-                await asyncio.gather(*self._background_tasks, return_exceptions=True)
-            self._background_tasks.clear()
+        self._closing = True
 
-        if self._page is not None and self._page not in self._all_pages:
-            await self._close_page_quietly(self._page)
+        try:
+            for task in list(self._background_tasks):
+                task.cancel()
+            if self._background_tasks:
+                with contextlib.suppress(Exception):
+                    await asyncio.gather(*self._background_tasks, return_exceptions=True)
+                self._background_tasks.clear()
 
-        for page in self._all_pages:
-            with contextlib.suppress(Exception):
-                await page.close()
-        self._all_pages.clear()
+            if self._page is not None and self._page not in self._all_pages:
+                await self._close_page_quietly(self._page)
 
-        while not self._page_pool.empty():
-            try:
-                self._page_pool.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+            for page in self._all_pages:
+                with contextlib.suppress(Exception):
+                    await page.close()
+            self._all_pages.clear()
 
-        if self._playwright:
-            with contextlib.suppress(Exception):
-                await self._playwright.stop()
+            while not self._page_pool.empty():
+                try:
+                    self._page_pool.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
 
-        if self._chrome_process:
-            try:
-                self._chrome_process.terminate()
-                self._chrome_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._chrome_process.kill()
-                self._chrome_process.wait(timeout=3)
-            except Exception:
-                pass
-            logger.debug("Chrome process terminated")
+            if self._playwright:
+                with contextlib.suppress(Exception):
+                    await self._playwright.stop()
 
-        self._page = None
-        self._context = None
-        self._playwright = None
-        self._chrome_process = None
-        _active_chrome = None
-        self._started = False
-        self._release_instance_lock()
-        logger.info("Browser session closed")
+            if self._chrome_process:
+                try:
+                    self._chrome_process.terminate()
+                    self._chrome_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._chrome_process.kill()
+                    self._chrome_process.wait(timeout=3)
+                except Exception:
+                    pass
+                logger.debug("Chrome process terminated")
+        finally:
+            self._page = None
+            self._context = None
+            self._playwright = None
+            self._chrome_process = None
+            _active_chrome = None
+            self._started = False
+            self._release_instance_lock()
+            self._closing = False
+            logger.info("Browser session closed")
 
     async def __aenter__(self) -> BrowserSessionManager:
         await self.start()
@@ -448,6 +456,9 @@ class BrowserSessionManager:
 
     async def acquire_page(self) -> Page:
         """Get a page from the pool, waiting if all pooled pages are busy."""
+        if self._closing:
+            raise RuntimeError(_POOL_UNAVAILABLE_MESSAGE)
+
         while True:
             try:
                 page = self._page_pool.get_nowait()
@@ -491,6 +502,8 @@ class BrowserSessionManager:
 
     def release_page(self, page: Page) -> None:
         """Return a page to the pool."""
+        if self._closing:
+            return
         if page not in self._all_pages:
             return
         if not self._page_is_healthy(page):
@@ -517,6 +530,9 @@ class BrowserSessionManager:
 
         with contextlib.suppress(Exception):
             await dead_page.close()
+
+        if self._closing or self._context is None or not self._started:
+            return
 
         if self._context is not None:
             try:

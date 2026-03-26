@@ -376,6 +376,36 @@ def test_run_async_returns_130_on_keyboard_interrupt(monkeypatch: pytest.MonkeyP
     assert "Interrupted." in printed[0]
 
 
+def test_shutdown_loop_runs_async_cleanup_hooks() -> None:
+    class _Loop:
+        def __init__(self) -> None:
+            self.closed = False
+            self.shutdown_asyncgens_called = False
+            self.shutdown_default_executor_called = False
+
+        def run_until_complete(self, coro: object) -> object:
+            import asyncio
+
+            return asyncio.run(coro)  # type: ignore[arg-type]
+
+        async def shutdown_asyncgens(self) -> None:
+            self.shutdown_asyncgens_called = True
+
+        async def shutdown_default_executor(self) -> None:
+            self.shutdown_default_executor_called = True
+
+        def close(self) -> None:
+            self.closed = True
+
+    loop = _Loop()
+
+    cli_module._shutdown_loop(loop)  # type: ignore[arg-type]
+
+    assert loop.shutdown_asyncgens_called is True
+    assert loop.shutdown_default_executor_called is True
+    assert loop.closed is True
+
+
 def test_main_menu_invokes_each_action_then_exits(monkeypatch: pytest.MonkeyPatch):
     calls: list[object] = []
 
