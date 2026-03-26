@@ -322,6 +322,7 @@ class TestBrowserTimeouts:
         new_page.is_closed.return_value = False
         browser._all_pages = [dead_page]
         browser._context = MagicMock()
+        browser._started = True
         browser._context.new_page = AsyncMock(return_value=new_page)
         browser._goto_with_timeout = AsyncMock()
 
