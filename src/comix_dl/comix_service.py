@@ -524,16 +524,21 @@ class ComixService:
         number = _normalize_chapter_number(data.get("number", 0))
         name = str(data.get("name", "") or "")
         images = data.get("images", [])
+        if not isinstance(images, list):
+            logger.warning("Invalid image payload for chapter %d", chapter_id)
+            return None
 
         label = f"Chapter {number}"
         if name:
             label += f" - {name}"
 
-        image_urls = [
-            img["url"]
-            for img in images
-            if isinstance(img, dict) and img.get("url")
-        ]
+        image_urls: list[str] = []
+        for img in images:
+            if not isinstance(img, dict):
+                continue
+            url = img.get("url")
+            if isinstance(url, str) and url:
+                image_urls.append(url)
 
         if not image_urls:
             logger.warning("No images found for chapter %d", chapter_id)
