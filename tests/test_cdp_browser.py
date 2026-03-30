@@ -12,8 +12,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import comix_dl.browser_session as browser_session_module
-from comix_dl.browser_session import BrowserSessionManager
-from comix_dl.cdp_browser import CdpBrowser, _atexit_kill_chrome, _find_free_port, _is_port_in_use
+from comix_dl.browser_session import (
+    BrowserSessionManager,
+    _atexit_kill_chrome,
+    _find_free_port,
+    _is_port_in_use,
+)
+from comix_dl.cdp_browser import CdpBrowser
 from comix_dl.config import AppConfig, BrowserConfig, DownloadConfig
 from comix_dl.errors import CloudflareChallengeError, ConfigurationError
 

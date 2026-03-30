@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import comix_dl.config as config_module
 import pytest
+
+import comix_dl.config as config_module
 from comix_dl.config import AppConfig, BrowserConfig, ConvertConfig, DownloadConfig, ServiceConfig
 
 

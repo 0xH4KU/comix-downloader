@@ -18,9 +18,6 @@ from typing import TYPE_CHECKING, cast
 
 from comix_dl.browser_session import (
     BrowserSessionManager,
-    _atexit_kill_chrome,
-    _find_free_port,
-    _is_port_in_use,
 )
 from comix_dl.errors import CloudflareChallengeError
 

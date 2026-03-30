@@ -40,7 +40,7 @@ class _ChromeProcessState:
     scattered ``global`` declarations.
     """
 
-    __slots__ = ("chrome", "pid_file", "instance_lock")
+    __slots__ = ("chrome", "instance_lock", "pid_file")
 
     def __init__(self) -> None:
         self.chrome: subprocess.Popen[bytes] | None = None
