@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from comix_dl.config import AppConfig
+from comix_dl.config import AppConfig, resolve_config
 from comix_dl.errors import ConversionError
 
 logger = logging.getLogger(__name__)
 
 
 def _resolve_config(config: AppConfig | None = None) -> AppConfig:
-    """Return an explicit runtime config or a fresh default config."""
-    return config if config is not None else AppConfig()
+    """Return an explicit runtime config or the shared default."""
+    return resolve_config(config)
 
 
 def _get_image_extensions(config: AppConfig | None = None) -> frozenset[str]:
@@ -328,3 +329,14 @@ def optimize_images(image_dir: Path, *, quality: int = 85, config: AppConfig | N
         )
 
     return result
+
+
+async def convert_async(
+    image_dir: Path,
+    fmt: str = "cbz",
+    *,
+    optimize: bool = False,
+    config: AppConfig | None = None,
+) -> Path:
+    """Async wrapper for :func:`convert` — runs in a thread to avoid blocking the event loop."""
+    return await asyncio.to_thread(convert, image_dir, fmt, optimize=optimize, config=config)

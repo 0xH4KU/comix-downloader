@@ -344,7 +344,7 @@ def test_run_async_sets_shutdown_flag_on_sigint_and_restores_signal(monkeypatch:
     monkeypatch.setattr(cli_module.console, "print", lambda message: printed.append(str(message)))
 
     assert cli_module._run_async(object()) == 12
-    assert cli_module._shutdown_requested is True
+    assert cli_module._shutdown_event.is_set()
     assert loop.closed is True
     assert signal_calls[0][0] == signal.SIGINT
     assert signal_calls[-1] == (signal.SIGINT, signal.SIG_DFL)

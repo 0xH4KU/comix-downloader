@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,7 +43,51 @@ class HistoryRepository:
 
     def __init__(self, history_file: Path | None = None, *, max_entries: int = MAX_ENTRIES) -> None:
         self._history_file = history_file or _HISTORY_FILE
+        self._lock_file = self._history_file.with_suffix(".lock")
         self._max_entries = max_entries
+
+    @contextlib.contextmanager
+    def _file_lock(self) -> Iterator[None]:
+        """Acquire an exclusive file lock around history read-modify-write."""
+        self._lock_file.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = os.open(str(self._lock_file), os.O_CREAT | os.O_RDWR)
+        try:
+            self._lock_fd(lock_fd)
+            yield
+        finally:
+            self._unlock_fd(lock_fd)
+            os.close(lock_fd)
+
+    @staticmethod
+    def _lock_fd(lock_fd: int) -> None:
+        """Acquire a blocking exclusive lock on a file descriptor."""
+        if os.name == "nt":
+            import msvcrt
+
+            if os.fstat(lock_fd).st_size == 0:
+                os.write(lock_fd, b"\0")
+                os.fsync(lock_fd)
+            os.lseek(lock_fd, 0, os.SEEK_SET)
+            msvcrt.locking(lock_fd, msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+            return
+
+        import fcntl
+
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+    @staticmethod
+    def _unlock_fd(lock_fd: int) -> None:
+        """Release a previously acquired file lock."""
+        if os.name == "nt":
+            import msvcrt
+
+            os.lseek(lock_fd, 0, os.SEEK_SET)
+            msvcrt.locking(lock_fd, msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+            return
+
+        import fcntl
+
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
     def record_download(
         self,
@@ -70,12 +117,13 @@ class HistoryRepository:
             issues=list(issues or []),
         )
 
-        entries = self._load_entries()
-        entries.append(asdict(entry))
-        if len(entries) > self._max_entries:
-            entries = entries[-self._max_entries :]
+        with self._file_lock():
+            entries = self._load_entries()
+            entries.append(asdict(entry))
+            if len(entries) > self._max_entries:
+                entries = entries[-self._max_entries :]
+            self._save_entries(entries)
 
-        self._save_entries(entries)
         logger.debug("Recorded download: %s (%d chapters)", title, chapters_count)
 
     def list_entries(self) -> list[HistoryEntry]:

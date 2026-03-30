@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from comix_dl.config import AppConfig
+from comix_dl.config import AppConfig, resolve_config
 from comix_dl.errors import PartialDownloadError
 from comix_dl.fileio import atomic_write_bytes, atomic_write_text
 from comix_dl.logging_utils import log_context
@@ -94,8 +94,17 @@ def sanitize_dirname(name: str) -> str:
     """Return a filesystem-safe directory name."""
     name = name.replace(":", " - ")
     name = re.sub(r'[\\/*?"<>|]', " ", name)
+    name = name.replace("..", "")
     name = re.sub(r"\s+", " ", name)
     return name.strip(" .") or "download"
+
+
+def _validate_within_base(path: Path, base: Path) -> None:
+    """Raise if *path* escapes *base* after symlink resolution."""
+    if not path.resolve().is_relative_to(base.resolve()):
+        raise ValueError(
+            f"Path traversal detected: {path} escapes base directory {base}"
+        )
 
 
 class Downloader:
@@ -115,7 +124,7 @@ class Downloader:
         config: AppConfig | None = None,
     ) -> None:
         self._client = client
-        self._config = config if config is not None else AppConfig()
+        self._config = resolve_config(config)
         self._output_dir = output_dir or self._config.download.default_output_dir
         self._on_progress = on_progress
         self.bytes_downloaded: int = 0
@@ -139,6 +148,7 @@ class Downloader:
     def is_chapter_complete(self, title: str, chapter: str) -> bool:
         """Check whether a chapter has already been downloaded."""
         chapter_dir = self._output_dir / sanitize_dirname(title) / sanitize_dirname(chapter)
+        _validate_within_base(chapter_dir, self._output_dir)
         return (chapter_dir / _COMPLETE_MARKER).exists()
 
     async def download_chapter(
@@ -164,6 +174,7 @@ class Downloader:
             Final download result for the chapter.
         """
         chapter_dir = self._output_dir / sanitize_dirname(title) / sanitize_dirname(chapter)
+        _validate_within_base(chapter_dir, self._output_dir)
         chapter_dir.mkdir(parents=True, exist_ok=True)
         existing_files = self._index_existing_downloads(chapter_dir)
 
@@ -188,11 +199,25 @@ class Downloader:
 
         total = len(image_urls)
         semaphore = asyncio.Semaphore(self._config.download.max_concurrent_images)
-        # Atomic-safe progress counter (incremented only inside semaphore)
-        _progress_done = 0
+        progress_lock = asyncio.Lock()
+        progress_done = 0
+
+        async def _advance_progress(filename: str) -> None:
+            """Serialize progress updates so callbacks see monotonic counts."""
+            nonlocal progress_done
+            async with progress_lock:
+                progress_done += 1
+                if self._on_progress:
+                    self._on_progress(DownloadProgress(
+                        completed=progress_done,
+                        total=total,
+                        failed=0,
+                        skipped=0,
+                        current_file=filename,
+                        total_bytes=self.bytes_downloaded,
+                    ))
 
         async def fetch_one(index: int, url: str) -> _PageDownloadResult:
-            nonlocal _progress_done
             async with semaphore:
                 # Random delay to avoid rate limits
                 delay = self._config.download.image_delay
@@ -204,16 +229,7 @@ class Downloader:
                 # Resume: only trust existing files that still look like valid images.
                 existing = existing_files.pop(filename, [])
                 if existing and any(self._is_valid_image_file(f) for f in existing):
-                    _progress_done += 1
-                    if self._on_progress:
-                        self._on_progress(DownloadProgress(
-                            completed=_progress_done,
-                            total=total,
-                            failed=0,
-                            skipped=0,
-                            current_file=filename,
-                            total_bytes=self.bytes_downloaded,
-                        ))
+                    await _advance_progress(filename)
                     return _PageDownloadResult(filename=filename, url=url, status="skip")
                 if existing:
                     for stale in existing:
@@ -221,19 +237,7 @@ class Downloader:
                             stale.unlink()
 
                 success, error = await self._download_image(url, chapter_dir, filename, referer=referer)
-                _progress_done += 1
-
-                if self._on_progress:
-                    self._on_progress(
-                        DownloadProgress(
-                            completed=_progress_done,
-                            total=total,
-                            failed=0,
-                            skipped=0,
-                            current_file=filename,
-                            total_bytes=self.bytes_downloaded,
-                        )
-                    )
+                await _advance_progress(filename)
                 return _PageDownloadResult(
                     filename=filename,
                     url=url,
@@ -313,7 +317,7 @@ class Downloader:
                 # Determine extension from URL or content
                 ext = self._guess_extension(url, data)
                 filepath = output_dir / f"{filename}{ext}"
-                atomic_write_bytes(filepath, data)
+                atomic_write_bytes(filepath, data, sync=False)
                 self.bytes_downloaded += len(data)
                 return True, None
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 @dataclass
@@ -43,6 +45,37 @@ class ServiceConfig:
 
     base_url: str = "https://comix.to"
 
+    def __post_init__(self) -> None:
+        parsed = urlparse(self.base_url)
+        if parsed.scheme != "https":
+            raise ValueError(
+                f"base_url must use https (got {parsed.scheme!r}): {self.base_url}"
+            )
+        host = parsed.hostname
+        if not host:
+            raise ValueError(
+                f"base_url must include a hostname: {self.base_url}"
+            )
+        if host == "localhost":
+            raise ValueError(
+                f"base_url must not point to a loopback or private address: {self.base_url}"
+            )
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return
+        if (
+            address.is_loopback
+            or address.is_private
+            or address.is_link_local
+            or address.is_multicast
+            or address.is_reserved
+            or address.is_unspecified
+        ):
+            raise ValueError(
+                f"base_url must not point to a loopback or private address: {self.base_url}"
+            )
+
 
 @dataclass
 class ConvertConfig:
@@ -63,3 +96,20 @@ class AppConfig:
     download: DownloadConfig = field(default_factory=DownloadConfig)
     service: ServiceConfig = field(default_factory=ServiceConfig)
     convert: ConvertConfig = field(default_factory=ConvertConfig)
+
+
+# Shared default instance — avoids recreating defaults in every constructor.
+_DEFAULT_CONFIG: AppConfig | None = None
+
+
+def default_config() -> AppConfig:
+    """Return a lazily-created shared default AppConfig."""
+    global _DEFAULT_CONFIG
+    if _DEFAULT_CONFIG is None:
+        _DEFAULT_CONFIG = AppConfig()
+    return _DEFAULT_CONFIG
+
+
+def resolve_config(config: AppConfig | None) -> AppConfig:
+    """Return *config* if given, otherwise the shared default."""
+    return config if config is not None else default_config()

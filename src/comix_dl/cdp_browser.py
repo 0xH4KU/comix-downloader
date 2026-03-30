@@ -43,9 +43,6 @@ _CF_CONTENT_MARKERS = (
 __all__ = [
     "BrowserSessionManager",
     "CdpBrowser",
-    "_atexit_kill_chrome",
-    "_find_free_port",
-    "_is_port_in_use",
 ]
 
 

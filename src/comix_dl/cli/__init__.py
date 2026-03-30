@@ -24,6 +24,7 @@ import contextlib
 import logging
 import signal
 import sys
+import threading
 
 from rich.panel import Panel
 from rich.prompt import Prompt
@@ -43,7 +44,7 @@ from comix_dl.cli.interactive import flow_history, flow_settings, parse_chapter_
 from comix_dl.logging_utils import configure_logging
 from comix_dl.settings import SettingsRepository
 
-_shutdown_requested = False
+_shutdown_event = threading.Event()
 
 BANNER = r"""
   ██████╗ ██████╗ ███╗   ███╗██╗██╗  ██╗
@@ -173,16 +174,14 @@ def _main_impl() -> int:
 
 def _run_async(coro: object) -> int:
     """Run an async coroutine with Ctrl+C handling."""
-    global _shutdown_requested
-    _shutdown_requested = False
+    _shutdown_event.clear()
 
     loop = asyncio.new_event_loop()
     with contextlib.suppress(Exception):
         asyncio.set_event_loop(loop)
 
     def _on_sigint(*_: object) -> None:
-        global _shutdown_requested
-        _shutdown_requested = True
+        _shutdown_event.set()
         console.print("\n[yellow]⚠ Ctrl+C — finishing current downloads then stopping…[/yellow]")
 
     signal.signal(signal.SIGINT, _on_sigint)

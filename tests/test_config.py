@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import comix_dl.config as config_module
+import pytest
 from comix_dl.config import AppConfig, BrowserConfig, ConvertConfig, DownloadConfig, ServiceConfig
 
 
@@ -32,6 +33,28 @@ class TestServiceConfig:
     def test_base_url(self):
         cfg = ServiceConfig()
         assert cfg.base_url == "https://comix.to"
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            "http://comix.to",
+            "file:///tmp/comix",
+            "https://localhost",
+            "https://127.0.0.1",
+            "https://10.0.0.1",
+            "https://192.168.1.10",
+            "https://172.16.0.5",
+            "https://[::1]",
+            "https://[fc00::1]",
+        ],
+    )
+    def test_rejects_non_public_or_non_https_base_url(self, base_url: str):
+        with pytest.raises(ValueError):
+            ServiceConfig(base_url=base_url)
+
+    def test_rejects_missing_hostname(self):
+        with pytest.raises(ValueError):
+            ServiceConfig(base_url="https:///missing-host")
 
 
 class TestConvertConfig:

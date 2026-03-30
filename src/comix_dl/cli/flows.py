@@ -41,9 +41,9 @@ if TYPE_CHECKING:
 
 def _is_shutdown() -> bool:
     """Check the module-level shutdown flag."""
-    from comix_dl.cli import _shutdown_requested
+    from comix_dl.cli import _shutdown_event
 
-    return _shutdown_requested
+    return _shutdown_event.is_set()
 
 
 def _render_series_info_panel(info: SeriesInfo) -> None:

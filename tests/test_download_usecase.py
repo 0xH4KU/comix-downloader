@@ -76,13 +76,13 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
                 failed=0,
             )
 
-    def fake_convert(chapter_dir: Path, fmt: str, *, optimize: bool, config: AppConfig) -> Path:
+    async def fake_convert(chapter_dir: Path, fmt: str, *, optimize: bool, config: AppConfig) -> Path:
         assert fmt == "pdf"
         assert optimize is True
         return chapter_dir.with_suffix(".pdf")
 
     monkeypatch.setattr(download_usecase, "Downloader", FakeDownloader)
-    monkeypatch.setattr(download_usecase, "convert", fake_convert)
+    monkeypatch.setattr(download_usecase, "convert_async", fake_convert)
 
     service = AsyncMock()
     service.get_chapter_images.return_value = ChapterImages(
@@ -184,11 +184,11 @@ async def test_download_chapters_counts_skipped_partial_and_missing_images(
                 failed_files=("002",),
             )
 
-    def fail_if_converted(*args: object, **kwargs: object) -> Path:
+    async def fail_if_converted(*args: object, **kwargs: object) -> Path:
         raise AssertionError("partial download must not be converted")
 
     monkeypatch.setattr(download_usecase, "Downloader", FakeDownloader)
-    monkeypatch.setattr(download_usecase, "convert", fail_if_converted)
+    monkeypatch.setattr(download_usecase, "convert_async", fail_if_converted)
 
     service = AsyncMock()
 

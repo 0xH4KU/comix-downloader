@@ -39,8 +39,12 @@ def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> N
         raise
 
 
-def atomic_write_bytes(path: Path, content: bytes) -> None:
-    """Atomically replace *path* with binary *content*."""
+def atomic_write_bytes(path: Path, content: bytes, *, sync: bool = True) -> None:
+    """Atomically replace *path* with binary *content*.
+
+    Set *sync* to ``False`` for transient data (e.g. downloaded images) where
+    crash-safety is not critical and throughput matters more.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
 
     tmp_path: Path | None = None
@@ -54,7 +58,8 @@ def atomic_write_bytes(path: Path, content: bytes) -> None:
         ) as tmp:
             tmp.write(content)
             tmp.flush()
-            os.fsync(tmp.fileno())
+            if sync:
+                os.fsync(tmp.fileno())
             tmp_path = Path(tmp.name)
 
         os.replace(tmp_path, path)

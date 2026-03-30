@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
-from comix_dl.config import AppConfig
+from comix_dl.config import AppConfig, resolve_config
 from comix_dl.errors import ConfigurationError
 
 if TYPE_CHECKING:
@@ -31,10 +31,24 @@ _POOL_UNAVAILABLE_MESSAGE = (
     "This usually means pooled page creation failed or the browser context is unavailable."
 )
 
-# Module-level reference for current-process atexit cleanup
-_active_chrome: subprocess.Popen[bytes] | None = None
-_active_pid_file: Path | None = None
-_active_instance_lock: TextIOWrapper | None = None
+
+class _ChromeProcessState:
+    """Module-level state for the currently active Chrome subprocess.
+
+    Encapsulates what were previously three separate module globals so the
+    atexit handler and BrowserSessionManager can share state without
+    scattered ``global`` declarations.
+    """
+
+    __slots__ = ("chrome", "pid_file", "instance_lock")
+
+    def __init__(self) -> None:
+        self.chrome: subprocess.Popen[bytes] | None = None
+        self.pid_file: Path | None = None
+        self.instance_lock: TextIOWrapper | None = None
+
+
+_process_state = _ChromeProcessState()
 
 
 def _lock_file_handle(fileobj: TextIOWrapper) -> None:
@@ -67,17 +81,16 @@ def _unlock_file_handle(fileobj: TextIOWrapper) -> None:
 
 def _atexit_kill_chrome() -> None:
     """Last-resort cleanup for Chrome started by this Python process only."""
-    global _active_chrome, _active_pid_file
-    if _active_chrome is not None:
+    if _process_state.chrome is not None:
         try:
-            _active_chrome.terminate()
-            _active_chrome.wait(timeout=3)
+            _process_state.chrome.terminate()
+            _process_state.chrome.wait(timeout=3)
         except Exception:
             with contextlib.suppress(Exception):
-                _active_chrome.kill()
-        _active_chrome = None
-    _remove_pid_file(_active_pid_file)
-    _active_pid_file = None
+                _process_state.chrome.kill()
+        _process_state.chrome = None
+    _remove_pid_file(_process_state.pid_file)
+    _process_state.pid_file = None
 
 
 atexit.register(_atexit_kill_chrome)
@@ -249,7 +262,7 @@ class BrowserSessionManager:
     """Own Chrome lifecycle, CDP connection, and the pooled Playwright pages."""
 
     def __init__(self, *, max_pages: int | None = None, config: AppConfig | None = None) -> None:
-        self._config = config if config is not None else AppConfig()
+        self._config = resolve_config(config)
         resolved_max_pages = (
             max_pages if max_pages is not None else self._config.download.max_concurrent_images
         )
@@ -311,10 +324,9 @@ class BrowserSessionManager:
 
     def _acquire_instance_lock(self) -> None:
         """Acquire the single-instance lock for browser sessions."""
-        global _active_instance_lock
         if self._instance_lock_handle is not None:
             return
-        if _active_instance_lock is not None:
+        if _process_state.instance_lock is not None:
             raise RuntimeError(
                 f"Another comix-dl browser session is already running "
                 f"(lock file: {self._lock_file}).",
@@ -341,11 +353,10 @@ class BrowserSessionManager:
             ) from None
 
         self._instance_lock_handle = handle
-        _active_instance_lock = handle
+        _process_state.instance_lock = handle
 
     def _release_instance_lock(self) -> None:
         """Release the single-instance lock if held by this browser."""
-        global _active_instance_lock
         handle = self._instance_lock_handle
         if handle is None:
             return
@@ -356,22 +367,18 @@ class BrowserSessionManager:
         with contextlib.suppress(OSError):
             self._lock_file.unlink()
         self._instance_lock_handle = None
-        if _active_instance_lock is handle:
-            _active_instance_lock = None
+        if _process_state.instance_lock is handle:
+            _process_state.instance_lock = None
 
     def _launch_chrome(self) -> None:
         """Launch Chrome subprocess with remote debugging enabled."""
-        global _active_chrome, _active_pid_file
         import platform
 
         system = platform.system()
         chrome_path = self._config.browser.chrome_path or _find_chrome(system)
 
-        if _is_port_in_use(9222):
-            self._cdp_port = _find_free_port()
-            logger.info("Port 9222 in use, using %d instead", self._cdp_port)
-        else:
-            self._cdp_port = 9222
+        self._cdp_port = _find_free_port()
+        logger.debug("Using CDP port %d", self._cdp_port)
 
         args = [
             chrome_path,
@@ -390,8 +397,8 @@ class BrowserSessionManager:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            _active_chrome = self._chrome_process
-            _active_pid_file = self._pid_file
+            _process_state.chrome = self._chrome_process
+            _process_state.pid_file = self._pid_file
             _write_pid_file(self._pid_file, self._chrome_process.pid)
             self._wait_for_cdp_ready()
         except FileNotFoundError:
@@ -509,7 +516,6 @@ class BrowserSessionManager:
 
     async def close(self) -> None:
         """Disconnect from Chrome and close the subprocess."""
-        global _active_chrome, _active_pid_file
         if self._closing:
             return
 
@@ -556,9 +562,9 @@ class BrowserSessionManager:
             self._context = None
             self._playwright = None
             self._chrome_process = None
-            _active_chrome = None
-            if _active_pid_file == self._pid_file:
-                _active_pid_file = None
+            _process_state.chrome = None
+            if _process_state.pid_file == self._pid_file:
+                _process_state.pid_file = None
             _remove_pid_file(self._pid_file)
             self._started = False
             self._release_instance_lock()

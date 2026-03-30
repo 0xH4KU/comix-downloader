@@ -364,6 +364,27 @@ class TestGetChapterImages:
         assert result is None
         assert "API request timed out." in caplog.text
 
+    async def test_reuses_cached_chapter_payload_for_count_and_images(self, mock_browser: AsyncMock):
+        mock_browser.get_json.return_value = {
+            "result": {
+                "number": 5,
+                "name": "The Beginning",
+                "images": [
+                    {"url": "https://cdn.example.com/img1.webp"},
+                    {"url": "https://cdn.example.com/img2.webp"},
+                ],
+            }
+        }
+        svc = _make_service(mock_browser)
+
+        image_count = await svc._get_image_count(12345)
+        result = await svc.get_chapter_images(12345)
+
+        assert image_count == 2
+        assert result is not None
+        assert result.chapter_label == "Chapter 5 - The Beginning"
+        assert mock_browser.get_json.await_count == 1
+
 
 class TestGetSeries:
     async def test_403_raises_remote_api_error(self, mock_browser: AsyncMock):

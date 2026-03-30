@@ -351,13 +351,13 @@ class TestBrowserTimeouts:
 
     def test_atexit_cleanup_only_targets_current_process_chrome(self):
         process = MagicMock()
-        browser_session_module._active_chrome = process
+        browser_session_module._process_state.chrome = process
 
         _atexit_kill_chrome()
 
         process.terminate.assert_called_once()
         process.wait.assert_called_once_with(timeout=3)
-        assert browser_session_module._active_chrome is None
+        assert browser_session_module._process_state.chrome is None
 
     def test_cleanup_stale_profile_chrome_terminates_matching_process(self, tmp_path, monkeypatch):
         pid_file = tmp_path / "chrome.pid"
