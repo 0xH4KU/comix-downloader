@@ -445,6 +445,13 @@ class CdpBrowser(BrowserSessionManager):
         except Exception as exc:
             logger.debug("Failed to install signing on pooled page: %s", exc)
 
+    async def _create_pooled_page(self, *, action: str, navigate_to_base: bool) -> Page:
+        """Create a pooled page and install API signing if warmed on the base origin."""
+        page = await super()._create_pooled_page(action=action, navigate_to_base=navigate_to_base)
+        if navigate_to_base and self._signing_installed:
+            await self._install_signing_on_page(page)
+        return page
+
     async def _init_pool_pages(self, url: str) -> None:
         """Navigate pool pages to *url* and install API signing on each."""
         await super()._init_pool_pages(url)

@@ -6,7 +6,7 @@ This document is for maintainers or local automation that still assumes the old 
 
 ## Runtime Behavior Changes
 
-- The `/manga/{hash_id}/chapters` API endpoint now requires an HMAC-style request signature (`_=` query parameter). `CdpBrowser` extracts the signing function from the site's JavaScript at runtime and applies it transparently. Unsigned chapter-list requests return `HTTP 200` with `{"status": 403}` in the JSON body.
+- The `/manga/{hash_id}/chapters` API endpoint now requires an HMAC-style request signature (`_=` query parameter). `CdpBrowser` extracts the signing function from the site's JavaScript at runtime and applies it transparently to the main page and all pooled browser pages (including those created lazily). Unsigned chapter-list requests return `HTTP 200` with `{"status": 403}` in the JSON body.
 - `comix_service.py` now detects API-level error status codes inside JSON responses (e.g. `{"status": 403}`) and logs an explicit signing failure message instead of silently returning zero chapters.
 - Large multi-batch PDF output now depends on the bundled runtime `pypdf` package; normal installs no longer need a hidden extra merge dependency.
 - Partial chapter downloads no longer convert, no longer write success history, and no longer trigger success notifications.

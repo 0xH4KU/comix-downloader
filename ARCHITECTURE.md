@@ -88,7 +88,7 @@ Instead of reverse-engineering the algorithm, `CdpBrowser` extracts the signing 
 
 1. After CF clearance, `_install_api_signing()` scans `<script>` tags for the chunk containing the API client definition.
 2. It extracts the signing IIFE by locating known boundary markers in the chunk source.
-3. The IIFE is `eval`'d on each browser page, exposing `window.__comixSign(method, path, options)`.
+3. The IIFE is `eval`'d on each browser page, exposing `window.__comixSign(method, path, options)`. To ensure lazy-loaded pool pages also receive the signing code, `CdpBrowser` overrides `_create_pooled_page()`.
 4. `get_json()` transparently detects `/chapters` requests and applies signing before executing `fetch()`.
 
 This approach is robust because it uses the site's actual signing implementation rather than a fragile reimplementation, and it adapts automatically when the signing algorithm is updated in new JS bundle deployments.
