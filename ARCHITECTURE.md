@@ -73,11 +73,25 @@ This separation matters because lifecycle logic is stateful and failure-prone. K
 - Prefers live challenge signals over stale `cf_clearance` cookies when deciding whether manual solve is needed
 - Fetches bytes/JSON via `page.evaluate(fetch())`
 - Keeps Cloudflare heuristics separate from Chrome startup and shutdown
+- Extracts and installs the site's API request-signing function at runtime (see below)
 
 This layering makes the browser subsystem testable in two slices:
 
 - Session tests: locks, page pool, dead-page replacement, timeout wiring
 - Cloudflare/request tests: challenge detection, retry behavior, request orchestration
+
+#### API Request Signing (v0.3.46+)
+
+The `/manga/{hash_id}/chapters` endpoint now requires an HMAC-style `_=` signature query parameter alongside `time=`. Requests without it receive `HTTP 200` with `{"status": 403}` in the JSON body. The signing algorithm is obfuscated inside a Next.js chunk and generates path-specific signatures.
+
+Instead of reverse-engineering the algorithm, `CdpBrowser` extracts the signing IIFE from the site's own JavaScript at runtime:
+
+1. After CF clearance, `_install_api_signing()` scans `<script>` tags for the chunk containing the API client definition.
+2. It extracts the signing IIFE by locating known boundary markers in the chunk source.
+3. The IIFE is `eval`'d on each browser page, exposing `window.__comixSign(method, path, options)`.
+4. `get_json()` transparently detects `/chapters` requests and applies signing before executing `fetch()`.
+
+This approach is robust because it uses the site's actual signing implementation rather than a fragile reimplementation, and it adapts automatically when the signing algorithm is updated in new JS bundle deployments.
 
 ## Service and Download Layer
 

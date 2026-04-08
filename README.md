@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.3.45-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.3.46-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -220,7 +220,7 @@ Checks Python version, dependencies, Chrome availability, and output directory.
 3. **REST API** — all data comes from comix.to's v2 REST API:
    - `GET /api/v2/manga?keyword=...` — search
    - `GET /api/v2/manga/{hash_id}` — manga info
-   - `GET /api/v2/manga/{hash_id}/chapters` — chapter list
+   - `GET /api/v2/manga/{hash_id}/chapters` — chapter list (requires request signing; handled transparently)
    - `GET /api/v2/chapters/{chapter_id}` — chapter images
 
 4. **Smart Dedup** — the API often returns duplicate entries for the same chapter (from different uploaders). comix-dl groups chapters by number, language, and subtitle, then keeps the same-language duplicate with the most images. Chapters with the same number but different subtitles (e.g. "Chapter 0 - Volume 11" vs "Chapter 0 - Volume 12") or different languages are correctly treated as distinct content.

@@ -266,6 +266,16 @@ class ComixService:
                 break
 
             result_obj = resp.get("result", {})
+            api_status = resp.get("status")
+            if isinstance(api_status, (int, float, str)) and int(api_status) >= 400:
+                logger.error(
+                    "Chapter listing returned API status %s for '%s' "
+                    "(message: %s). Request signing may have failed.",
+                    api_status,
+                    hash_id,
+                    resp.get("message", "unknown"),
+                )
+                break
             items = result_obj.get("items", []) if isinstance(result_obj, dict) else []
             if not isinstance(items, list) or not items:
                 break

@@ -2,10 +2,12 @@
 
 ## Scope
 
-This document is for maintainers or local automation that still assumes the old monolithic CLI/runtime design. It summarizes the behavioral and structural shifts introduced across the refactor slices up to `v0.3.41`.
+This document is for maintainers or local automation that still assumes the old monolithic CLI/runtime design. It summarizes the behavioral and structural shifts introduced across the refactor slices up to `v0.3.46`.
 
 ## Runtime Behavior Changes
 
+- The `/manga/{hash_id}/chapters` API endpoint now requires an HMAC-style request signature (`_=` query parameter). `CdpBrowser` extracts the signing function from the site's JavaScript at runtime and applies it transparently. Unsigned chapter-list requests return `HTTP 200` with `{"status": 403}` in the JSON body.
+- `comix_service.py` now detects API-level error status codes inside JSON responses (e.g. `{"status": 403}`) and logs an explicit signing failure message instead of silently returning zero chapters.
 - Large multi-batch PDF output now depends on the bundled runtime `pypdf` package; normal installs no longer need a hidden extra merge dependency.
 - Partial chapter downloads no longer convert, no longer write success history, and no longer trigger success notifications.
 - Resume logic now trusts only validated image files and `chapter.state.json`; corrupt or stale artifacts are removed and re-downloaded.
