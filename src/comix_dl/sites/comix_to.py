@@ -46,6 +46,71 @@ logger = logging.getLogger(__name__)
 _URL_HOST_PATTERN = re.compile(r"^(?:www\.)?comix\.to$", re.IGNORECASE)
 
 
+# JS IIFE registered with the engine after Cloudflare clearance. Each
+# page (main + pool) evaluates this once at install time:
+#
+#   1. If the comix.to signing function is not yet on this page, scan
+#      the loaded Next.js chunks for the API client bundle and pull
+#      out the obfuscated signing IIFE the site itself uses.
+#   2. eval the IIFE so window.__comixSign(method, path, options) is
+#      available on this page.
+#   3. Push a URL transformer onto window.__comixUrlTransformers that
+#      signs ``/chapters`` requests on every outbound fetch.
+#
+# Hardening of the IIFE extraction step (hash + disk cache + sanity
+# whitelist) is deferred to a follow-up patch (todo.md / "待討論"
+# section). Today: we either get a fresh IIFE on every page or fail
+# loudly with a clear error message.
+_SIGNING_TRANSFORMER_IIFE = """
+(async function() {
+    try {
+        if (typeof window.__comixSign !== 'function') {
+            const scripts = document.querySelectorAll('script[src*="_next/static/chunks"]');
+            for (const script of scripts) {
+                try {
+                    const resp = await fetch(script.src);
+                    const text = await resp.text();
+                    if (!text.includes('baseUrl:"https://comix.to/api/v2/"')) continue;
+                    const classIdx = text.indexOf('class n extends Error{response');
+                    if (classIdx === -1) continue;
+                    const iifeStart = text.lastIndexOf('let i=', classIdx);
+                    if (iifeStart === -1) continue;
+                    const iifeEndIdx = text.substring(iifeStart, classIdx).lastIndexOf('}();');
+                    if (iifeEndIdx === -1) continue;
+                    const iife = text.substring(iifeStart, iifeStart + iifeEndIdx + 4);
+                    eval('window.__comixSign = ' + iife.substring('let i='.length));
+                    if (typeof window.__comixSign === 'function') break;
+                } catch (e) { continue; }
+            }
+        }
+        if (typeof window.__comixSign !== 'function') {
+            console.warn('[comix-dl] could not extract /chapters signing function; '
+                       + 'chapter listings may return HTTP 403.');
+            return;
+        }
+        window.__comixUrlTransformers = window.__comixUrlTransformers || [];
+        window.__comixUrlTransformers.push(function(method, url) {
+            if (!url.includes('/chapters')) return url;
+            try {
+                const u = new URL(url);
+                const path = u.pathname.replace(new RegExp("^/api/v2"), '');
+                const queryObj = {};
+                u.searchParams.forEach((v, k) => { queryObj[k] = isNaN(v) ? v : Number(v); });
+                const signed = window.__comixSign('GET', path, { query: queryObj });
+                const newUrl = new URL(u.origin + u.pathname);
+                for (const [k, v] of Object.entries(signed.query)) {
+                    newUrl.searchParams.set(k, String(v));
+                }
+                return newUrl.toString();
+            } catch (e) { return url; }
+        });
+    } catch (e) {
+        console.warn('[comix-dl] signing transformer install failed:', e);
+    }
+})();
+"""
+
+
 def _describe_api_error(exc: Exception, *, action: str) -> str:
     """Format a high-value remote failure mode for user-facing logs."""
     if isinstance(exc, Http403Error):
@@ -78,14 +143,15 @@ class ComixToAdapter:
     # -- Lifecycle hooks ----------------------------------------------------
 
     async def on_engine_ready(self, engine: Engine) -> None:
-        """Install request-signing transformer.
+        """Install the comix.to URL signing transformer.
 
-        Wave 1 leaves the transformer install as a placeholder; F-3c
-        registers the actual signing IIFE through
-        ``engine.register_url_transformer`` and removes the legacy
-        signing block from CdpBrowser.
+        The transformer IIFE is replayed against every browser page
+        the engine creates (main and pool); that IIFE extracts the
+        site's own signing function from its Next.js chunks and
+        registers a URL transformer that signs ``/chapters`` requests
+        before they leave the page.
         """
-        return None
+        engine.register_url_transformer(_SIGNING_TRANSFORMER_IIFE)
 
     async def probe_alive(self, engine: Engine) -> bool:
         """Best-effort reachability probe used during mirror selection.

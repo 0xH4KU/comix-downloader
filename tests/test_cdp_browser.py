@@ -866,7 +866,6 @@ class TestExtensionHooks:
         browser._goto_with_timeout = AsyncMock()
         browser._is_cf_challenge = AsyncMock(return_value=False)
         browser._has_cf_clearance_cookie = AsyncMock(return_value=True)
-        browser._install_api_signing = AsyncMock()
         browser._init_pool_pages = AsyncMock()
         browser._install_url_transformers_on_all_pages = AsyncMock()
 
@@ -885,7 +884,6 @@ class TestExtensionHooks:
     async def test_create_pooled_page_installs_transformers_when_registered(self) -> None:
         browser = CdpBrowser(config=AppConfig())
         browser.register_url_transformer("(function() {})()")
-        browser._install_signing_on_page = AsyncMock()
         browser._install_url_transformers_on_page = AsyncMock()
 
         new_page = MagicMock()

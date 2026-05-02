@@ -48,6 +48,31 @@ def _adapter() -> ComixToAdapter:
 
 
 # ---------------------------------------------------------------------------
+# Lifecycle hooks
+# ---------------------------------------------------------------------------
+
+class TestOnEngineReady:
+    async def test_registers_signing_transformer(self) -> None:
+        adapter = _adapter()
+        registered: list[str] = []
+
+        class FakeEngine:
+            def register_url_transformer(self, iife_js: str) -> None:
+                registered.append(iife_js)
+
+        await adapter.on_engine_ready(FakeEngine())
+
+        assert len(registered) == 1
+        iife = registered[0]
+        # IIFE must include the signing-extraction logic and push a
+        # transformer onto the global array; both are required for
+        # /chapters requests to be signed.
+        assert "window.__comixSign" in iife
+        assert "window.__comixUrlTransformers" in iife
+        assert "/chapters" in iife
+
+
+# ---------------------------------------------------------------------------
 # URL handling
 # ---------------------------------------------------------------------------
 

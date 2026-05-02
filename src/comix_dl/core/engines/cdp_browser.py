@@ -137,7 +137,6 @@ class CdpBrowser(BrowserSessionManager):
         self._cf_cleared = False
         self._cf_lock = asyncio.Lock()
         self._main_page_lock = asyncio.Lock()
-        self._signing_installed = False
         self._url_transformer_iifes: list[str] = []
         self._on_ready_hooks: list[OnEngineReadyHook] = []
         self._on_ready_hooks_done = False
@@ -147,7 +146,6 @@ class CdpBrowser(BrowserSessionManager):
             await super().close()
         finally:
             self._cf_cleared = False
-            self._signing_installed = False
             self._on_ready_hooks_done = False
 
     async def __aenter__(self) -> CdpBrowser:
@@ -402,7 +400,6 @@ class CdpBrowser(BrowserSessionManager):
 
             self._cf_cleared = True
             logger.info("CF clearance confirmed")
-            await self._install_api_signing(page)
             await self._init_pool_pages(url)
             # F-4: adapter on-engine-ready hooks fire after CF clearance
             # and pool warm-up. Hooks may call register_url_transformer
@@ -491,31 +488,15 @@ class CdpBrowser(BrowserSessionManager):
         """GET JSON via page.evaluate(fetch()).
 
         Outbound requests run through the registered URL transformer
-        chain (see :meth:`register_url_transformer`) before the actual
-        fetch. The legacy comix.to ``/chapters`` signing block remains
-        in place until F-3 relocates it to a SiteAdapter-registered
-        transformer, at which point it can be deleted.
+        chain (see :meth:`register_url_transformer`); site-specific
+        signing / auth lives in those transformers and never inside
+        this engine.
         """
         result = await self._evaluate_request_with_cf_retry(
             url=url,
             expression="""async (url) => {
                 const __comixMethod = 'GET';
 """ + _URL_TRANSFORMER_JS_PRELUDE + """
-                // Legacy comix.to /chapters signing. F-3 moves this into a
-                // SiteAdapter URL transformer; until then it stays here so
-                // wave-1 keeps the current request signing behaviour.
-                if (url.includes('/chapters') && typeof window.__comixSign === 'function') {
-                    const u = new URL(url);
-                    const path = u.pathname.replace(new RegExp("^/api/v2"), '');
-                    const queryObj = {};
-                    u.searchParams.forEach((v, k) => { queryObj[k] = isNaN(v) ? v : Number(v); });
-                    const signed = window.__comixSign('GET', path, { query: queryObj });
-                    const newUrl = new URL(u.origin + u.pathname);
-                    for (const [k, v] of Object.entries(signed.query)) {
-                        newUrl.searchParams.set(k, String(v));
-                    }
-                    url = newUrl.toString();
-                }
                 const resp = await fetch(url);
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 return await resp.json();
@@ -526,130 +507,18 @@ class CdpBrowser(BrowserSessionManager):
         )
         return cast("dict[str, object]", result)
 
-    async def _install_api_signing(self, page: Page) -> None:
-        """Extract the API request-signing function from the site's JS and install it.
-
-        The site uses an obfuscated HMAC-like function to sign requests to
-        certain endpoints (e.g. ``/chapters``).  Rather than reimplementing
-        the algorithm, we:
-
-        1. Find the Next.js chunk containing the API client definition.
-        2. Extract the signing IIFE from the chunk source text.
-        3. ``eval`` it in each browser page so ``window.__comixSign`` is
-           available for ``get_json`` to call transparently.
-        """
-        if self._signing_installed:
-            return
-
-        install_js = """
-        async () => {
-            const scripts = document.querySelectorAll('script[src*="_next/static/chunks"]');
-            for (const script of scripts) {
-                try {
-                    const resp = await fetch(script.src);
-                    const text = await resp.text();
-                    if (!text.includes('baseUrl:"https://comix.to/api/v2/"')) continue;
-                    const classIdx = text.indexOf('class n extends Error{response');
-                    if (classIdx === -1) continue;
-                    const iifeStart = text.lastIndexOf('let i=', classIdx);
-                    if (iifeStart === -1) continue;
-                    const iifeEndSearch = text.substring(iifeStart, classIdx);
-                    const iifeEndIdx = iifeEndSearch.lastIndexOf('}();');
-                    if (iifeEndIdx === -1) continue;
-                    const iife = text.substring(iifeStart, iifeStart + iifeEndIdx + 4);
-                    eval('window.__comixSign = ' + iife.substring('let i='.length));
-                    return typeof window.__comixSign === 'function';
-                } catch (e) { continue; }
-            }
-            return false;
-        }
-        """
-
-        try:
-            result = await self._evaluate_with_timeout(
-                page,
-                install_js,
-                None,
-                timeout_ms=self._config.browser.timeout_ms,
-                action="Installing API request signing function",
-            )
-            if result:
-                logger.info("API request signing installed on main page")
-                self._signing_installed = True
-            else:
-                logger.warning(
-                    "Could not extract API signing function; "
-                    "chapter listing requests may fail with HTTP 403."
-                )
-        except Exception as exc:
-            logger.warning("Failed to install API signing: %s", exc)
-
-    async def _install_signing_on_page(self, page: Page) -> None:
-        """Copy ``window.__comixSign`` from the main page to a pooled page."""
-        if not self._signing_installed:
-            return
-
-        copy_js = """
-        async () => {
-            if (typeof window.__comixSign === 'function') return true;
-            const scripts = document.querySelectorAll('script[src*="_next/static/chunks"]');
-            for (const script of scripts) {
-                try {
-                    const resp = await fetch(script.src);
-                    const text = await resp.text();
-                    if (!text.includes('baseUrl:"https://comix.to/api/v2/"')) continue;
-                    const classIdx = text.indexOf('class n extends Error{response');
-                    if (classIdx === -1) continue;
-                    const iifeStart = text.lastIndexOf('let i=', classIdx);
-                    if (iifeStart === -1) continue;
-                    const iifeEndSearch = text.substring(iifeStart, classIdx);
-                    const iifeEndIdx = iifeEndSearch.lastIndexOf('}();');
-                    if (iifeEndIdx === -1) continue;
-                    const iife = text.substring(iifeStart, iifeStart + iifeEndIdx + 4);
-                    eval('window.__comixSign = ' + iife.substring('let i='.length));
-                    return typeof window.__comixSign === 'function';
-                } catch (e) { continue; }
-            }
-            return false;
-        }
-        """
-        try:
-            await self._evaluate_with_timeout(
-                page,
-                copy_js,
-                None,
-                timeout_ms=self._config.browser.timeout_ms,
-                action="Installing API signing on pooled page",
-            )
-        except Exception as exc:
-            logger.debug("Failed to install signing on pooled page: %s", exc)
-
     async def _create_pooled_page(self, *, action: str, navigate_to_base: bool) -> Page:
-        """Create a pooled page and install API signing if warmed on the base origin."""
+        """Create a pooled page and replay registered URL transformers on it."""
         page = await super()._create_pooled_page(action=action, navigate_to_base=navigate_to_base)
-        if navigate_to_base and self._signing_installed:
-            await self._install_signing_on_page(page)
         if navigate_to_base and self._url_transformer_iifes:
             await self._install_url_transformers_on_page(page)
         return page
 
     async def _init_pool_pages(self, url: str) -> None:
-        """Navigate pool pages to *url* and install API signing on each."""
+        """Navigate pool pages to *url*. Adapter setup runs after this via
+        :meth:`_install_url_transformers_on_all_pages`.
+        """
         await super()._init_pool_pages(url)
-        if not self._signing_installed:
-            return
-
-        pages: list[Page] = []
-        while not self._page_pool.empty():
-            try:
-                pages.append(self._page_pool.get_nowait())
-            except asyncio.QueueEmpty:
-                break
-
-        if pages:
-            await asyncio.gather(*[self._install_signing_on_page(p) for p in pages])
-            for page in pages:
-                self._page_pool.put_nowait(page)
 
     async def _install_url_transformers_on_all_pages(self) -> None:
         """Replay every registered URL transformer on the main page and the pool.
