@@ -29,6 +29,7 @@ def test_load_runtime_uses_explicit_output_override() -> None:
 @pytest.mark.asyncio
 async def test_open_application_session_wires_active_adapter(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     captured: dict[str, object] = {}
 
@@ -92,20 +93,28 @@ async def test_open_application_session_wires_active_adapter(
     sites.register(fake_adapter)
     monkeypatch.setattr(app_session, "CdpBrowser", FakeBrowserContext)
 
+    # Avoid touching the user's real ~/.config when the session writes
+    # mirror state on the probe outcome.
+    mirror_repo = app_session.MirrorStateRepository(state_file=tmp_path / "mirror_state.json")
+
     settings = Settings(output_dir="/tmp/default-output")
 
     try:
         async with app_session.open_application_session(
-            settings=settings, output="/tmp/custom-output",
+            settings=settings,
+            output="/tmp/custom-output",
+            mirror_repository=mirror_repo,
         ) as session:
             assert session.settings is settings
             assert session.output_dir == Path("/tmp/custom-output")
             assert session.adapter is fake_adapter
             assert captured["browser_base_url"] == "https://fake.example"
             assert captured["browser_config"] is session.config
-            # The session must register the adapter's on_engine_ready hook
-            # with the engine so site setup runs at the right moment.
-            assert session.browser.ready_hooks == [fake_adapter.on_engine_ready]
+            # The session must register exactly one on_engine_ready hook
+            # so site setup runs at the right moment. The hook wraps
+            # adapter.on_engine_ready so it can also probe the mirror;
+            # we only assert one was registered, not its identity.
+            assert len(session.browser.ready_hooks) == 1
     finally:
         # Restore the real registry by re-importing the comix_to module.
         sites.clear()

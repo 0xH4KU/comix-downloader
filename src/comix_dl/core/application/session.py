@@ -20,6 +20,11 @@ from comix_dl.core.application.query_usecase import (
     search_series,
 )
 from comix_dl.core.engines.cdp_browser import CdpBrowser
+from comix_dl.core.mirror_resolver import (
+    MirrorStateRepository,
+    record_probe_outcome,
+    select_initial_mirror,
+)
 from comix_dl.core.settings import Settings, SettingsRepository, build_runtime_config
 
 if TYPE_CHECKING:
@@ -110,20 +115,35 @@ async def open_application_session(
     settings: Settings | None = None,
     config: AppConfig | None = None,
     output: str | Path | None = None,
+    mirror_override: str | None = None,
+    mirror_repository: MirrorStateRepository | None = None,
 ) -> AsyncIterator[ApplicationSession]:
     """Open one browser-backed application session for CLI flows.
 
-    Selects the active site adapter from the registry, takes its first
-    mirror as the engine base URL (F-5 will probe the mirror list and
-    pick the first reachable one), and registers the adapter's
-    on_engine_ready hook so site-specific bootstrap (URL signing,
-    cookies, etc.) runs once after CF clearance.
+    Resolves the active mirror via :mod:`comix_dl.core.mirror_resolver`:
+    the explicit override wins, otherwise the most recently
+    successful mirror from disk, otherwise the adapter's first
+    declared mirror. Probe outcomes are persisted so subsequent runs
+    converge quickly.
     """
     runtime = load_runtime(settings=settings, config=config, output=output)
     adapter = sites.get_active()
-    base_url = adapter.mirrors[0]
+    repository = mirror_repository or MirrorStateRepository()
+    base_url = select_initial_mirror(
+        adapter, override=mirror_override, repository=repository,
+    )
     async with CdpBrowser(config=runtime.config, base_url=base_url) as browser:
-        browser.register_on_engine_ready(adapter.on_engine_ready)
+        async def _on_ready_with_probe(engine: CdpBrowser) -> None:
+            await adapter.on_engine_ready(engine)
+            await record_probe_outcome(
+                adapter,
+                engine,
+                base_url,
+                repository=repository,
+                skipped=mirror_override is not None,
+            )
+
+        browser.register_on_engine_ready(_on_ready_with_probe)
         yield ApplicationSession(
             settings=runtime.settings,
             config=runtime.config,

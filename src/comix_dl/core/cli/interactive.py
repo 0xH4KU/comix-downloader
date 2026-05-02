@@ -303,6 +303,9 @@ def run_doctor() -> int:
     """Run environment diagnostics."""
     import shutil
 
+    from comix_dl import sites
+    from comix_dl.core.mirror_resolver import MirrorStateRepository
+
     console.print()
     console.print(Panel("[bold]comix-downloader — Diagnostics[/bold]", border_style="cyan"))
     all_ok = True
@@ -350,6 +353,28 @@ def run_doctor() -> int:
     except OSError:
         console.print(f"  [red]✗[/red] Output: {out} (cannot create)")
         all_ok = False
+
+    # Site adapter + mirror diagnostics. Failures here do not flip
+    # all_ok because the framework still works without persisted state
+    # — but they help users debug "why did my last download stall".
+    try:
+        adapter = sites.get_active()
+    except Exception as exc:
+        console.print(f"  [red]✗[/red] Site adapter: not available ({exc})")
+        all_ok = False
+    else:
+        console.print(f"  [green]✓[/green] Site adapter: [bold]{adapter.name}[/bold]")
+        mirror_state = MirrorStateRepository().load(adapter.name)
+        if mirror_state.active:
+            console.print(f"      active mirror: [cyan]{mirror_state.active}[/cyan]")
+        else:
+            console.print(f"      active mirror: [dim]none cached, will use {adapter.mirrors[0]}[/dim]")
+        recent = list(reversed(mirror_state.history[-3:]))
+        if recent:
+            console.print("      recent probes:")
+            for record in recent:
+                marker = "[green]ok[/green]" if record.succeeded else "[red]fail[/red]"
+                console.print(f"        {marker}  {record.mirror}  ({record.checked_at})")
 
     console.print()
     if all_ok:

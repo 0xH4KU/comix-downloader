@@ -64,6 +64,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-V", "--version", action="version", version=f"comix-dl {__version__}")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("-q", "--quiet", action="store_true", help="Minimal output")
+    parser.add_argument(
+        "--mirror",
+        default=None,
+        metavar="URL",
+        help=(
+            "Override the active site mirror for this run "
+            "(e.g. --mirror https://comix.cc). "
+            "Without this flag, the last known good mirror is reused."
+        ),
+    )
 
     sub = parser.add_subparsers(dest="command")
 
@@ -135,7 +145,7 @@ def _main_impl() -> int:
         console.quiet = True
 
     if args.command == "search":
-        return _run_async(flow_search(args.query, quiet=args.quiet))
+        return _run_async(flow_search(args.query, quiet=args.quiet, mirror=args.mirror))
 
     if args.command == "download":
         return _run_async(
@@ -146,11 +156,12 @@ def _main_impl() -> int:
                 args.output,
                 optimize=None if not args.no_optimize else False,
                 quiet=args.quiet,
+                mirror=args.mirror,
             )
         )
 
     if args.command == "info":
-        return _run_async(flow_info(args.url))
+        return _run_async(flow_info(args.url, mirror=args.mirror))
 
     if args.command == "list":
         return flow_list()

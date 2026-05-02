@@ -341,7 +341,7 @@ async def test_flow_search_returns_zero_when_no_results(
     session = _make_session(tmp_path)
     session.search.return_value = []
 
-    monkeypatch.setattr(flows, "open_application_session", lambda: _SessionContext(session))
+    monkeypatch.setattr(flows, "open_application_session", lambda **_kwargs: _SessionContext(session))
     monkeypatch.setattr(flows.console, "status", lambda *_args, **_kwargs: nullcontext())
 
     assert await flows.flow_search("naruto") == 0
@@ -355,7 +355,7 @@ async def test_flow_search_surfaces_remote_api_error(
     session = _make_session(tmp_path)
     session.search.side_effect = RemoteApiError("Search for 'omori' failed")
 
-    monkeypatch.setattr(flows, "open_application_session", lambda: _SessionContext(session))
+    monkeypatch.setattr(flows, "open_application_session", lambda **_kwargs: _SessionContext(session))
     monkeypatch.setattr(flows.console, "status", lambda *_args, **_kwargs: nullcontext())
 
     with flows.console.capture() as capture:
@@ -379,7 +379,7 @@ async def test_flow_search_reloads_after_info_preview_and_downloads(
     print_search_table = MagicMock()
     download_with_progress = AsyncMock()
 
-    monkeypatch.setattr(flows, "open_application_session", lambda: _SessionContext(session))
+    monkeypatch.setattr(flows, "open_application_session", lambda **_kwargs: _SessionContext(session))
     monkeypatch.setattr(flows.console, "status", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(flows, "print_search_table", print_search_table)
     monkeypatch.setattr(flows, "print_series_header", MagicMock())
@@ -416,7 +416,7 @@ async def test_flow_search_returns_one_when_no_chapters_selected(
     ]
     session.load_series.return_value = _make_series(chapters=_make_chapters(2))
 
-    monkeypatch.setattr(flows, "open_application_session", lambda: _SessionContext(session))
+    monkeypatch.setattr(flows, "open_application_session", lambda **_kwargs: _SessionContext(session))
     monkeypatch.setattr(flows.console, "status", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(flows, "print_search_table", MagicMock())
     monkeypatch.setattr(flows, "print_series_header", MagicMock())
@@ -443,7 +443,7 @@ async def test_flow_url_download_uses_suggestions_then_downloads(
 
     download_with_progress = AsyncMock()
 
-    monkeypatch.setattr(flows, "open_application_session", lambda: _SessionContext(session))
+    monkeypatch.setattr(flows, "open_application_session", lambda **_kwargs: _SessionContext(session))
     monkeypatch.setattr(flows.console, "status", lambda *_args, **_kwargs: nullcontext())
     monkeypatch.setattr(flows, "print_search_table", MagicMock())
     monkeypatch.setattr(flows, "print_series_header", MagicMock())
@@ -475,7 +475,7 @@ async def test_flow_url_download_returns_one_when_series_is_missing(
     session = _make_session(tmp_path)
     session.resolve_series.return_value = SeriesLookupResult(slug="missing", series=None, suggestions=[])
 
-    monkeypatch.setattr(flows, "open_application_session", lambda: _SessionContext(session))
+    monkeypatch.setattr(flows, "open_application_session", lambda **_kwargs: _SessionContext(session))
     monkeypatch.setattr(flows.console, "status", lambda *_args, **_kwargs: nullcontext())
 
     assert await flows.flow_url_download("missing") == 1
@@ -489,7 +489,7 @@ async def test_flow_url_download_surfaces_remote_api_error(
     session = _make_session(tmp_path)
     session.resolve_series.side_effect = RemoteApiError("API blocked")
 
-    monkeypatch.setattr(flows, "open_application_session", lambda: _SessionContext(session))
+    monkeypatch.setattr(flows, "open_application_session", lambda **_kwargs: _SessionContext(session))
     monkeypatch.setattr(flows.console, "status", lambda *_args, **_kwargs: nullcontext())
 
     with flows.console.capture() as capture:
@@ -583,7 +583,7 @@ async def test_flow_info_handles_missing_and_success(
     missing_session = _make_session(tmp_path)
     missing_session.resolve_series.return_value = SeriesLookupResult(slug="missing", series=None, suggestions=[])
 
-    monkeypatch.setattr(flows, "open_application_session", lambda: _SessionContext(missing_session))
+    monkeypatch.setattr(flows, "open_application_session", lambda **_kwargs: _SessionContext(missing_session))
     monkeypatch.setattr(flows.console, "status", lambda *_args, **_kwargs: nullcontext())
 
     assert await flows.flow_info("missing") == 1
@@ -595,7 +595,7 @@ async def test_flow_info_handles_missing_and_success(
         suggestions=[],
     )
     render_panel = MagicMock()
-    monkeypatch.setattr(flows, "open_application_session", lambda: _SessionContext(success_session))
+    monkeypatch.setattr(flows, "open_application_session", lambda **_kwargs: _SessionContext(success_session))
     monkeypatch.setattr(flows, "_render_series_info_panel", render_panel)
 
     assert await flows.flow_info("series-a") == 0
@@ -610,7 +610,7 @@ async def test_flow_info_surfaces_remote_api_error(
     session = _make_session(tmp_path)
     session.resolve_series.side_effect = RemoteApiError("info failed")
 
-    monkeypatch.setattr(flows, "open_application_session", lambda: _SessionContext(session))
+    monkeypatch.setattr(flows, "open_application_session", lambda **_kwargs: _SessionContext(session))
     monkeypatch.setattr(flows.console, "status", lambda *_args, **_kwargs: nullcontext())
 
     with flows.console.capture() as capture:

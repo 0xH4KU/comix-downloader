@@ -230,9 +230,9 @@ async def _download_with_progress(
 # -- Flow: Search & Download --------------------------------------------------
 
 
-async def flow_search(query: str, *, quiet: bool = False) -> int:
+async def flow_search(query: str, *, quiet: bool = False, mirror: str | None = None) -> int:
     """Interactive search → select → download."""
-    async with open_application_session() as session:
+    async with open_application_session(mirror_override=mirror) as session:
         try:
             with console.status("[bold cyan]Searching…"):
                 results = await session.search(query)
@@ -335,9 +335,9 @@ async def flow_search(query: str, *, quiet: bool = False) -> int:
     return 0
 
 
-async def flow_url_download(url: str, *, quiet: bool = False) -> int:
+async def flow_url_download(url: str, *, quiet: bool = False, mirror: str | None = None) -> int:
     """Download from a manga URL (interactive mode)."""
-    async with open_application_session() as session:
+    async with open_application_session(mirror_override=mirror) as session:
         try:
             with console.status("[bold cyan]Fetching series info…"):
                 lookup = await session.resolve_series(url)
@@ -410,9 +410,12 @@ async def flow_noninteractive_download(
     settings: Settings | None = None,
     config: AppConfig | None = None,
     quiet: bool = False,
+    mirror: str | None = None,
 ) -> int:
     """Fully non-interactive download flow."""
-    async with open_application_session(settings=settings, config=config, output=output) as session:
+    async with open_application_session(
+        settings=settings, config=config, output=output, mirror_override=mirror,
+    ) as session:
         try:
             lookup = await session.resolve_series(url)
         except RemoteApiError as exc:
@@ -454,9 +457,9 @@ async def flow_noninteractive_download(
 # -- Flow: Info ---------------------------------------------------------------
 
 
-async def flow_info(url: str) -> int:
+async def flow_info(url: str, *, mirror: str | None = None) -> int:
     """Show manga metadata without downloading."""
-    async with open_application_session() as session:
+    async with open_application_session(mirror_override=mirror) as session:
         try:
             with console.status("[bold cyan]Fetching info…"):
                 lookup = await session.resolve_series(url)
