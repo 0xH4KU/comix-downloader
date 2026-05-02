@@ -21,6 +21,7 @@ from comix_dl.core.notify import send_notification
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from comix_dl.core.application.ports import HistoryPort
     from comix_dl.core.config import AppConfig
     from comix_dl.core.engines.cdp_browser import CdpBrowser
     from comix_dl.core.models import ChapterInfo
@@ -235,12 +236,12 @@ async def download_chapters(
     optimize: bool,
     on_event: DownloadEventHandler | None = None,
     is_shutdown: ShutdownCheck | None = None,
-    history_repository: HistoryRepository | None = None,
+    history_repository: HistoryPort | None = None,
     notifier: Notifier | None = None,
 ) -> DownloadSummary:
     """Download, convert, record, and notify for a list of chapters."""
     start_time = time.monotonic()
-    history = history_repository or HistoryRepository()
+    history: HistoryPort = history_repository or HistoryRepository()
     notify = notifier or send_notification
 
     def should_stop() -> bool:
