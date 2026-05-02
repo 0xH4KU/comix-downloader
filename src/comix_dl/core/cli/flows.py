@@ -34,8 +34,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from comix_dl.core.application.download_usecase import DownloadChapterEvent, DownloadSummary
-    from comix_dl.core.comix_service import ChapterInfo, SearchResult, SeriesInfo
     from comix_dl.core.config import AppConfig
+    from comix_dl.core.models import ChapterInfo, SearchResult, SeriesInfo
     from comix_dl.core.settings import Settings
 
 

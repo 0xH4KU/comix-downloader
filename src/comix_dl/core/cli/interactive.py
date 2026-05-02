@@ -16,7 +16,7 @@ from comix_dl.core.cli.display import console, format_bytes, print_chapters_tabl
 from comix_dl.core.settings import SettingsRepository
 
 if TYPE_CHECKING:
-    from comix_dl.core.comix_service import ChapterInfo
+    from comix_dl.core.models import ChapterInfo
 
 
 def flow_settings() -> None:

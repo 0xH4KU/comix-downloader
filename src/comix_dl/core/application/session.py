@@ -7,14 +7,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from comix_dl import sites
 from comix_dl.core.application.download_usecase import (
     DownloadEventHandler,
     DownloadSummary,
     ShutdownCheck,
     download_chapters,
 )
-from comix_dl.core.application.query_usecase import load_series, resolve_series_from_input, search_series
-from comix_dl.core.comix_service import ComixService
+from comix_dl.core.application.query_usecase import (
+    load_series,
+    resolve_series_from_input,
+    search_series,
+)
 from comix_dl.core.engines.cdp_browser import CdpBrowser
 from comix_dl.core.settings import Settings, SettingsRepository, build_runtime_config
 
@@ -22,8 +26,9 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from comix_dl.core.application.query_usecase import SeriesLookupResult
-    from comix_dl.core.comix_service import ChapterInfo, SearchResult, SeriesInfo
     from comix_dl.core.config import AppConfig
+    from comix_dl.core.models import ChapterInfo, SearchResult, SeriesInfo
+    from comix_dl.sites.base import SiteAdapter
 
 
 @dataclass(frozen=True)
@@ -43,19 +48,19 @@ class ApplicationSession:
     config: AppConfig
     output_dir: Path
     browser: CdpBrowser
-    service: ComixService
+    adapter: SiteAdapter
 
     async def search(self, query: str, *, limit: int = 20) -> list[SearchResult]:
-        """Search for series results."""
-        return await search_series(self.service, query, limit=limit)
+        """Search for series results via the active site adapter."""
+        return await search_series(self.adapter, self.browser, query, limit=limit)
 
     async def resolve_series(self, url_or_slug: str) -> SeriesLookupResult:
         """Resolve a series from a user-facing URL or slug."""
-        return await resolve_series_from_input(self.service, url_or_slug)
+        return await resolve_series_from_input(self.adapter, self.browser, url_or_slug)
 
-    async def load_series(self, hash_id: str) -> SeriesInfo:
-        """Load one fully-hydrated series."""
-        return await load_series(self.service, hash_id)
+    async def load_series(self, identifier: str) -> SeriesInfo:
+        """Load one fully-hydrated series by canonical identifier."""
+        return await load_series(self.adapter, self.browser, identifier)
 
     async def download(
         self,
@@ -70,7 +75,7 @@ class ApplicationSession:
         """Run the shared application download use case."""
         return await download_chapters(
             self.browser,
-            self.service,
+            self.adapter,
             series_title=series_title,
             chapters=chapters,
             output_dir=self.output_dir,
@@ -106,17 +111,23 @@ async def open_application_session(
     config: AppConfig | None = None,
     output: str | Path | None = None,
 ) -> AsyncIterator[ApplicationSession]:
-    """Open one browser-backed application session for CLI flows."""
+    """Open one browser-backed application session for CLI flows.
+
+    Selects the active site adapter from the registry, takes its first
+    mirror as the engine base URL (F-5 will probe the mirror list and
+    pick the first reachable one), and registers the adapter's
+    on_engine_ready hook so site-specific bootstrap (URL signing,
+    cookies, etc.) runs once after CF clearance.
+    """
     runtime = load_runtime(settings=settings, config=config, output=output)
-    # Site origin will move to the active SiteAdapter in F-3 / F-5
-    # (mirror selection). Until then we hard-code the comix.to origin
-    # so wave-1 commits stay incremental.
-    base_url = "https://comix.to"
+    adapter = sites.get_active()
+    base_url = adapter.mirrors[0]
     async with CdpBrowser(config=runtime.config, base_url=base_url) as browser:
+        browser.register_on_engine_ready(adapter.on_engine_ready)
         yield ApplicationSession(
             settings=runtime.settings,
             config=runtime.config,
             output_dir=runtime.output_dir,
             browser=browser,
-            service=ComixService(browser, config=runtime.config, base_url=base_url),
+            adapter=adapter,
         )

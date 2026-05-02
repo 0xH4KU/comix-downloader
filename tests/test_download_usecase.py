@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from comix_dl.core.application import download_usecase
-from comix_dl.core.comix_service import ChapterImages, ChapterInfo
 from comix_dl.core.config import AppConfig
 from comix_dl.core.downloader import ChapterDownloadResult, DownloadProgress
+from comix_dl.core.models import ChapterImages, ChapterInfo
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -94,7 +94,7 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
     with caplog.at_level(logging.INFO, logger="comix_dl.core.application.download_usecase"):
         summary = await download_usecase.download_chapters(
             browser=object(),
-            service=service,
+            adapter=service,
             series_title="Series A",
             chapters=[ChapterInfo(title="Chapter 1", chapter_id=101, number="1")],
             output_dir=tmp_path,
@@ -192,7 +192,7 @@ async def test_download_chapters_counts_skipped_partial_and_missing_images(
 
     service = AsyncMock()
 
-    async def get_chapter_images(chapter_id: int) -> ChapterImages | None:
+    async def get_chapter_images(_engine: object, chapter_id: int) -> ChapterImages | None:
         if chapter_id == 2:
             return ChapterImages(
                 title="Chapter 2",
@@ -211,7 +211,7 @@ async def test_download_chapters_counts_skipped_partial_and_missing_images(
 
     summary = await download_usecase.download_chapters(
         browser=object(),
-        service=service,
+        adapter=service,
         series_title="Series B",
         chapters=chapters,
         output_dir=tmp_path,

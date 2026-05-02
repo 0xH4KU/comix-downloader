@@ -19,9 +19,9 @@ from comix_dl.core.application.download_usecase import DownloadChapterEvent, Dow
 from comix_dl.core.application.query_usecase import SeriesLookupResult
 from comix_dl.core.application.session import RuntimeContext
 from comix_dl.core.cli import flows
-from comix_dl.core.comix_service import ChapterInfo, SearchResult, SeriesInfo
 from comix_dl.core.config import AppConfig
 from comix_dl.core.errors import RemoteApiError
+from comix_dl.core.models import ChapterInfo, SearchResult, SeriesInfo
 from comix_dl.core.settings import Settings
 
 

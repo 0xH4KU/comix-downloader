@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from comix_dl.core.comix_service import (
+    from comix_dl.core.models import (
         ChapterImages,
         ChapterInfo,
         DedupDecision,
@@ -225,8 +225,16 @@ class SiteAdapter(Protocol):
         """Fetch the full series object for a canonical *identifier*."""
         ...
 
-    async def get_chapter_images(self, engine: Engine, chapter_id: int) -> ChapterImages:
-        """Fetch the ordered image URL list for one chapter."""
+    async def get_chapter_images(
+        self, engine: Engine, chapter_id: int,
+    ) -> ChapterImages | None:
+        """Fetch the ordered image URL list for one chapter.
+
+        Returns ``None`` when the remote API does not yield a usable
+        image set (empty payload, schema mismatch, recoverable transport
+        failure). Callers should treat that as a missing-images outcome
+        rather than a hard error.
+        """
         ...
 
     # -- Site-specific behaviour --------------------------------------

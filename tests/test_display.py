@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from comix_dl.core.cli.display import console, print_dedup_report
-from comix_dl.core.comix_service import DedupDecision
+from comix_dl.core.models import DedupDecision
 
 
 class TestDedupDisplay:

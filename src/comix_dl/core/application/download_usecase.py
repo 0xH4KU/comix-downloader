@@ -21,9 +21,10 @@ from comix_dl.core.notify import send_notification
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from comix_dl.core.comix_service import ChapterInfo, ComixService
     from comix_dl.core.config import AppConfig
     from comix_dl.core.engines.cdp_browser import CdpBrowser
+    from comix_dl.core.models import ChapterInfo
+    from comix_dl.sites.base import SiteAdapter
 
 
 logger = logging.getLogger(__name__)
@@ -101,7 +102,7 @@ async def _process_one_chapter(
     chapter: ChapterInfo,
     *,
     browser: CdpBrowser,
-    service: ComixService,
+    adapter: SiteAdapter,
     series_title: str,
     output_dir: Path,
     fmt: str,
@@ -144,8 +145,8 @@ async def _process_one_chapter(
         chapter_id=chapter.chapter_id, chapter_title=chapter.title, kind="started",
     ))
 
-    # Fetch image URLs
-    chapter_data = await service.get_chapter_images(chapter.chapter_id)
+    # Fetch image URLs from the active site adapter.
+    chapter_data = await adapter.get_chapter_images(browser, chapter.chapter_id)
     if chapter_data is None:
         msg = "no images available from remote API"
         _log("missing_images", bytes_downloaded=0, message=msg)
@@ -224,7 +225,7 @@ async def _process_one_chapter(
 
 async def download_chapters(
     browser: CdpBrowser,
-    service: ComixService,
+    adapter: SiteAdapter,
     *,
     series_title: str,
     chapters: list[ChapterInfo],
@@ -256,7 +257,7 @@ async def download_chapters(
             outcome = await _process_one_chapter(
                 chapter,
                 browser=browser,
-                service=service,
+                adapter=adapter,
                 series_title=series_title,
                 output_dir=output_dir,
                 fmt=fmt,

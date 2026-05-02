@@ -14,7 +14,7 @@ from comix_dl.sites.base import SiteAdapter
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    from comix_dl.core.comix_service import (
+    from comix_dl.core.models import (
         ChapterImages,
         ChapterInfo,
         DedupDecision,

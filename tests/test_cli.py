@@ -11,7 +11,7 @@ import pytest
 
 from comix_dl.core import cli as cli_module
 from comix_dl.core.cli import _build_parser, _parse_chapter_selection
-from comix_dl.core.comix_service import ChapterInfo
+from comix_dl.core.models import ChapterInfo
 from comix_dl.core.settings import Settings
 
 # ---------------------------------------------------------------------------

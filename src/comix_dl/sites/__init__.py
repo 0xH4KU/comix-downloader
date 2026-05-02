@@ -93,6 +93,11 @@ def clear() -> None:
     _REGISTRY.clear()
 
 
+# Side-effect import: registers the comix.to reference adapter at
+# package load time. Forks replace this single line (and the
+# referenced module) when swapping in a new site adapter.
+from comix_dl.sites import comix_to as _comix_to  # noqa: E402, F401
+
 __all__ = [
     "all_adapters",
     "clear",
