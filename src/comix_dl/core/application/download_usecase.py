@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -110,6 +111,7 @@ async def _process_one_chapter(
     config: AppConfig,
     optimize: bool,
     on_event: DownloadEventHandler | None,
+    run_id: str,
 ) -> _ChapterOutcome:
     """Download, validate, and convert a single chapter.
 
@@ -122,6 +124,7 @@ async def _process_one_chapter(
         logger.info(
             "chapter_download_finished",
             extra=log_context(
+                run_id=run_id,
                 series=series_title,
                 chapter_id=chapter.chapter_id,
                 chapter_title=chapter.title,
@@ -241,6 +244,19 @@ async def download_chapters(
 ) -> DownloadSummary:
     """Download, convert, record, and notify for a list of chapters."""
     start_time = time.monotonic()
+    # Stable per-batch identifier injected into every structured log line
+    # so a single download run can be filtered out of merged logs without
+    # ambiguity even when multiple sessions overlap.
+    run_id = secrets.token_hex(4)
+    logger.info(
+        "download_batch_started",
+        extra=log_context(
+            run_id=run_id,
+            series=series_title,
+            chapters=len(chapters),
+            fmt=fmt,
+        ),
+    )
     history: HistoryPort = history_repository or HistoryRepository()
     notify = notifier or send_notification
 
@@ -265,6 +281,7 @@ async def download_chapters(
                 config=config,
                 optimize=optimize,
                 on_event=on_event,
+                run_id=run_id,
             )
             chapter_delay = config.download.chapter_delay
             if chapter_delay > 0:
@@ -300,6 +317,7 @@ async def download_chapters(
     logger.info(
         "download_batch_finished",
         extra=log_context(
+            run_id=run_id,
             series=series_title,
             status="degraded" if summary.partial or summary.failed else "ok",
             bytes=summary.total_bytes,
