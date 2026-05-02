@@ -6,20 +6,31 @@ Uses the REST API v2 at ``/api/v2/``:
 - Manga info: ``GET /api/v2/manga/{hash_id}``
 - Chapters: ``GET /api/v2/manga/{hash_id}/chapters``
 - Chapter images: ``GET /api/v2/chapters/{chapter_id}``
+
+This module is staging ground for the comix.to-specific service logic.
+F-3 will relocate it to :mod:`comix_dl.sites.comix_to`; until then the
+data classes have already moved to :mod:`comix_dl.core.models` and are
+re-exported here for backwards compatibility with current call sites.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from collections import defaultdict
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 from comix_dl.core.config import AppConfig, resolve_config
 from comix_dl.core.errors import BrowserTimeoutError, Http403Error, RemoteApiError
+from comix_dl.core.models import (
+    ChapterImages,
+    ChapterInfo,
+    DedupDecision,
+    SearchResult,
+    SeriesInfo,
+    normalize_chapter_number,
+)
 
 if TYPE_CHECKING:
     from comix_dl.core.engines.cdp_browser import CdpBrowser
@@ -27,94 +38,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _normalize_chapter_number(raw_number: object) -> str:
-    """Preserve chapter numbers as strings without forcing float semantics."""
-    if isinstance(raw_number, str):
-        normalized = raw_number.strip()
-    elif isinstance(raw_number, int):
-        normalized = str(raw_number)
-    elif isinstance(raw_number, float):
-        normalized = format(raw_number, "g")
-    else:
-        normalized = "0"
-    return normalized or "0"
-
-
-def _chapter_number_sort_key(number: str) -> tuple[tuple[int, str], ...]:
-    """Build a stable natural-sort key for chapter numbers."""
-    tokens = re.findall(r"\d+|[^\d]+", number.lower())
-    key: list[tuple[int, str]] = []
-    for token in tokens:
-        if token.isdigit():
-            key.append((0, token.zfill(12)))
-            continue
-        cleaned = re.sub(r"[^a-z]+", "", token)
-        if cleaned:
-            key.append((1, cleaned))
-    return tuple(key) or ((0, "000000000000"),)
-
-
-# -- data classes -------------------------------------------------------------
-
-
-@dataclass
-class SearchResult:
-    """A single search result."""
-
-    title: str
-    url: str
-    slug: str
-    hash_id: str
-
-
-@dataclass
-class ChapterInfo:
-    """Chapter metadata."""
-
-    title: str
-    chapter_id: int
-    number: str
-    name: str = ""  # subtitle (e.g. "Dear Little Brother")
-    language: str = "en"
-    image_count: int = 0
-    number_sort_key: tuple[tuple[int, str], ...] = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        self.number = _normalize_chapter_number(self.number)
-        self.number_sort_key = _chapter_number_sort_key(self.number)
-
-
-@dataclass
-class ChapterImages:
-    """Chapter images from the API."""
-
-    title: str
-    chapter_label: str
-    image_urls: list[str]
-
-
-@dataclass
-class DedupDecision:
-    """Human-readable explanation of a deduplication decision."""
-
-    chapter_number: str
-    reason: str
-    kept: tuple[str, ...]
-    dropped: tuple[str, ...]
-
-
-@dataclass
-class SeriesInfo:
-    """Full series metadata with chapters."""
-
-    title: str
-    authors: list[str]
-    genres: list[str]
-    description: str
-    chapters: list[ChapterInfo]
-    url: str
-    hash_id: str
-    dedup_decisions: list[DedupDecision] = field(default_factory=list)
+__all__ = [
+    "ChapterImages",
+    "ChapterInfo",
+    "ComixService",
+    "DedupDecision",
+    "SearchResult",
+    "SeriesInfo",
+]
 
 
 # -- service ------------------------------------------------------------------
@@ -328,7 +259,7 @@ class ComixService:
             raw_id = item.get("chapter_id", 0)
             chapter_id = int(raw_id) if isinstance(raw_id, (int, float, str)) else 0
             raw_num = item.get("number", 0)
-            number = _normalize_chapter_number(raw_num)
+            number = normalize_chapter_number(raw_num)
             name = str(item.get("name", "") or "")
             lang = str(item.get("language", "en") or "en")
             pages_count = item.get("pages_count", 0)
@@ -545,7 +476,7 @@ class ComixService:
         if data is None:
             return None
 
-        number = _normalize_chapter_number(data.get("number", 0))
+        number = normalize_chapter_number(data.get("number", 0))
         name = str(data.get("name", "") or "")
         images = data.get("images", [])
         if not isinstance(images, list):
