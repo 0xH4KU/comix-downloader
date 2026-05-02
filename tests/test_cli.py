@@ -1,4 +1,4 @@
-"""Tests for comix_dl.cli — argument parsing and chapter selection."""
+"""Tests for comix_dl.core.cli — argument parsing and chapter selection."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from comix_dl import cli as cli_module
-from comix_dl.cli import _build_parser, _parse_chapter_selection
-from comix_dl.comix_service import ChapterInfo
-from comix_dl.settings import Settings
+from comix_dl.core import cli as cli_module
+from comix_dl.core.cli import _build_parser, _parse_chapter_selection
+from comix_dl.core.models import ChapterInfo
+from comix_dl.core.settings import Settings
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -242,7 +242,7 @@ def test_main_treats_bare_positional_arg_as_search(monkeypatch: pytest.MonkeyPat
 def test_main_dispatches_subcommands_and_menu(monkeypatch: pytest.MonkeyPatch):
     recorded: list[object] = []
     args_queue = [
-        SimpleNamespace(command="search", query="naruto", debug=False, quiet=False),
+        SimpleNamespace(command="search", query="naruto", debug=False, quiet=False, mirror=None),
         SimpleNamespace(
             command="download",
             url="series-a",
@@ -252,14 +252,15 @@ def test_main_dispatches_subcommands_and_menu(monkeypatch: pytest.MonkeyPatch):
             no_optimize=True,
             debug=True,
             quiet=True,
+            mirror=None,
         ),
-        SimpleNamespace(command="info", url="series-a", debug=False, quiet=False),
-        SimpleNamespace(command="list", debug=False, quiet=False),
-        SimpleNamespace(command="clean", force=True, debug=False, quiet=True),
-        SimpleNamespace(command="history", action="clear", debug=False, quiet=False),
-        SimpleNamespace(command="doctor", debug=False, quiet=False),
-        SimpleNamespace(command="settings", debug=False, quiet=False),
-        SimpleNamespace(command=None, debug=False, quiet=False),
+        SimpleNamespace(command="info", url="series-a", debug=False, quiet=False, mirror=None),
+        SimpleNamespace(command="list", debug=False, quiet=False, mirror=None),
+        SimpleNamespace(command="clean", force=True, debug=False, quiet=True, mirror=None),
+        SimpleNamespace(command="history", action="clear", debug=False, quiet=False, mirror=None),
+        SimpleNamespace(command="doctor", debug=False, quiet=False, mirror=None),
+        SimpleNamespace(command="settings", debug=False, quiet=False, mirror=None),
+        SimpleNamespace(command=None, debug=False, quiet=False, mirror=None),
     ]
 
     class _Parser:
@@ -269,11 +270,14 @@ def test_main_dispatches_subcommands_and_menu(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(cli_module, "_build_parser", lambda: _Parser())
     monkeypatch.setattr(cli_module.sys, "argv", ["comix-dl"])
     monkeypatch.setattr(cli_module, "configure_logging", lambda level: recorded.append(("log", level)))
-    monkeypatch.setattr(cli_module, "flow_search", lambda query, quiet=False: ("search", query, quiet))
+    monkeypatch.setattr(
+        cli_module, "flow_search",
+        lambda query, quiet=False, mirror=None: ("search", query, quiet),
+    )
     monkeypatch.setattr(
         cli_module,
         "flow_noninteractive_download",
-        lambda url, chapters, fmt, output, optimize=None, quiet=False: (
+        lambda url, chapters, fmt, output, optimize=None, quiet=False, mirror=None: (
             "download",
             url,
             chapters,
@@ -283,7 +287,10 @@ def test_main_dispatches_subcommands_and_menu(monkeypatch: pytest.MonkeyPatch):
             quiet,
         ),
     )
-    monkeypatch.setattr(cli_module, "flow_info", lambda url: ("info", url))
+    monkeypatch.setattr(
+        cli_module, "flow_info",
+        lambda url, *, mirror=None: ("info", url),
+    )
     monkeypatch.setattr(cli_module, "_run_async", lambda coro: recorded.append(("async", coro)) or 10)
     monkeypatch.setattr(cli_module, "flow_list", lambda: 21)
     monkeypatch.setattr(

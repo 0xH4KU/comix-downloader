@@ -5,25 +5,28 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from comix_dl.application.download_reporting import build_download_report
-from comix_dl.converters import convert_async
-from comix_dl.downloader import Downloader, DownloadProgress, ensure_complete_download
-from comix_dl.errors import ConversionError, PartialDownloadError
-from comix_dl.history import HistoryRepository
-from comix_dl.logging_utils import log_context
-from comix_dl.notify import send_notification
+from comix_dl.core.application.download_reporting import build_download_report
+from comix_dl.core.converters import convert_async
+from comix_dl.core.downloader import Downloader, DownloadProgress, ensure_complete_download
+from comix_dl.core.errors import ConversionError, PartialDownloadError
+from comix_dl.core.history import HistoryRepository
+from comix_dl.core.logging_utils import log_context
+from comix_dl.core.notify import send_notification
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from comix_dl.cdp_browser import CdpBrowser
-    from comix_dl.comix_service import ChapterInfo, ComixService
-    from comix_dl.config import AppConfig
+    from comix_dl.core.application.ports import HistoryPort
+    from comix_dl.core.config import AppConfig
+    from comix_dl.core.engines.cdp_browser import CdpBrowser
+    from comix_dl.core.models import ChapterInfo
+    from comix_dl.sites.base import SiteAdapter
 
 
 logger = logging.getLogger(__name__)
@@ -101,13 +104,14 @@ async def _process_one_chapter(
     chapter: ChapterInfo,
     *,
     browser: CdpBrowser,
-    service: ComixService,
+    adapter: SiteAdapter,
     series_title: str,
     output_dir: Path,
     fmt: str,
     config: AppConfig,
     optimize: bool,
     on_event: DownloadEventHandler | None,
+    run_id: str,
 ) -> _ChapterOutcome:
     """Download, validate, and convert a single chapter.
 
@@ -120,6 +124,7 @@ async def _process_one_chapter(
         logger.info(
             "chapter_download_finished",
             extra=log_context(
+                run_id=run_id,
                 series=series_title,
                 chapter_id=chapter.chapter_id,
                 chapter_title=chapter.title,
@@ -144,8 +149,8 @@ async def _process_one_chapter(
         chapter_id=chapter.chapter_id, chapter_title=chapter.title, kind="started",
     ))
 
-    # Fetch image URLs
-    chapter_data = await service.get_chapter_images(chapter.chapter_id)
+    # Fetch image URLs from the active site adapter.
+    chapter_data = await adapter.get_chapter_images(browser, chapter.chapter_id)
     if chapter_data is None:
         msg = "no images available from remote API"
         _log("missing_images", bytes_downloaded=0, message=msg)
@@ -169,9 +174,9 @@ async def _process_one_chapter(
             kind="progress", completed=progress.completed, total=progress.total,
         ))
 
-    downloader._on_progress = _on_progress
     download_result = await downloader.download_chapter(
         chapter_data.image_urls, series_title, chapter_data.chapter_label,
+        on_progress=_on_progress,
     )
     dl_bytes = downloader.bytes_downloaded
 
@@ -224,7 +229,7 @@ async def _process_one_chapter(
 
 async def download_chapters(
     browser: CdpBrowser,
-    service: ComixService,
+    adapter: SiteAdapter,
     *,
     series_title: str,
     chapters: list[ChapterInfo],
@@ -234,12 +239,25 @@ async def download_chapters(
     optimize: bool,
     on_event: DownloadEventHandler | None = None,
     is_shutdown: ShutdownCheck | None = None,
-    history_repository: HistoryRepository | None = None,
+    history_repository: HistoryPort | None = None,
     notifier: Notifier | None = None,
 ) -> DownloadSummary:
     """Download, convert, record, and notify for a list of chapters."""
     start_time = time.monotonic()
-    history = history_repository or HistoryRepository()
+    # Stable per-batch identifier injected into every structured log line
+    # so a single download run can be filtered out of merged logs without
+    # ambiguity even when multiple sessions overlap.
+    run_id = secrets.token_hex(4)
+    logger.info(
+        "download_batch_started",
+        extra=log_context(
+            run_id=run_id,
+            series=series_title,
+            chapters=len(chapters),
+            fmt=fmt,
+        ),
+    )
+    history: HistoryPort = history_repository or HistoryRepository()
     notify = notifier or send_notification
 
     def should_stop() -> bool:
@@ -256,13 +274,14 @@ async def download_chapters(
             outcome = await _process_one_chapter(
                 chapter,
                 browser=browser,
-                service=service,
+                adapter=adapter,
                 series_title=series_title,
                 output_dir=output_dir,
                 fmt=fmt,
                 config=config,
                 optimize=optimize,
                 on_event=on_event,
+                run_id=run_id,
             )
             chapter_delay = config.download.chapter_delay
             if chapter_delay > 0:
@@ -298,6 +317,7 @@ async def download_chapters(
     logger.info(
         "download_batch_finished",
         extra=log_context(
+            run_id=run_id,
             series=series_title,
             status="degraded" if summary.partial or summary.failed else "ok",
             bytes=summary.total_bytes,

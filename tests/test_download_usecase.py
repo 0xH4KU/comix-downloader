@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from comix_dl.application import download_usecase
-from comix_dl.comix_service import ChapterImages, ChapterInfo
-from comix_dl.config import AppConfig
-from comix_dl.downloader import ChapterDownloadResult, DownloadProgress
+from comix_dl.core.application import download_usecase
+from comix_dl.core.config import AppConfig
+from comix_dl.core.downloader import ChapterDownloadResult, DownloadProgress
+from comix_dl.core.models import ChapterImages, ChapterInfo
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -61,11 +61,13 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
             image_urls: list[str],
             title: str,
             chapter_label: str,
+            *,
+            on_progress: object = None,
         ) -> ChapterDownloadResult:
             assert len(image_urls) == 2
-            if self._on_progress is not None:
-                self._on_progress(DownloadProgress(1, 2, 0, 0, "001", total_bytes=1024))
-                self._on_progress(DownloadProgress(2, 2, 0, 0, "002", total_bytes=2048))
+            if on_progress is not None:
+                on_progress(DownloadProgress(1, 2, 0, 0, "001", total_bytes=1024))
+                on_progress(DownloadProgress(2, 2, 0, 0, "002", total_bytes=2048))
             chapter_dir = self._output_dir / title / chapter_label
             chapter_dir.mkdir(parents=True, exist_ok=True)
             return ChapterDownloadResult(
@@ -91,10 +93,10 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
         image_urls=["https://img/1", "https://img/2"],
     )
 
-    with caplog.at_level(logging.INFO, logger="comix_dl.application.download_usecase"):
+    with caplog.at_level(logging.INFO, logger="comix_dl.core.application.download_usecase"):
         summary = await download_usecase.download_chapters(
             browser=object(),
-            service=service,
+            adapter=service,
             series_title="Series A",
             chapters=[ChapterInfo(title="Chapter 1", chapter_id=101, number="1")],
             output_dir=tmp_path,
@@ -169,10 +171,12 @@ async def test_download_chapters_counts_skipped_partial_and_missing_images(
             image_urls: list[str],
             title: str,
             chapter_label: str,
+            *,
+            on_progress: object = None,
         ) -> ChapterDownloadResult:
             self.bytes_downloaded = 1000
-            if self._on_progress is not None:
-                self._on_progress(DownloadProgress(1, 2, 0, 0, "001", total_bytes=1000))
+            if on_progress is not None:
+                on_progress(DownloadProgress(1, 2, 0, 0, "001", total_bytes=1000))
             chapter_dir = self._output_dir / title / chapter_label
             chapter_dir.mkdir(parents=True, exist_ok=True)
             return ChapterDownloadResult(
@@ -192,7 +196,7 @@ async def test_download_chapters_counts_skipped_partial_and_missing_images(
 
     service = AsyncMock()
 
-    async def get_chapter_images(chapter_id: int) -> ChapterImages | None:
+    async def get_chapter_images(_engine: object, chapter_id: int) -> ChapterImages | None:
         if chapter_id == 2:
             return ChapterImages(
                 title="Chapter 2",
@@ -211,7 +215,7 @@ async def test_download_chapters_counts_skipped_partial_and_missing_images(
 
     summary = await download_usecase.download_chapters(
         browser=object(),
-        service=service,
+        adapter=service,
         series_title="Series B",
         chapters=chapters,
         output_dir=tmp_path,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from comix_dl.logging_utils import StructuredFormatter, log_context
+from comix_dl.core.logging_utils import StructuredFormatter, log_context
 
 
 def test_log_context_normalizes_common_values() -> None:

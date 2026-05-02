@@ -13,15 +13,20 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from comix_dl.config import AppConfig, resolve_config
-from comix_dl.errors import PartialDownloadError
-from comix_dl.fileio import atomic_write_bytes, atomic_write_text
-from comix_dl.logging_utils import log_context
+from comix_dl.core.config import AppConfig, resolve_config
+from comix_dl.core.errors import (
+    BrowserTimeoutError,
+    Http403Error,
+    PagePoolUnavailableError,
+    PartialDownloadError,
+)
+from comix_dl.core.fileio import atomic_write_bytes, atomic_write_text
+from comix_dl.core.logging_utils import log_context
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from comix_dl.cdp_browser import CdpBrowser
+    from comix_dl.core.engines.cdp_browser import CdpBrowser
 
 logger = logging.getLogger(__name__)
 
@@ -132,18 +137,26 @@ class Downloader:
 
     @staticmethod
     def _describe_download_error(url: str, filename: str, exc: Exception) -> str:
-        """Return a clearer error message for common image-download failures."""
-        message = str(exc)
-        if "timed out" in message:
-            return f"Image request timed out for {filename} from {url}: {message}"
-        if "HTTP 403" in message or "403 Forbidden" in message:
+        """Return a clearer error message for common image-download failures.
+
+        Dispatches by exception type rather than parsing message strings.
+        Raw exceptions that escape the browser-boundary translation fall
+        through to a generic representation so the caller still gets a
+        message rather than a silent failure.
+        """
+        if isinstance(exc, BrowserTimeoutError):
+            return f"Image request timed out for {filename} from {url}: {exc}"
+        if isinstance(exc, Http403Error):
             return (
                 f"Image request was blocked by HTTP 403 for {filename} from {url}; "
                 "Cloudflare clearance may have expired."
             )
-        if "page pool" in message.lower():
-            return f"Browser page pool is unavailable while downloading {filename} from {url}: {message}"
-        return message
+        if isinstance(exc, PagePoolUnavailableError):
+            return (
+                f"Browser page pool is unavailable while downloading {filename} "
+                f"from {url}: {exc}"
+            )
+        return str(exc)
 
     def is_chapter_complete(self, title: str, chapter: str) -> bool:
         """Check whether a chapter has already been downloaded."""
@@ -158,6 +171,7 @@ class Downloader:
         chapter: str,
         *,
         referer: str | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> ChapterDownloadResult:
         """Download all images for a chapter.
 
@@ -169,10 +183,16 @@ class Downloader:
             title: Series title (used for directory naming).
             chapter: Chapter label (used for directory naming).
             referer: Referer header for image requests.
+            on_progress: Per-call progress override. When ``None`` (the
+                default) the callback supplied at ``__init__`` is used,
+                so callers that share one downloader across chapters but
+                want per-chapter callbacks can pass it here without
+                touching ``self._on_progress``.
 
         Returns:
             Final download result for the chapter.
         """
+        progress_cb = on_progress if on_progress is not None else self._on_progress
         chapter_dir = self._output_dir / sanitize_dirname(title) / sanitize_dirname(chapter)
         _validate_within_base(chapter_dir, self._output_dir)
         chapter_dir.mkdir(parents=True, exist_ok=True)
@@ -181,8 +201,8 @@ class Downloader:
         # Already fully downloaded?
         if (chapter_dir / _COMPLETE_MARKER).exists():
             logger.info("%s - %s: already downloaded, skipping", title, chapter)
-            if self._on_progress:
-                self._on_progress(DownloadProgress(
+            if progress_cb:
+                progress_cb(DownloadProgress(
                     completed=len(image_urls),
                     total=len(image_urls),
                     failed=0,
@@ -207,8 +227,8 @@ class Downloader:
             nonlocal progress_done
             async with progress_lock:
                 progress_done += 1
-                if self._on_progress:
-                    self._on_progress(DownloadProgress(
+                if progress_cb:
+                    progress_cb(DownloadProgress(
                         completed=progress_done,
                         total=total,
                         failed=0,

@@ -1,4 +1,4 @@
-"""Tests for comix_dl.settings — load, save, and apply user settings."""
+"""Tests for comix_dl.core.settings — load, save, and apply user settings."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from comix_dl.config import AppConfig
-from comix_dl.settings import (
+from comix_dl.core.config import AppConfig
+from comix_dl.core.settings import (
     DownloadTuning,
     Settings,
     SettingsRepository,
@@ -44,7 +44,7 @@ class TestSettingsDefaults:
 class TestLoadSettings:
     def test_returns_defaults_when_file_missing(self, tmp_path: Path):
         fake_file = tmp_path / "settings.json"
-        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+        with patch("comix_dl.core.settings._SETTINGS_FILE", fake_file):
             s = load_settings()
         assert s.default_format == "pdf"
         assert s.concurrent_images == 8
@@ -58,7 +58,7 @@ class TestLoadSettings:
             "concurrent_images": 4,
             "max_retries": 5,
         }))
-        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+        with patch("comix_dl.core.settings._SETTINGS_FILE", fake_file):
             s = load_settings()
         assert s.default_format == "cbz"
         assert s.concurrency_profile == "custom"
@@ -72,7 +72,7 @@ class TestLoadSettings:
             "default_format": "cbz",
             "unknown_field": "should_be_ignored",
         }))
-        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+        with patch("comix_dl.core.settings._SETTINGS_FILE", fake_file):
             s = load_settings()
         assert s.default_format == "cbz"
         assert not hasattr(s, "unknown_field")
@@ -80,7 +80,7 @@ class TestLoadSettings:
     def test_graceful_fallback_on_corrupt_json(self, tmp_path: Path):
         fake_file = tmp_path / "settings.json"
         fake_file.write_text("{broken json!!")
-        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+        with patch("comix_dl.core.settings._SETTINGS_FILE", fake_file):
             s = load_settings()
         # Should return defaults without crashing
         assert s.default_format == "pdf"
@@ -88,7 +88,7 @@ class TestLoadSettings:
     def test_graceful_fallback_on_wrong_type(self, tmp_path: Path):
         fake_file = tmp_path / "settings.json"
         fake_file.write_text('"just a string"')
-        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+        with patch("comix_dl.core.settings._SETTINGS_FILE", fake_file):
             s = load_settings()
         assert s.default_format == "pdf"
 
@@ -100,7 +100,7 @@ class TestLoadSettings:
             "concurrent_images": 3,
             "download_delay": False,
         }))
-        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+        with patch("comix_dl.core.settings._SETTINGS_FILE", fake_file):
             s = load_settings()
         assert s.concurrency_profile == "custom"
         assert s.concurrent_chapters == 4
@@ -113,7 +113,7 @@ class TestLoadSettings:
             "default_format": "cbz",
             "concurrent_images": 6,
         }))
-        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+        with patch("comix_dl.core.settings._SETTINGS_FILE", fake_file):
             s = load_settings()
         assert s.default_format == "cbz"
         assert s.concurrency_profile == "custom"
@@ -125,7 +125,7 @@ class TestLoadSettings:
             "version": 999,
             "default_format": "cbz",
         }))
-        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+        with patch("comix_dl.core.settings._SETTINGS_FILE", fake_file):
             s = load_settings()
         assert s.default_format == "pdf"
 
@@ -141,7 +141,7 @@ class TestLoadSettings:
             "download_delay": "yes",
             "optimize_images": "no",
         }))
-        with patch("comix_dl.settings._SETTINGS_FILE", fake_file):
+        with patch("comix_dl.core.settings._SETTINGS_FILE", fake_file):
             s = load_settings()
         assert s.default_format == "pdf"
         assert s.concurrency_profile == "custom"
@@ -157,8 +157,8 @@ class TestSaveSettings:
         fake_dir = tmp_path / "config"
         fake_file = fake_dir / "settings.json"
         with (
-            patch("comix_dl.settings._SETTINGS_DIR", fake_dir),
-            patch("comix_dl.settings._SETTINGS_FILE", fake_file),
+            patch("comix_dl.core.settings._SETTINGS_DIR", fake_dir),
+            patch("comix_dl.core.settings._SETTINGS_FILE", fake_file),
         ):
             s = Settings(default_format="cbz", max_retries=7)
             save_settings(s)
@@ -173,8 +173,8 @@ class TestSaveSettings:
         fake_dir = tmp_path / "config"
         fake_file = fake_dir / "settings.json"
         with (
-            patch("comix_dl.settings._SETTINGS_DIR", fake_dir),
-            patch("comix_dl.settings._SETTINGS_FILE", fake_file),
+            patch("comix_dl.core.settings._SETTINGS_DIR", fake_dir),
+            patch("comix_dl.core.settings._SETTINGS_FILE", fake_file),
         ):
             original = Settings(
                 output_dir="/tmp/test-output",

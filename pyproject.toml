@@ -4,16 +4,43 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "comix-downloader"
-version = "0.3.47"
+version = "0.4.0"
 description = "A focused comix.to manga downloader with Cloudflare bypass"
+readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
+authors = [{name = "0xH4KU"}]
+keywords = ["manga", "downloader", "cloudflare", "playwright", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Utilities",
+    "Typing :: Typed",
+]
 dependencies = [
     "playwright>=1.40",
     "Pillow>=10.0",
     "pypdf>=4.0",
     "rich>=13.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/0xH4KU/comix-downloader"
+Repository = "https://github.com/0xH4KU/comix-downloader"
+Issues = "https://github.com/0xH4KU/comix-downloader/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -25,7 +52,7 @@ dev = [
 ]
 
 [project.scripts]
-comix-dl = "comix_dl.cli:main"
+comix-dl = "comix_dl.core.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

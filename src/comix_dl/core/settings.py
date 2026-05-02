@@ -8,8 +8,8 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, ClassVar
 
-from comix_dl.config import AppConfig
-from comix_dl.fileio import atomic_write_text
+from comix_dl.core.config import AppConfig
+from comix_dl.core.fileio import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,6 @@ class SettingsRepository:
         chapter_delay = 0.8 if tuning.download_delay else 0.0
         return AppConfig(
             browser=replace(base.browser),
-            service=replace(base.service),
             download=replace(
                 base.download,
                 default_output_dir=Path(settings.output_dir),

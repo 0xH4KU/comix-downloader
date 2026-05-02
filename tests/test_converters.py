@@ -1,4 +1,4 @@
-"""Tests for comix_dl.converters — image collection, CBZ, and PDF conversion."""
+"""Tests for comix_dl.core.converters — image collection, CBZ, and PDF conversion."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 import pytest
 
-from comix_dl.config import AppConfig
-from comix_dl.converters import collect_images, convert, to_cbz, to_pdf
-from comix_dl.errors import ConversionError
+from comix_dl.core.config import AppConfig
+from comix_dl.core.converters import collect_images, convert, to_cbz, to_pdf
+from comix_dl.core.errors import ConversionError
 
 _ORIGINAL_IMPORT = builtins.__import__
 
@@ -222,7 +222,7 @@ class TestToPdf:
             observed["parent"] = pdf_paths[0].parent
             output.write_bytes(b"%PDF-test")
 
-        with patch("comix_dl.converters._merge_pdfs", side_effect=fake_merge):
+        with patch("comix_dl.core.converters._merge_pdfs", side_effect=fake_merge):
             result = to_pdf(img_dir, config=config)
 
         assert result.exists()
@@ -246,7 +246,7 @@ class TestToPdf:
             raise ConversionError("merge failed")
 
         with (
-            patch("comix_dl.converters._merge_pdfs", side_effect=fake_merge),
+            patch("comix_dl.core.converters._merge_pdfs", side_effect=fake_merge),
             pytest.raises(ConversionError, match="merge failed"),
         ):
             to_pdf(img_dir, config=config)
@@ -270,7 +270,7 @@ class TestToPdf:
             observed["dpi"] = dpi
             output.write_bytes(b"%PDF-test")
 
-        with patch("comix_dl.converters._build_pdf_batched", side_effect=fake_build):
+        with patch("comix_dl.core.converters._build_pdf_batched", side_effect=fake_build):
             result = to_pdf(img_dir, config=config)
 
         assert result.exists()
@@ -325,8 +325,8 @@ class TestConvert:
         _create_test_images(img_dir, count=1)
 
         with (
-            patch("comix_dl.converters.optimize_images") as optimize_images,
-            patch("comix_dl.converters.to_cbz", return_value=img_dir.with_suffix(".cbz")) as to_cbz_mock,
+            patch("comix_dl.core.converters.optimize_images") as optimize_images,
+            patch("comix_dl.core.converters.to_cbz", return_value=img_dir.with_suffix(".cbz")) as to_cbz_mock,
         ):
             result = convert(img_dir, "cbz", optimize=True)
 

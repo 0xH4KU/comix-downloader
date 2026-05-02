@@ -9,7 +9,7 @@ from rich.markup import escape
 from rich.table import Table
 
 if TYPE_CHECKING:
-    from comix_dl.comix_service import ChapterInfo, DedupDecision, SearchResult, SeriesInfo
+    from comix_dl.core.models import ChapterInfo, DedupDecision, SearchResult, SeriesInfo
 
 console = Console()
 

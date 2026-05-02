@@ -3,19 +3,31 @@
 from __future__ import annotations
 
 import asyncio
-import atexit
 import contextlib
 import logging
 import os
-import signal
+import platform
 import socket
 import subprocess
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
-from comix_dl.config import AppConfig, resolve_config
-from comix_dl.errors import ConfigurationError
+from comix_dl.core.config import AppConfig, resolve_config
+from comix_dl.core.engines.chrome_process import (
+    _LIVE_SESSIONS,
+    _cleanup_stale_profile_chrome,
+    _find_chrome,
+    _find_free_port,
+    _lock_file_handle,
+    _remove_pid_file,
+    _unlock_file_handle,
+    _write_pid_file,
+)
+from comix_dl.core.errors import (
+    BrowserTimeoutError,
+    ConfigurationError,
+    PagePoolUnavailableError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -32,236 +44,16 @@ _POOL_UNAVAILABLE_MESSAGE = (
 )
 
 
-class _ChromeProcessState:
-    """Module-level state for the currently active Chrome subprocess.
-
-    Encapsulates what were previously three separate module globals so the
-    atexit handler and BrowserSessionManager can share state without
-    scattered ``global`` declarations.
-    """
-
-    __slots__ = ("chrome", "instance_lock", "pid_file")
-
-    def __init__(self) -> None:
-        self.chrome: subprocess.Popen[bytes] | None = None
-        self.pid_file: Path | None = None
-        self.instance_lock: TextIOWrapper | None = None
-
-
-_process_state = _ChromeProcessState()
-
-
-def _lock_file_handle(fileobj: TextIOWrapper) -> None:
-    """Acquire a non-blocking exclusive file lock."""
-    if os.name == "nt":
-        import msvcrt
-
-        fileobj.seek(0)
-        msvcrt.locking(fileobj.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
-        return
-
-    import fcntl
-
-    fcntl.flock(fileobj.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-
-def _unlock_file_handle(fileobj: TextIOWrapper) -> None:
-    """Release a previously acquired file lock."""
-    if os.name == "nt":
-        import msvcrt
-
-        fileobj.seek(0)
-        msvcrt.locking(fileobj.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
-        return
-
-    import fcntl
-
-    fcntl.flock(fileobj.fileno(), fcntl.LOCK_UN)
-
-
-def _atexit_kill_chrome() -> None:
-    """Last-resort cleanup for Chrome started by this Python process only."""
-    if _process_state.chrome is not None:
-        try:
-            _process_state.chrome.terminate()
-            _process_state.chrome.wait(timeout=3)
-        except Exception:
-            with contextlib.suppress(Exception):
-                _process_state.chrome.kill()
-        _process_state.chrome = None
-    _remove_pid_file(_process_state.pid_file)
-    _process_state.pid_file = None
-
-
-atexit.register(_atexit_kill_chrome)
-
-
-def _find_free_port() -> int:
-    """Find an available port for CDP."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
-
-
-def _is_port_in_use(port: int) -> bool:
-    """Check whether a TCP port is already bound."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.connect(("127.0.0.1", port))
-            return True
-        except (ConnectionRefusedError, OSError):
-            return False
-
-
-def _write_pid_file(pid_file: Path, pid: int) -> None:
-    """Persist the most recently launched Chrome PID for crash recovery."""
-    with contextlib.suppress(OSError):
-        pid_file.parent.mkdir(parents=True, exist_ok=True)
-        pid_file.write_text(f"{pid}\n", encoding="utf-8")
-
-
-def _remove_pid_file(pid_file: Path | None) -> None:
-    """Remove a persisted Chrome PID file if present."""
-    if pid_file is None:
-        return
-    with contextlib.suppress(OSError):
-        pid_file.unlink(missing_ok=True)
-
-
-def _command_line_for_pid(pid: int) -> str | None:
-    """Best-effort command line lookup for a live PID."""
-    proc_cmdline = Path(f"/proc/{pid}/cmdline")
-    if proc_cmdline.exists():
-        with contextlib.suppress(OSError):
-            raw = proc_cmdline.read_bytes().replace(b"\0", b" ").decode("utf-8", errors="ignore").strip()
-            if raw:
-                return raw
-
-    if os.name == "nt":
-        return None
-
-    with contextlib.suppress(Exception):
-        result = subprocess.run(
-            ["ps", "-o", "command=", "-p", str(pid)],
-            capture_output=True,
-            text=True,
-            timeout=1,
-            check=False,
-        )
-        command = result.stdout.strip()
-        if command:
-            return command
-
-    return None
-
-
-def _pid_matches_profile_chrome(pid: int, user_data_dir: Path) -> bool:
-    """Return whether *pid* still looks like our Chrome for *user_data_dir*."""
-    command = _command_line_for_pid(pid)
-    if not command:
-        return False
-
-    expected_flag = f"--user-data-dir={user_data_dir}"
-    lowered = command.lower()
-    return expected_flag in command and ("chrome" in lowered or "chromium" in lowered)
-
-
-def _terminate_pid(pid: int) -> None:
-    """Terminate a live process, escalating to SIGKILL when available."""
-    os.kill(pid, signal.SIGTERM)
-    deadline = time.monotonic() + 3.0
-    while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.3)
-
-    kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
-    with contextlib.suppress(ProcessLookupError):
-        os.kill(pid, kill_signal)
-
-
-def _cleanup_stale_profile_chrome(pid_file: Path, user_data_dir: Path) -> None:
-    """Terminate a stale Chrome process previously launched for *user_data_dir*."""
-    if not pid_file.exists():
-        return
-
-    try:
-        pid = int(pid_file.read_text(encoding="utf-8").strip())
-    except (ValueError, OSError):
-        _remove_pid_file(pid_file)
-        return
-
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        _remove_pid_file(pid_file)
-        return
-    except PermissionError as exc:
-        raise RuntimeError(
-            f"Chrome profile {user_data_dir} appears to still be in use by PID {pid}. "
-            "Close the stale Chrome process and retry.",
-        ) from exc
-
-    if not _pid_matches_profile_chrome(pid, user_data_dir):
-        _remove_pid_file(pid_file)
-        return
-
-    logger.warning("Found stale Chrome for %s (PID %d), terminating before startup", user_data_dir, pid)
-    try:
-        _terminate_pid(pid)
-    except Exception as exc:
-        raise RuntimeError(
-            f"Chrome profile {user_data_dir} is still being used by stale process {pid}. "
-            "Close it and retry.",
-        ) from exc
-
-    _remove_pid_file(pid_file)
-
-
-def _find_chrome(system: str) -> str:
-    """Auto-detect Chrome executable path for the current platform."""
-    import shutil
-
-    if system == "Darwin":
-        candidates = [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            str(Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-            "/opt/homebrew/bin/chromium",
-        ]
-        for candidate_path in candidates:
-            if Path(candidate_path).exists():
-                return candidate_path
-        return candidates[0]
-
-    if system == "Linux":
-        for name in ("google-chrome", "google-chrome-stable", "chromium-browser", "chromium"):
-            found = shutil.which(name)
-            if found:
-                return found
-        return "google-chrome"
-
-    env_candidates: list[Path] = []
-    for env_var in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
-        base = os.environ.get(env_var)
-        if base:
-            env_candidates.append(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe")
-
-    for env_candidate in env_candidates:
-        if env_candidate.exists():
-            return str(env_candidate)
-
-    found = shutil.which("chrome") or shutil.which("chrome.exe")
-    if found:
-        return found
-    return "chrome.exe"
-
-
 class BrowserSessionManager:
     """Own Chrome lifecycle, CDP connection, and the pooled Playwright pages."""
 
-    def __init__(self, *, max_pages: int | None = None, config: AppConfig | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        max_pages: int | None = None,
+        config: AppConfig | None = None,
+        base_url: str | None = None,
+    ) -> None:
         self._config = resolve_config(config)
         resolved_max_pages = (
             max_pages if max_pages is not None else self._config.download.max_concurrent_images
@@ -285,6 +77,32 @@ class BrowserSessionManager:
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._instance_lock_handle: TextIOWrapper | None = None
         self._closing = False
+        # Site-specific origin used for page-pool warm-up navigation and
+        # caller-driven Cloudflare clearance. Optional at construction
+        # time so unit tests can build a manager without committing to a
+        # site, but required before any pool page is warmed.
+        self._base_url = base_url
+        # Register self with the live-session weakset so the atexit
+        # handler can find us at process exit. Membership is dropped
+        # automatically when this object is garbage-collected.
+        _LIVE_SESSIONS.add(self)
+
+    def _atexit_cleanup(self) -> None:
+        """Last-resort cleanup invoked by :func:`_atexit_cleanup_all`.
+
+        Only touches resources this instance owns; other live
+        ``BrowserSessionManager`` instances are responsible for their
+        own Chrome subprocesses and PID files.
+        """
+        if self._chrome_process is not None:
+            try:
+                self._chrome_process.terminate()
+                self._chrome_process.wait(timeout=3)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    self._chrome_process.kill()
+            self._chrome_process = None
+        _remove_pid_file(self._pid_file)
 
     async def start(self) -> None:
         """Launch Chrome and connect via CDP."""
@@ -326,11 +144,23 @@ class BrowserSessionManager:
         """Acquire the single-instance lock for browser sessions."""
         if self._instance_lock_handle is not None:
             return
-        if _process_state.instance_lock is not None:
-            raise RuntimeError(
-                f"Another comix-dl browser session is already running "
-                f"(lock file: {self._lock_file}).",
-            )
+        # POSIX advisory locks are merged within a single process, so
+        # we can't rely on fcntl/msvcrt alone to detect a sibling
+        # session in the same Python process. Walk the live-session
+        # weakset to enforce the same-process constraint explicitly.
+        # The weakset is typed against the minimal _AtExitCleanup
+        # protocol so we use getattr with a default rather than
+        # tightening that protocol with lock-management attributes.
+        for other in _LIVE_SESSIONS:
+            if other is self:
+                continue
+            other_handle = getattr(other, "_instance_lock_handle", None)
+            other_lock_file = getattr(other, "_lock_file", None)
+            if other_handle is not None and other_lock_file == self._lock_file:
+                raise RuntimeError(
+                    f"Another comix-dl browser session is already running "
+                    f"(lock file: {self._lock_file}).",
+                )
 
         handle = self._lock_file.open("a+", encoding="utf-8")
         try:
@@ -353,7 +183,6 @@ class BrowserSessionManager:
             ) from None
 
         self._instance_lock_handle = handle
-        _process_state.instance_lock = handle
 
     def _release_instance_lock(self) -> None:
         """Release the single-instance lock if held by this browser."""
@@ -367,12 +196,9 @@ class BrowserSessionManager:
         with contextlib.suppress(OSError):
             self._lock_file.unlink()
         self._instance_lock_handle = None
-        if _process_state.instance_lock is handle:
-            _process_state.instance_lock = None
 
     def _launch_chrome(self) -> None:
         """Launch Chrome subprocess with remote debugging enabled."""
-        import platform
 
         system = platform.system()
         chrome_path = self._config.browser.chrome_path or _find_chrome(system)
@@ -397,8 +223,6 @@ class BrowserSessionManager:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            _process_state.chrome = self._chrome_process
-            _process_state.pid_file = self._pid_file
             _write_pid_file(self._pid_file, self._chrome_process.pid)
             self._wait_for_cdp_ready()
         except FileNotFoundError:
@@ -433,7 +257,7 @@ class BrowserSessionManager:
         try:
             return await asyncio.wait_for(awaitable, timeout=timeout_ms / 1000)
         except TimeoutError as exc:
-            raise RuntimeError(f"{action} timed out after {timeout_ms}ms.") from exc
+            raise BrowserTimeoutError(f"{action} timed out after {timeout_ms}ms.") from exc
 
     async def _connect_over_cdp_with_timeout(self) -> Browser:
         """Connect Playwright to Chrome's CDP endpoint with a bounded timeout."""
@@ -562,9 +386,6 @@ class BrowserSessionManager:
             self._context = None
             self._playwright = None
             self._chrome_process = None
-            _process_state.chrome = None
-            if _process_state.pid_file == self._pid_file:
-                _process_state.pid_file = None
             _remove_pid_file(self._pid_file)
             self._started = False
             self._release_instance_lock()
@@ -581,7 +402,7 @@ class BrowserSessionManager:
     async def acquire_page(self) -> Page:
         """Get a page from the pool, waiting if all pooled pages are busy."""
         if self._closing:
-            raise RuntimeError(_POOL_UNAVAILABLE_MESSAGE)
+            raise PagePoolUnavailableError(_POOL_UNAVAILABLE_MESSAGE)
 
         while True:
             try:
@@ -616,7 +437,7 @@ class BrowserSessionManager:
                         )
 
             if not self._all_pages:
-                raise RuntimeError(_POOL_UNAVAILABLE_MESSAGE)
+                raise PagePoolUnavailableError(_POOL_UNAVAILABLE_MESSAGE)
 
             page = await self._page_pool.get()
             if self._page_is_healthy(page):
@@ -700,9 +521,13 @@ class BrowserSessionManager:
         new_page = await self._new_page_with_timeout(action=action)
         try:
             if navigate_to_base:
+                if self._base_url is None:
+                    raise ConfigurationError(
+                        "Cannot warm pool page: no base_url configured on the engine.",
+                    )
                 await self._goto_with_timeout(
                     new_page,
-                    self._config.service.base_url,
+                    self._base_url,
                     action="Initializing pooled browser page",
                 )
         except Exception:

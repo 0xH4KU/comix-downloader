@@ -1,4 +1,4 @@
-"""Tests for comix_dl.cdp_browser utilities and timeout wiring."""
+"""Tests for comix_dl.core.engines.cdp_browser utilities and timeout wiring."""
 
 from __future__ import annotations
 
@@ -11,16 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import comix_dl.browser_session as browser_session_module
-from comix_dl.browser_session import (
-    BrowserSessionManager,
-    _atexit_kill_chrome,
-    _find_free_port,
-    _is_port_in_use,
-)
-from comix_dl.cdp_browser import CdpBrowser
-from comix_dl.config import AppConfig, BrowserConfig, DownloadConfig
-from comix_dl.errors import CloudflareChallengeError, ConfigurationError
+from comix_dl.core.config import AppConfig, BrowserConfig, DownloadConfig
+from comix_dl.core.engines.browser_session import BrowserSessionManager
+from comix_dl.core.engines.cdp_browser import CdpBrowser
+from comix_dl.core.engines.chrome_process import _find_free_port, _is_port_in_use
+from comix_dl.core.errors import CloudflareChallengeError, ConfigurationError
 
 
 def _make_config(
@@ -119,7 +114,7 @@ class TestBrowserTimeouts:
             assert endpoint == "http://127.0.0.1:9444"
             return {"ok": True}
 
-        monkeypatch.setattr("comix_dl.browser_session.asyncio.wait_for", fake_wait_for)
+        monkeypatch.setattr("comix_dl.core.engines.browser_session.asyncio.wait_for", fake_wait_for)
         browser._playwright = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=connect))
 
         result = await browser._connect_over_cdp_with_timeout()
@@ -187,9 +182,9 @@ class TestBrowserTimeouts:
         def fail_connect(*_args: object, **_kwargs: object) -> None:
             raise ConnectionRefusedError()
 
-        monkeypatch.setattr("comix_dl.browser_session.time.monotonic", clock.monotonic)
-        monkeypatch.setattr("comix_dl.browser_session.time.sleep", clock.sleep)
-        monkeypatch.setattr("comix_dl.browser_session.socket.create_connection", fail_connect)
+        monkeypatch.setattr("comix_dl.core.engines.browser_session.time.monotonic", clock.monotonic)
+        monkeypatch.setattr("comix_dl.core.engines.browser_session.time.sleep", clock.sleep)
+        monkeypatch.setattr("comix_dl.core.engines.browser_session.socket.create_connection", fail_connect)
 
         with pytest.raises(
             RuntimeError,
@@ -224,7 +219,7 @@ class TestBrowserTimeouts:
             await browser.acquire_page()
 
     async def test_acquire_page_creates_pooled_page_lazily(self):
-        browser = BrowserSessionManager(config=AppConfig())
+        browser = BrowserSessionManager(config=AppConfig(), base_url="https://example.test")
         page = MagicMock()
         page.is_closed.return_value = False
         browser._context = MagicMock()
@@ -238,7 +233,7 @@ class TestBrowserTimeouts:
         browser._new_page_with_timeout.assert_awaited_once_with(action="Creating a pooled browser page")
         browser._goto_with_timeout.assert_awaited_once_with(
             page,
-            browser._config.service.base_url,
+            "https://example.test",
             action="Initializing pooled browser page",
         )
         assert browser._page_pool.empty()
@@ -321,7 +316,7 @@ class TestBrowserTimeouts:
         primary_page.close.assert_awaited_once()
 
     async def test_replace_dead_page_enqueues_replacement_page(self):
-        browser = BrowserSessionManager(config=AppConfig())
+        browser = BrowserSessionManager(config=AppConfig(), base_url="https://example.test")
         dead_page = MagicMock()
         dead_page.is_closed.return_value = True
         new_page = MagicMock()
@@ -355,16 +350,23 @@ class TestBrowserTimeouts:
         browser._create_pooled_page.assert_not_awaited()
 
     def test_atexit_cleanup_only_targets_current_process_chrome(self):
+        # Each manager owns its own Chrome subprocess. Verify the
+        # instance-level ``_atexit_cleanup`` terminates the right
+        # process and clears the reference, without touching any
+        # global state.
+        manager = BrowserSessionManager(config=AppConfig())
         process = MagicMock()
-        browser_session_module._process_state.chrome = process
+        manager._chrome_process = process
 
-        _atexit_kill_chrome()
+        manager._atexit_cleanup()
 
         process.terminate.assert_called_once()
         process.wait.assert_called_once_with(timeout=3)
-        assert browser_session_module._process_state.chrome is None
+        assert manager._chrome_process is None
 
     def test_cleanup_stale_profile_chrome_terminates_matching_process(self, tmp_path, monkeypatch):
+        from comix_dl.core.engines import chrome_process
+
         pid_file = tmp_path / "chrome.pid"
         pid_file.write_text("4242\n", encoding="utf-8")
         user_data_dir = tmp_path / "chrome-profile"
@@ -382,11 +384,13 @@ class TestBrowserTimeouts:
                 return
             raise AssertionError(f"unexpected signal {sig}")
 
-        monkeypatch.setattr(browser_session_module.os, "kill", fake_kill)
-        monkeypatch.setattr(browser_session_module.time, "sleep", lambda _seconds: None)
-        monkeypatch.setattr(browser_session_module, "_pid_matches_profile_chrome", lambda pid, path: True)
+        # Patch the chrome_process module — _cleanup_stale_profile_chrome
+        # and the helpers it calls all live there now.
+        monkeypatch.setattr(chrome_process.os, "kill", fake_kill)
+        monkeypatch.setattr(chrome_process.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(chrome_process, "_pid_matches_profile_chrome", lambda pid, path: True)
 
-        browser_session_module._cleanup_stale_profile_chrome(pid_file, user_data_dir)
+        chrome_process._cleanup_stale_profile_chrome(pid_file, user_data_dir)
 
         assert not pid_file.exists()
 
@@ -629,7 +633,7 @@ class TestBrowserHelpers:
         assert call_kwargs["arg"] == ["https://api.example.com/post", {"name": "value"}]
 
     async def test_ensure_cf_clearance_brings_challenge_tab_to_front(self):
-        browser = CdpBrowser(config=AppConfig())
+        browser = CdpBrowser(config=AppConfig(), base_url="https://example.test")
         browser._started = True
         page = MagicMock()
         page.bring_to_front = AsyncMock()
@@ -712,8 +716,8 @@ class TestBrowserHelpers:
 
         clock = _Clock()
 
-        monkeypatch.setattr("comix_dl.cdp_browser.time.monotonic", clock.monotonic)
-        monkeypatch.setattr("comix_dl.cdp_browser.asyncio.sleep", AsyncMock(side_effect=clock.sleep))
+        monkeypatch.setattr("comix_dl.core.engines.cdp_browser.time.monotonic", clock.monotonic)
+        monkeypatch.setattr("comix_dl.core.engines.cdp_browser.asyncio.sleep", AsyncMock(side_effect=clock.sleep))
 
         await browser._wait_for_cf_clearance(page)
 
@@ -742,8 +746,8 @@ class TestBrowserHelpers:
 
         clock = _Clock()
 
-        monkeypatch.setattr("comix_dl.cdp_browser.time.monotonic", clock.monotonic)
-        monkeypatch.setattr("comix_dl.cdp_browser.asyncio.sleep", AsyncMock(side_effect=clock.sleep))
+        monkeypatch.setattr("comix_dl.core.engines.cdp_browser.time.monotonic", clock.monotonic)
+        monkeypatch.setattr("comix_dl.core.engines.cdp_browser.asyncio.sleep", AsyncMock(side_effect=clock.sleep))
 
         await browser._wait_for_cf_clearance(page)
 
@@ -754,7 +758,7 @@ class TestBrowserHelpers:
         self,
         caplog: pytest.LogCaptureFixture,
     ):
-        browser = CdpBrowser(config=AppConfig())
+        browser = CdpBrowser(config=AppConfig(), base_url="https://example.test")
         browser._started = True
         page = MagicMock()
         browser._page = page
@@ -768,4 +772,146 @@ class TestBrowserHelpers:
             await browser.ensure_cf_clearance()
 
         assert "without a cf_clearance cookie" in caplog.text
-        browser._init_pool_pages.assert_awaited_once_with(browser._config.service.base_url)
+        browser._init_pool_pages.assert_awaited_once_with("https://example.test")
+
+
+class TestExtensionHooks:
+    """F-4: register_url_transformer / register_on_engine_ready wiring."""
+
+    def test_register_url_transformer_appends_iife(self) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        assert browser._url_transformer_iifes == []
+
+        browser.register_url_transformer("(function() {})()")
+        browser.register_url_transformer("(function() { other; })()")
+
+        assert browser._url_transformer_iifes == [
+            "(function() {})()",
+            "(function() { other; })()",
+        ]
+
+    def test_register_on_engine_ready_appends_hook(self) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        assert browser._on_ready_hooks == []
+
+        async def hook_a(_engine: CdpBrowser) -> None: ...
+        async def hook_b(_engine: CdpBrowser) -> None: ...
+
+        browser.register_on_engine_ready(hook_a)
+        browser.register_on_engine_ready(hook_b)
+
+        assert browser._on_ready_hooks == [hook_a, hook_b]
+
+    async def test_install_url_transformers_on_page_evaluates_each_iife(self) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        browser.register_url_transformer("(function() { a; })()")
+        browser.register_url_transformer("(function() { b; })()")
+        browser._evaluate_with_timeout = AsyncMock()
+
+        page = MagicMock()
+        await browser._install_url_transformers_on_page(page)
+
+        assert browser._evaluate_with_timeout.await_count == 2
+        first_iife = browser._evaluate_with_timeout.await_args_list[0].args[1]
+        second_iife = browser._evaluate_with_timeout.await_args_list[1].args[1]
+        assert first_iife == "(function() { a; })()"
+        assert second_iife == "(function() { b; })()"
+
+    async def test_install_url_transformers_logs_when_one_iife_fails(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        browser.register_url_transformer("ok-iife")
+        browser.register_url_transformer("bad-iife")
+        browser.register_url_transformer("ok-iife-2")
+
+        async def evaluate_side_effect(*args: object, **_kwargs: object) -> object:
+            if args[1] == "bad-iife":
+                raise RuntimeError("boom")
+            return None
+
+        browser._evaluate_with_timeout = AsyncMock(side_effect=evaluate_side_effect)
+        page = MagicMock()
+
+        with caplog.at_level("WARNING"):
+            await browser._install_url_transformers_on_page(page)
+
+        assert browser._evaluate_with_timeout.await_count == 3
+        assert "Failed to install a URL transformer" in caplog.text
+
+    async def test_run_on_engine_ready_hooks_runs_each_once(self) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        calls: list[str] = []
+
+        async def hook_a(_engine: CdpBrowser) -> None:
+            calls.append("a")
+
+        async def hook_b(_engine: CdpBrowser) -> None:
+            calls.append("b")
+
+        browser.register_on_engine_ready(hook_a)
+        browser.register_on_engine_ready(hook_b)
+
+        await browser._run_on_engine_ready_hooks()
+        assert calls == ["a", "b"]
+
+        # Calling again is a no-op so adapter setup never runs twice
+        # (even if ensure_cf_clearance is somehow re-entered).
+        await browser._run_on_engine_ready_hooks()
+        assert calls == ["a", "b"]
+
+    async def test_ensure_cf_clearance_runs_hooks_after_clearance(self) -> None:
+        browser = CdpBrowser(config=AppConfig(), base_url="https://example.test")
+        browser._started = True
+        page = MagicMock()
+        browser._page = page
+        browser._ensure_page = AsyncMock(return_value=page)
+        browser._goto_with_timeout = AsyncMock()
+        browser._is_cf_challenge = AsyncMock(return_value=False)
+        browser._has_cf_clearance_cookie = AsyncMock(return_value=True)
+        browser._init_pool_pages = AsyncMock()
+        browser._install_url_transformers_on_all_pages = AsyncMock()
+
+        ran: list[str] = []
+
+        async def hook(_engine: CdpBrowser) -> None:
+            ran.append("hook")
+
+        browser.register_on_engine_ready(hook)
+
+        await browser.ensure_cf_clearance()
+
+        assert ran == ["hook"]
+        browser._install_url_transformers_on_all_pages.assert_awaited_once()
+
+    async def test_create_pooled_page_installs_transformers_when_registered(self) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        browser.register_url_transformer("(function() {})()")
+        browser._install_url_transformers_on_page = AsyncMock()
+
+        new_page = MagicMock()
+        with patch.object(
+            BrowserSessionManager,
+            "_create_pooled_page",
+            AsyncMock(return_value=new_page),
+        ):
+            page = await browser._create_pooled_page(action="creating", navigate_to_base=True)
+
+        assert page is new_page
+        browser._install_url_transformers_on_page.assert_awaited_once_with(new_page)
+
+    async def test_create_pooled_page_skips_transformer_install_when_no_navigation(self) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        browser.register_url_transformer("(function() {})()")
+        browser._install_url_transformers_on_page = AsyncMock()
+
+        new_page = MagicMock()
+        with patch.object(
+            BrowserSessionManager,
+            "_create_pooled_page",
+            AsyncMock(return_value=new_page),
+        ):
+            await browser._create_pooled_page(action="creating", navigate_to_base=False)
+
+        browser._install_url_transformers_on_page.assert_not_awaited()

@@ -1,4 +1,9 @@
-"""Application configuration models."""
+"""Application configuration models.
+
+Configuration here is intentionally site-agnostic. Anything specific to
+a remote site (base URL, mirror list, signing details, deduplication
+rules) belongs to a :class:`~comix_dl.sites.base.SiteAdapter`.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +11,43 @@ import ipaddress
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
+
+
+def validate_public_https_url(url: str, *, label: str = "url") -> None:
+    """Reject URLs that are not safe public HTTPS origins.
+
+    Used by site adapters to validate user-supplied or configured base
+    URLs / mirror entries before they are handed to the engine. Raises
+    :class:`ValueError` for non-HTTPS schemes, missing hostnames, or
+    hosts that resolve to loopback / private / link-local / multicast
+    / reserved / unspecified addresses (or the literal name
+    ``localhost``).
+    """
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError(f"{label} must use https (got {parsed.scheme!r}): {url}")
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"{label} must include a hostname: {url}")
+    if host == "localhost":
+        raise ValueError(
+            f"{label} must not point to a loopback or private address: {url}",
+        )
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return
+    if (
+        address.is_loopback
+        or address.is_private
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    ):
+        raise ValueError(
+            f"{label} must not point to a loopback or private address: {url}",
+        )
 
 
 @dataclass
@@ -40,44 +82,6 @@ class DownloadConfig:
 
 
 @dataclass
-class ServiceConfig:
-    """comix.to API settings."""
-
-    base_url: str = "https://comix.to"
-
-    def __post_init__(self) -> None:
-        parsed = urlparse(self.base_url)
-        if parsed.scheme != "https":
-            raise ValueError(
-                f"base_url must use https (got {parsed.scheme!r}): {self.base_url}"
-            )
-        host = parsed.hostname
-        if not host:
-            raise ValueError(
-                f"base_url must include a hostname: {self.base_url}"
-            )
-        if host == "localhost":
-            raise ValueError(
-                f"base_url must not point to a loopback or private address: {self.base_url}"
-            )
-        try:
-            address = ipaddress.ip_address(host)
-        except ValueError:
-            return
-        if (
-            address.is_loopback
-            or address.is_private
-            or address.is_link_local
-            or address.is_multicast
-            or address.is_reserved
-            or address.is_unspecified
-        ):
-            raise ValueError(
-                f"base_url must not point to a loopback or private address: {self.base_url}"
-            )
-
-
-@dataclass
 class ConvertConfig:
     """Converter settings."""
 
@@ -90,11 +94,16 @@ class ConvertConfig:
 
 @dataclass
 class AppConfig:
-    """Root configuration passed explicitly into runtime components."""
+    """Root configuration passed explicitly into runtime components.
+
+    Site-specific fields (base URL, mirrors, signing) are not stored
+    here; they live on the active :class:`~comix_dl.sites.base.SiteAdapter`
+    instance and are injected into engines / services at construction
+    time.
+    """
 
     browser: BrowserConfig = field(default_factory=BrowserConfig)
     download: DownloadConfig = field(default_factory=DownloadConfig)
-    service: ServiceConfig = field(default_factory=ServiceConfig)
     convert: ConvertConfig = field(default_factory=ConvertConfig)
 
 
