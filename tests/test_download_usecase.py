@@ -61,11 +61,13 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
             image_urls: list[str],
             title: str,
             chapter_label: str,
+            *,
+            on_progress: object = None,
         ) -> ChapterDownloadResult:
             assert len(image_urls) == 2
-            if self._on_progress is not None:
-                self._on_progress(DownloadProgress(1, 2, 0, 0, "001", total_bytes=1024))
-                self._on_progress(DownloadProgress(2, 2, 0, 0, "002", total_bytes=2048))
+            if on_progress is not None:
+                on_progress(DownloadProgress(1, 2, 0, 0, "001", total_bytes=1024))
+                on_progress(DownloadProgress(2, 2, 0, 0, "002", total_bytes=2048))
             chapter_dir = self._output_dir / title / chapter_label
             chapter_dir.mkdir(parents=True, exist_ok=True)
             return ChapterDownloadResult(
@@ -169,10 +171,12 @@ async def test_download_chapters_counts_skipped_partial_and_missing_images(
             image_urls: list[str],
             title: str,
             chapter_label: str,
+            *,
+            on_progress: object = None,
         ) -> ChapterDownloadResult:
             self.bytes_downloaded = 1000
-            if self._on_progress is not None:
-                self._on_progress(DownloadProgress(1, 2, 0, 0, "001", total_bytes=1000))
+            if on_progress is not None:
+                on_progress(DownloadProgress(1, 2, 0, 0, "001", total_bytes=1000))
             chapter_dir = self._output_dir / title / chapter_label
             chapter_dir.mkdir(parents=True, exist_ok=True)
             return ChapterDownloadResult(

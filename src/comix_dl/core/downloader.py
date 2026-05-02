@@ -171,6 +171,7 @@ class Downloader:
         chapter: str,
         *,
         referer: str | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> ChapterDownloadResult:
         """Download all images for a chapter.
 
@@ -182,10 +183,16 @@ class Downloader:
             title: Series title (used for directory naming).
             chapter: Chapter label (used for directory naming).
             referer: Referer header for image requests.
+            on_progress: Per-call progress override. When ``None`` (the
+                default) the callback supplied at ``__init__`` is used,
+                so callers that share one downloader across chapters but
+                want per-chapter callbacks can pass it here without
+                touching ``self._on_progress``.
 
         Returns:
             Final download result for the chapter.
         """
+        progress_cb = on_progress if on_progress is not None else self._on_progress
         chapter_dir = self._output_dir / sanitize_dirname(title) / sanitize_dirname(chapter)
         _validate_within_base(chapter_dir, self._output_dir)
         chapter_dir.mkdir(parents=True, exist_ok=True)
@@ -194,8 +201,8 @@ class Downloader:
         # Already fully downloaded?
         if (chapter_dir / _COMPLETE_MARKER).exists():
             logger.info("%s - %s: already downloaded, skipping", title, chapter)
-            if self._on_progress:
-                self._on_progress(DownloadProgress(
+            if progress_cb:
+                progress_cb(DownloadProgress(
                     completed=len(image_urls),
                     total=len(image_urls),
                     failed=0,
@@ -220,8 +227,8 @@ class Downloader:
             nonlocal progress_done
             async with progress_lock:
                 progress_done += 1
-                if self._on_progress:
-                    self._on_progress(DownloadProgress(
+                if progress_cb:
+                    progress_cb(DownloadProgress(
                         completed=progress_done,
                         total=total,
                         failed=0,
