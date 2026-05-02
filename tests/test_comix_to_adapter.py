@@ -13,10 +13,36 @@ from comix_dl.core.models import (
     SearchResult,
     SeriesInfo,
 )
+from comix_dl.sites.base import SiteAdapter
 from comix_dl.sites.comix_to import ComixToAdapter
 
 if TYPE_CHECKING:
     from unittest.mock import AsyncMock
+
+
+# ---------------------------------------------------------------------------
+# Protocol conformance
+# ---------------------------------------------------------------------------
+
+class TestSiteAdapterConformance:
+    """Pin ComixToAdapter to the SiteAdapter contract.
+
+    A regression here means the adapter has drifted from the framework
+    contract — typically because someone renamed or removed a method
+    that the CLI / application layers depend on. Catch it at import
+    time rather than at the first call site failure.
+    """
+
+    def test_satisfies_site_adapter_protocol(self) -> None:
+        adapter = ComixToAdapter()
+        assert isinstance(adapter, SiteAdapter)
+
+    def test_required_attributes_exist(self) -> None:
+        adapter = ComixToAdapter()
+        assert isinstance(adapter.name, str) and adapter.name
+        assert isinstance(adapter.mirrors, list) and adapter.mirrors
+        assert all(isinstance(m, str) and m.startswith("https://") for m in adapter.mirrors)
+        assert isinstance(adapter.needs_browser, bool)
 
 
 # ---------------------------------------------------------------------------

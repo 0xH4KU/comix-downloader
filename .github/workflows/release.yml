@@ -1,0 +1,74 @@
+name: Release
+
+# Triggered by either:
+#   1. Pushing a tag matching ``v*`` (recommended for normal releases)
+#   2. Manual dispatch from the Actions tab (rebuild without re-tagging)
+#
+# Requires repository secret ``PYPI_API_TOKEN`` (a PyPI project-scoped
+# upload token). Without it the workflow still builds the sdist + wheel
+# artifacts and publishes them to the workflow run, so the release can
+# be inspected before introducing the secret.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: pip install --upgrade build twine
+
+      - name: Build distributions
+        run: python -m build
+
+      - name: Verify metadata
+        run: python -m twine check dist/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    # Only publish when the secret is configured. Forks and first-time
+    # release runs without the secret set still complete the build job
+    # so artifacts can be reviewed manually.
+    if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+    environment: pypi
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -z "$TWINE_PASSWORD" ]; then
+            echo "PYPI_API_TOKEN is not set; skipping upload."
+            exit 0
+          fi
+          pip install --upgrade twine
+          python -m twine upload dist/*
