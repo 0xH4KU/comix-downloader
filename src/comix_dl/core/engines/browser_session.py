@@ -11,6 +11,7 @@ import signal
 import socket
 import subprocess
 import time
+import weakref
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
@@ -36,23 +37,25 @@ _POOL_UNAVAILABLE_MESSAGE = (
 )
 
 
-class _ChromeProcessState:
-    """Module-level state for the currently active Chrome subprocess.
+# Live BrowserSessionManager instances tracked weakly so the atexit
+# handler can clean up Chrome subprocesses every still-running session
+# owns, without anyone holding a global pointer that would prevent
+# garbage collection. This replaces the previous module-level
+# ``_ChromeProcessState`` singleton.
+_LIVE_SESSIONS: weakref.WeakSet[BrowserSessionManager] = weakref.WeakSet()
 
-    Encapsulates what were previously three separate module globals so the
-    atexit handler and BrowserSessionManager can share state without
-    scattered ``global`` declarations.
+
+def _atexit_cleanup_all() -> None:
+    """Last-resort cleanup walked over every still-alive session.
+
+    Each live session is responsible for its own Chrome subprocess and
+    PID file; this function only iterates the registry and delegates.
     """
-
-    __slots__ = ("chrome", "instance_lock", "pid_file")
-
-    def __init__(self) -> None:
-        self.chrome: subprocess.Popen[bytes] | None = None
-        self.pid_file: Path | None = None
-        self.instance_lock: TextIOWrapper | None = None
+    for session in list(_LIVE_SESSIONS):
+        session._atexit_cleanup()
 
 
-_process_state = _ChromeProcessState()
+atexit.register(_atexit_cleanup_all)
 
 
 def _lock_file_handle(fileobj: TextIOWrapper) -> None:
@@ -81,23 +84,6 @@ def _unlock_file_handle(fileobj: TextIOWrapper) -> None:
     import fcntl
 
     fcntl.flock(fileobj.fileno(), fcntl.LOCK_UN)
-
-
-def _atexit_kill_chrome() -> None:
-    """Last-resort cleanup for Chrome started by this Python process only."""
-    if _process_state.chrome is not None:
-        try:
-            _process_state.chrome.terminate()
-            _process_state.chrome.wait(timeout=3)
-        except Exception:
-            with contextlib.suppress(Exception):
-                _process_state.chrome.kill()
-        _process_state.chrome = None
-    _remove_pid_file(_process_state.pid_file)
-    _process_state.pid_file = None
-
-
-atexit.register(_atexit_kill_chrome)
 
 
 def _find_free_port() -> int:
@@ -300,6 +286,27 @@ class BrowserSessionManager:
         # time so unit tests can build a manager without committing to a
         # site, but required before any pool page is warmed.
         self._base_url = base_url
+        # Register self with the live-session weakset so the atexit
+        # handler can find us at process exit. Membership is dropped
+        # automatically when this object is garbage-collected.
+        _LIVE_SESSIONS.add(self)
+
+    def _atexit_cleanup(self) -> None:
+        """Last-resort cleanup invoked by :func:`_atexit_cleanup_all`.
+
+        Only touches resources this instance owns; other live
+        ``BrowserSessionManager`` instances are responsible for their
+        own Chrome subprocesses and PID files.
+        """
+        if self._chrome_process is not None:
+            try:
+                self._chrome_process.terminate()
+                self._chrome_process.wait(timeout=3)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    self._chrome_process.kill()
+            self._chrome_process = None
+        _remove_pid_file(self._pid_file)
 
     async def start(self) -> None:
         """Launch Chrome and connect via CDP."""
@@ -341,11 +348,21 @@ class BrowserSessionManager:
         """Acquire the single-instance lock for browser sessions."""
         if self._instance_lock_handle is not None:
             return
-        if _process_state.instance_lock is not None:
-            raise RuntimeError(
-                f"Another comix-dl browser session is already running "
-                f"(lock file: {self._lock_file}).",
-            )
+        # POSIX advisory locks are merged within a single process, so
+        # we can't rely on fcntl/msvcrt alone to detect a sibling
+        # session in the same Python process. Walk the live-session
+        # weakset to enforce the same-process constraint explicitly.
+        for other in _LIVE_SESSIONS:
+            if other is self:
+                continue
+            if (
+                other._instance_lock_handle is not None
+                and other._lock_file == self._lock_file
+            ):
+                raise RuntimeError(
+                    f"Another comix-dl browser session is already running "
+                    f"(lock file: {self._lock_file}).",
+                )
 
         handle = self._lock_file.open("a+", encoding="utf-8")
         try:
@@ -368,7 +385,6 @@ class BrowserSessionManager:
             ) from None
 
         self._instance_lock_handle = handle
-        _process_state.instance_lock = handle
 
     def _release_instance_lock(self) -> None:
         """Release the single-instance lock if held by this browser."""
@@ -382,8 +398,6 @@ class BrowserSessionManager:
         with contextlib.suppress(OSError):
             self._lock_file.unlink()
         self._instance_lock_handle = None
-        if _process_state.instance_lock is handle:
-            _process_state.instance_lock = None
 
     def _launch_chrome(self) -> None:
         """Launch Chrome subprocess with remote debugging enabled."""
@@ -412,8 +426,6 @@ class BrowserSessionManager:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            _process_state.chrome = self._chrome_process
-            _process_state.pid_file = self._pid_file
             _write_pid_file(self._pid_file, self._chrome_process.pid)
             self._wait_for_cdp_ready()
         except FileNotFoundError:
@@ -577,9 +589,6 @@ class BrowserSessionManager:
             self._context = None
             self._playwright = None
             self._chrome_process = None
-            _process_state.chrome = None
-            if _process_state.pid_file == self._pid_file:
-                _process_state.pid_file = None
             _remove_pid_file(self._pid_file)
             self._started = False
             self._release_instance_lock()

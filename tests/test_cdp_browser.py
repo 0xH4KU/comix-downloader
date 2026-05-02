@@ -15,7 +15,6 @@ import comix_dl.core.engines.browser_session as browser_session_module
 from comix_dl.core.config import AppConfig, BrowserConfig, DownloadConfig
 from comix_dl.core.engines.browser_session import (
     BrowserSessionManager,
-    _atexit_kill_chrome,
     _find_free_port,
     _is_port_in_use,
 )
@@ -355,14 +354,19 @@ class TestBrowserTimeouts:
         browser._create_pooled_page.assert_not_awaited()
 
     def test_atexit_cleanup_only_targets_current_process_chrome(self):
+        # Each manager owns its own Chrome subprocess. Verify the
+        # instance-level ``_atexit_cleanup`` terminates the right
+        # process and clears the reference, without touching any
+        # global state.
+        manager = BrowserSessionManager(config=AppConfig())
         process = MagicMock()
-        browser_session_module._process_state.chrome = process
+        manager._chrome_process = process
 
-        _atexit_kill_chrome()
+        manager._atexit_cleanup()
 
         process.terminate.assert_called_once()
         process.wait.assert_called_once_with(timeout=3)
-        assert browser_session_module._process_state.chrome is None
+        assert manager._chrome_process is None
 
     def test_cleanup_stale_profile_chrome_terminates_matching_process(self, tmp_path, monkeypatch):
         pid_file = tmp_path / "chrome.pid"
