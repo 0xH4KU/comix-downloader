@@ -265,7 +265,13 @@ def _find_chrome(system: str) -> str:
 class BrowserSessionManager:
     """Own Chrome lifecycle, CDP connection, and the pooled Playwright pages."""
 
-    def __init__(self, *, max_pages: int | None = None, config: AppConfig | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        max_pages: int | None = None,
+        config: AppConfig | None = None,
+        base_url: str | None = None,
+    ) -> None:
         self._config = resolve_config(config)
         resolved_max_pages = (
             max_pages if max_pages is not None else self._config.download.max_concurrent_images
@@ -289,6 +295,11 @@ class BrowserSessionManager:
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._instance_lock_handle: TextIOWrapper | None = None
         self._closing = False
+        # Site-specific origin used for page-pool warm-up navigation and
+        # caller-driven Cloudflare clearance. Optional at construction
+        # time so unit tests can build a manager without committing to a
+        # site, but required before any pool page is warmed.
+        self._base_url = base_url
 
     async def start(self) -> None:
         """Launch Chrome and connect via CDP."""
@@ -704,9 +715,13 @@ class BrowserSessionManager:
         new_page = await self._new_page_with_timeout(action=action)
         try:
             if navigate_to_base:
+                if self._base_url is None:
+                    raise ConfigurationError(
+                        "Cannot warm pool page: no base_url configured on the engine.",
+                    )
                 await self._goto_with_timeout(
                     new_page,
-                    self._config.service.base_url,
+                    self._base_url,
                     action="Initializing pooled browser page",
                 )
         except Exception:

@@ -7,11 +7,17 @@ from pathlib import Path
 import pytest
 
 import comix_dl.core.config as config_module
-from comix_dl.core.config import AppConfig, BrowserConfig, ConvertConfig, DownloadConfig, ServiceConfig
+from comix_dl.core.config import (
+    AppConfig,
+    BrowserConfig,
+    ConvertConfig,
+    DownloadConfig,
+    validate_public_https_url,
+)
 
 
 class TestBrowserConfig:
-    def test_defaults(self):
+    def test_defaults(self) -> None:
         cfg = BrowserConfig()
         assert cfg.timeout_ms == 30_000
         assert cfg.cf_wait_seconds == 60
@@ -19,7 +25,7 @@ class TestBrowserConfig:
 
 
 class TestDownloadConfig:
-    def test_defaults(self):
+    def test_defaults(self) -> None:
         cfg = DownloadConfig()
         assert cfg.max_concurrent_chapters == 2
         assert cfg.max_concurrent_images == 8
@@ -30,15 +36,15 @@ class TestDownloadConfig:
         assert isinstance(cfg.default_output_dir, Path)
 
 
-class TestServiceConfig:
-    def test_base_url(self):
-        cfg = ServiceConfig()
-        assert cfg.base_url == "https://comix.to"
+class TestValidatePublicHttpsUrl:
+    def test_accepts_public_https_url(self) -> None:
+        # Should not raise.
+        validate_public_https_url("https://example.com")
 
     @pytest.mark.parametrize(
-        "base_url",
+        "url",
         [
-            "http://comix.to",
+            "http://example.com",
             "file:///tmp/comix",
             "https://localhost",
             "https://127.0.0.1",
@@ -49,17 +55,21 @@ class TestServiceConfig:
             "https://[fc00::1]",
         ],
     )
-    def test_rejects_non_public_or_non_https_base_url(self, base_url: str):
+    def test_rejects_non_public_or_non_https(self, url: str) -> None:
         with pytest.raises(ValueError):
-            ServiceConfig(base_url=base_url)
+            validate_public_https_url(url)
 
-    def test_rejects_missing_hostname(self):
+    def test_rejects_missing_hostname(self) -> None:
         with pytest.raises(ValueError):
-            ServiceConfig(base_url="https:///missing-host")
+            validate_public_https_url("https:///missing-host")
+
+    def test_includes_label_in_error_message(self) -> None:
+        with pytest.raises(ValueError, match="mirror"):
+            validate_public_https_url("http://example.com", label="mirror")
 
 
 class TestConvertConfig:
-    def test_defaults(self):
+    def test_defaults(self) -> None:
         cfg = ConvertConfig()
         assert cfg.default_format == "pdf"
         assert cfg.pdf_dpi == 100.0
@@ -70,17 +80,21 @@ class TestConvertConfig:
 
 
 class TestAppConfig:
-    def test_no_global_config_singleton(self):
+    def test_no_global_config_singleton(self) -> None:
         assert not hasattr(config_module, "CONFIG")
 
-    def test_sub_configs_are_instances(self):
+    def test_sub_configs_are_instances(self) -> None:
         cfg = AppConfig()
         assert isinstance(cfg.browser, BrowserConfig)
         assert isinstance(cfg.download, DownloadConfig)
-        assert isinstance(cfg.service, ServiceConfig)
         assert isinstance(cfg.convert, ConvertConfig)
 
-    def test_new_instances_do_not_share_nested_state(self):
+    def test_no_service_field_on_app_config(self) -> None:
+        # Site-specific URL config now lives on SiteAdapter, not AppConfig.
+        cfg = AppConfig()
+        assert not hasattr(cfg, "service")
+
+    def test_new_instances_do_not_share_nested_state(self) -> None:
         first = AppConfig()
         second = AppConfig()
 

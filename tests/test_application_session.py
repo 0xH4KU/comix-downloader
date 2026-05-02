@@ -34,11 +34,13 @@ async def test_open_application_session_builds_browser_and_service(
     @dataclass
     class FakeBrowser:
         config: AppConfig
+        base_url: str
 
     class FakeBrowserContext:
-        def __init__(self, *, config: AppConfig) -> None:
+        def __init__(self, *, config: AppConfig, base_url: str) -> None:
             captured["browser_config"] = config
-            self._browser = FakeBrowser(config=config)
+            captured["browser_base_url"] = base_url
+            self._browser = FakeBrowser(config=config, base_url=base_url)
 
         async def __aenter__(self) -> FakeBrowser:
             return self._browser
@@ -47,9 +49,12 @@ async def test_open_application_session_builds_browser_and_service(
             return None
 
     class FakeService:
-        def __init__(self, browser: FakeBrowser, *, config: AppConfig) -> None:
+        def __init__(
+            self, browser: FakeBrowser, *, config: AppConfig, base_url: str,
+        ) -> None:
             captured["service_browser"] = browser
             captured["service_config"] = config
+            captured["service_base_url"] = base_url
 
     monkeypatch.setattr(app_session, "CdpBrowser", FakeBrowserContext)
     monkeypatch.setattr(app_session, "ComixService", FakeService)
@@ -62,4 +67,10 @@ async def test_open_application_session_builds_browser_and_service(
         assert captured["browser_config"] is session.config
         assert captured["service_config"] is session.config
         assert captured["service_browser"] is session.browser
+        # Browser and service receive the same base_url; F-3 / F-5 will
+        # source it from the active SiteAdapter instead of a hard-coded
+        # constant.
+        assert captured["browser_base_url"] == captured["service_base_url"]
+        assert isinstance(captured["browser_base_url"], str)
+        assert captured["browser_base_url"].startswith("https://")
 

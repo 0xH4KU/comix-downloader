@@ -123,10 +123,20 @@ class SeriesInfo:
 class ComixService:
     """High-level API for interacting with comix.to."""
 
-    def __init__(self, client: CdpBrowser, config: AppConfig | None = None) -> None:
+    def __init__(
+        self,
+        client: CdpBrowser,
+        config: AppConfig | None = None,
+        *,
+        base_url: str | None = None,
+    ) -> None:
         self._client = client
         self._config = resolve_config(config)
-        self._base = self._config.service.base_url
+        # base_url is provided by the calling layer (currently the
+        # application session, eventually the active SiteAdapter in
+        # F-3). The historical default is preserved so existing call
+        # sites and tests continue to work without modification.
+        self._base = base_url if base_url is not None else "https://comix.to"
         self._chapter_payload_cache: dict[int, dict[str, object] | None] = {}
 
     @staticmethod

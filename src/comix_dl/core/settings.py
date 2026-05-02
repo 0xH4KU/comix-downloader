@@ -90,7 +90,6 @@ class SettingsRepository:
         chapter_delay = 0.8 if tuning.download_delay else 0.0
         return AppConfig(
             browser=replace(base.browser),
-            service=replace(base.service),
             download=replace(
                 base.download,
                 default_output_dir=Path(settings.output_dir),

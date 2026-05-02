@@ -108,11 +108,15 @@ async def open_application_session(
 ) -> AsyncIterator[ApplicationSession]:
     """Open one browser-backed application session for CLI flows."""
     runtime = load_runtime(settings=settings, config=config, output=output)
-    async with CdpBrowser(config=runtime.config) as browser:
+    # Site origin will move to the active SiteAdapter in F-3 / F-5
+    # (mirror selection). Until then we hard-code the comix.to origin
+    # so wave-1 commits stay incremental.
+    base_url = "https://comix.to"
+    async with CdpBrowser(config=runtime.config, base_url=base_url) as browser:
         yield ApplicationSession(
             settings=runtime.settings,
             config=runtime.config,
             output_dir=runtime.output_dir,
             browser=browser,
-            service=ComixService(browser, config=runtime.config),
+            service=ComixService(browser, config=runtime.config, base_url=base_url),
         )

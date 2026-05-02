@@ -46,6 +46,7 @@ from comix_dl.core.errors import (
     BrowserTimeoutError,
     CloudflareChallengeError,
     ComixError,
+    ConfigurationError,
     Http403Error,
     PagePoolUnavailableError,
 )
@@ -125,8 +126,14 @@ def _translate_browser_error(exc: Exception) -> Exception:
 class CdpBrowser(BrowserSessionManager):
     """Cloudflare-aware browser client built on BrowserSessionManager."""
 
-    def __init__(self, *, max_pages: int | None = None, config: AppConfig | None = None) -> None:
-        super().__init__(max_pages=max_pages, config=config)
+    def __init__(
+        self,
+        *,
+        max_pages: int | None = None,
+        config: AppConfig | None = None,
+        base_url: str | None = None,
+    ) -> None:
+        super().__init__(max_pages=max_pages, config=config, base_url=base_url)
         self._cf_cleared = False
         self._cf_lock = asyncio.Lock()
         self._main_page_lock = asyncio.Lock()
@@ -318,7 +325,11 @@ class CdpBrowser(BrowserSessionManager):
 
     async def _probe_service_access(self, page: Page) -> bool:
         """Verify that the current browser context can reach the service origin."""
-        probe_url = f"{self._config.service.base_url}/api/v2/manga?keyword=test&limit=1"
+        if self._base_url is None:
+            return False
+        # The lightweight probe path is comix.to-specific; F-5 will move
+        # it onto the SiteAdapter so each site supplies its own probe.
+        probe_url = f"{self._base_url}/api/v2/manga?keyword=test&limit=1"
         try:
             result = await self._evaluate_with_timeout(
                 page,
@@ -348,15 +359,21 @@ class CdpBrowser(BrowserSessionManager):
         return "json" in str(result.get("contentType", "")).lower()
 
     async def ensure_cf_clearance(self) -> None:
-        """Navigate to comix.to to pass CF challenge if needed."""
+        """Navigate to the configured base URL to pass any CF challenge."""
         if self._cf_cleared:
             return
+
+        if self._base_url is None:
+            raise ConfigurationError(
+                "CdpBrowser requires base_url for Cloudflare clearance; "
+                "construct the engine with base_url=<active mirror>.",
+            )
 
         async with self._cf_lock:
             if self._cf_cleared:
                 return
 
-            url = self._config.service.base_url
+            url = self._base_url
             logger.info("Checking CF clearance at %s", url)
             page = await self._ensure_page()
 

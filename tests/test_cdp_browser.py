@@ -224,7 +224,7 @@ class TestBrowserTimeouts:
             await browser.acquire_page()
 
     async def test_acquire_page_creates_pooled_page_lazily(self):
-        browser = BrowserSessionManager(config=AppConfig())
+        browser = BrowserSessionManager(config=AppConfig(), base_url="https://example.test")
         page = MagicMock()
         page.is_closed.return_value = False
         browser._context = MagicMock()
@@ -238,7 +238,7 @@ class TestBrowserTimeouts:
         browser._new_page_with_timeout.assert_awaited_once_with(action="Creating a pooled browser page")
         browser._goto_with_timeout.assert_awaited_once_with(
             page,
-            browser._config.service.base_url,
+            "https://example.test",
             action="Initializing pooled browser page",
         )
         assert browser._page_pool.empty()
@@ -321,7 +321,7 @@ class TestBrowserTimeouts:
         primary_page.close.assert_awaited_once()
 
     async def test_replace_dead_page_enqueues_replacement_page(self):
-        browser = BrowserSessionManager(config=AppConfig())
+        browser = BrowserSessionManager(config=AppConfig(), base_url="https://example.test")
         dead_page = MagicMock()
         dead_page.is_closed.return_value = True
         new_page = MagicMock()
@@ -629,7 +629,7 @@ class TestBrowserHelpers:
         assert call_kwargs["arg"] == ["https://api.example.com/post", {"name": "value"}]
 
     async def test_ensure_cf_clearance_brings_challenge_tab_to_front(self):
-        browser = CdpBrowser(config=AppConfig())
+        browser = CdpBrowser(config=AppConfig(), base_url="https://example.test")
         browser._started = True
         page = MagicMock()
         page.bring_to_front = AsyncMock()
@@ -754,7 +754,7 @@ class TestBrowserHelpers:
         self,
         caplog: pytest.LogCaptureFixture,
     ):
-        browser = CdpBrowser(config=AppConfig())
+        browser = CdpBrowser(config=AppConfig(), base_url="https://example.test")
         browser._started = True
         page = MagicMock()
         browser._page = page
@@ -768,7 +768,7 @@ class TestBrowserHelpers:
             await browser.ensure_cf_clearance()
 
         assert "without a cf_clearance cookie" in caplog.text
-        browser._init_pool_pages.assert_awaited_once_with(browser._config.service.base_url)
+        browser._init_pool_pages.assert_awaited_once_with("https://example.test")
 
 
 class TestExtensionHooks:
@@ -858,7 +858,7 @@ class TestExtensionHooks:
         assert calls == ["a", "b"]
 
     async def test_ensure_cf_clearance_runs_hooks_after_clearance(self) -> None:
-        browser = CdpBrowser(config=AppConfig())
+        browser = CdpBrowser(config=AppConfig(), base_url="https://example.test")
         browser._started = True
         page = MagicMock()
         browser._page = page
