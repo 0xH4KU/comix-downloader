@@ -16,7 +16,7 @@ from comix_dl.downloader import (
     ensure_complete_download,
     sanitize_dirname,
 )
-from comix_dl.errors import PartialDownloadError
+from comix_dl.errors import BrowserTimeoutError, PagePoolUnavailableError, PartialDownloadError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -416,7 +416,9 @@ class TestDownloadImageRetry:
         assert mock_browser.get_bytes.call_count == 3
 
     async def test_timeout_error_is_contextualized(self, tmp_path: Path, mock_browser: AsyncMock):
-        mock_browser.get_bytes.side_effect = RuntimeError("Fetching binary response timed out after 20ms.")
+        mock_browser.get_bytes.side_effect = BrowserTimeoutError(
+            "Fetching binary response timed out after 20ms."
+        )
 
         dl = _make_downloader(mock_browser, tmp_path, max_retries=0, retry_delay=0)
         success, error = await dl._download_image(
@@ -432,7 +434,7 @@ class TestDownloadImageRetry:
         )
 
     async def test_page_pool_error_is_contextualized(self, tmp_path: Path, mock_browser: AsyncMock):
-        mock_browser.get_bytes.side_effect = RuntimeError(
+        mock_browser.get_bytes.side_effect = PagePoolUnavailableError(
             "Browser page pool is unavailable; pooled download requests cannot proceed.",
         )
 

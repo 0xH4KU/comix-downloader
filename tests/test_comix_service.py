@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from comix_dl.comix_service import ChapterImages, ChapterInfo, ComixService, SearchResult, SeriesInfo
-from comix_dl.errors import RemoteApiError
+from comix_dl.errors import BrowserTimeoutError, Http403Error, RemoteApiError
 
 if TYPE_CHECKING:
     from unittest.mock import AsyncMock
@@ -262,7 +262,7 @@ class TestSearch:
             await svc.search("test")
 
     async def test_403_error_raises_remote_api_error(self, mock_browser: AsyncMock):
-        mock_browser.get_json.side_effect = Exception("HTTP 403 Forbidden")
+        mock_browser.get_json.side_effect = Http403Error("HTTP 403 Forbidden")
         svc = _make_service(mock_browser)
         with pytest.raises(
             RemoteApiError,
@@ -274,7 +274,7 @@ class TestSearch:
             await svc.search("test")
 
     async def test_403_error_logs_clearance_hint(self, mock_browser: AsyncMock, caplog: pytest.LogCaptureFixture):
-        mock_browser.get_json.side_effect = Exception("HTTP 403 Forbidden")
+        mock_browser.get_json.side_effect = Http403Error("HTTP 403 Forbidden")
         svc = _make_service(mock_browser)
 
         with pytest.raises(RemoteApiError):
@@ -356,7 +356,7 @@ class TestGetChapterImages:
         assert result is None
 
     async def test_timeout_logs_clear_error(self, mock_browser: AsyncMock, caplog: pytest.LogCaptureFixture):
-        mock_browser.get_json.side_effect = Exception("Reading response timed out after 5000ms.")
+        mock_browser.get_json.side_effect = BrowserTimeoutError("Reading response timed out after 5000ms.")
         svc = _make_service(mock_browser)
 
         result = await svc.get_chapter_images(12345)
@@ -388,7 +388,7 @@ class TestGetChapterImages:
 
 class TestGetSeries:
     async def test_403_raises_remote_api_error(self, mock_browser: AsyncMock):
-        mock_browser.get_json.side_effect = Exception("HTTP 403 Forbidden")
+        mock_browser.get_json.side_effect = Http403Error("HTTP 403 Forbidden")
         svc = _make_service(mock_browser)
 
         with pytest.raises(

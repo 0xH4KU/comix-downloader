@@ -19,7 +19,13 @@ from typing import TYPE_CHECKING, cast
 from comix_dl.browser_session import (
     BrowserSessionManager,
 )
-from comix_dl.errors import CloudflareChallengeError
+from comix_dl.errors import (
+    BrowserTimeoutError,
+    CloudflareChallengeError,
+    ComixError,
+    Http403Error,
+    PagePoolUnavailableError,
+)
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -41,6 +47,32 @@ __all__ = [
     "BrowserSessionManager",
     "CdpBrowser",
 ]
+
+
+def _translate_browser_error(exc: Exception) -> Exception:
+    """Translate raw browser-layer exceptions into typed domain errors.
+
+    Playwright and other low-level layers raise generic ``RuntimeError``
+    or ``Exception`` instances whose meaning is encoded in the message
+    string. This function inspects the message once at the browser
+    boundary and re-emits a typed :mod:`comix_dl.errors` subclass so that
+    upstream callers can rely on ``isinstance`` checks instead of fragile
+    string matching.
+
+    Already-typed :class:`ComixError` instances pass through untouched.
+    Unknown errors are returned as-is so the caller can re-raise them.
+    """
+    if isinstance(exc, ComixError):
+        return exc
+
+    message = str(exc)
+    if "HTTP 403" in message or "403 Forbidden" in message:
+        return Http403Error(message)
+    if "timed out" in message:
+        return BrowserTimeoutError(message)
+    if "page pool" in message.lower():
+        return PagePoolUnavailableError(message)
+    return exc
 
 
 class CdpBrowser(BrowserSessionManager):
@@ -68,9 +100,13 @@ class CdpBrowser(BrowserSessionManager):
         await self.close()
 
     def _is_cf_access_error(self, exc: Exception) -> bool:
-        """Return whether an exception indicates expired Cloudflare clearance."""
-        message = str(exc)
-        return "HTTP 403" in message or "403 Forbidden" in message
+        """Return whether an exception indicates expired Cloudflare clearance.
+
+        Accepts both already-typed :class:`Http403Error` instances and raw
+        exceptions whose message indicates a 403; the boundary translation
+        helper normalises them before the ``isinstance`` check.
+        """
+        return isinstance(_translate_browser_error(exc), Http403Error)
 
     def _release_page_if_pooled(self, page: Page) -> None:
         """Return a healthy pooled page so clearance refresh can reinitialize it."""
@@ -144,7 +180,8 @@ class CdpBrowser(BrowserSessionManager):
                 action=action,
             )
         except Exception as exc:
-            if self._is_cf_access_error(exc):
+            typed = _translate_browser_error(exc)
+            if isinstance(typed, Http403Error):
                 self._release_page_if_pooled(page)
                 if attempt == 0:
                     await self._refresh_cf_clearance(
@@ -154,10 +191,12 @@ class CdpBrowser(BrowserSessionManager):
                 raise CloudflareChallengeError(
                     "Cloudflare clearance refresh did not recover browser access "
                     f"to {url} after HTTP 403.",
-                ) from exc
+                ) from typed
             if use_page_pool:
                 await self._replace_dead_page(page)
-            raise
+            if typed is exc:
+                raise
+            raise typed from exc
         else:
             if use_page_pool:
                 self.release_page(page)
@@ -535,6 +574,6 @@ class CdpBrowser(BrowserSessionManager):
                 await asyncio.sleep(1.0)
                 return
 
-        raise RuntimeError(
+        raise CloudflareChallengeError(
             f"CF challenge did not resolve within {self._config.browser.cf_wait_seconds}s."
         )

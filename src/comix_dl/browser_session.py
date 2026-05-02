@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
 from comix_dl.config import AppConfig, resolve_config
-from comix_dl.errors import ConfigurationError
+from comix_dl.errors import (
+    BrowserTimeoutError,
+    ConfigurationError,
+    PagePoolUnavailableError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -433,7 +437,7 @@ class BrowserSessionManager:
         try:
             return await asyncio.wait_for(awaitable, timeout=timeout_ms / 1000)
         except TimeoutError as exc:
-            raise RuntimeError(f"{action} timed out after {timeout_ms}ms.") from exc
+            raise BrowserTimeoutError(f"{action} timed out after {timeout_ms}ms.") from exc
 
     async def _connect_over_cdp_with_timeout(self) -> Browser:
         """Connect Playwright to Chrome's CDP endpoint with a bounded timeout."""
@@ -581,7 +585,7 @@ class BrowserSessionManager:
     async def acquire_page(self) -> Page:
         """Get a page from the pool, waiting if all pooled pages are busy."""
         if self._closing:
-            raise RuntimeError(_POOL_UNAVAILABLE_MESSAGE)
+            raise PagePoolUnavailableError(_POOL_UNAVAILABLE_MESSAGE)
 
         while True:
             try:
@@ -616,7 +620,7 @@ class BrowserSessionManager:
                         )
 
             if not self._all_pages:
-                raise RuntimeError(_POOL_UNAVAILABLE_MESSAGE)
+                raise PagePoolUnavailableError(_POOL_UNAVAILABLE_MESSAGE)
 
             page = await self._page_pool.get()
             if self._page_is_healthy(page):

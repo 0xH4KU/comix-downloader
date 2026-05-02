@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 from comix_dl.config import AppConfig, resolve_config
-from comix_dl.errors import RemoteApiError
+from comix_dl.errors import BrowserTimeoutError, Http403Error, RemoteApiError
 
 if TYPE_CHECKING:
     from comix_dl.cdp_browser import CdpBrowser
@@ -131,16 +131,20 @@ class ComixService:
 
     @staticmethod
     def _describe_api_error(exc: Exception, *, action: str) -> str:
-        """Return a clearer message for high-value remote failure modes."""
-        message = str(exc)
-        if "HTTP 403" in message or "403 Forbidden" in message:
+        """Return a clearer message for high-value remote failure modes.
+
+        Dispatches by exception type. Unknown errors fall through to a
+        generic representation rather than being mis-categorised by a
+        substring check.
+        """
+        if isinstance(exc, Http403Error):
             return (
                 f"{action} failed: API request was blocked by HTTP 403. "
                 "Cloudflare clearance may have expired."
             )
-        if "timed out" in message:
-            return f"{action} failed: API request timed out. {message}"
-        return f"{action} failed: {message}"
+        if isinstance(exc, BrowserTimeoutError):
+            return f"{action} failed: API request timed out. {exc}"
+        return f"{action} failed: {exc}"
 
     async def search(
         self,

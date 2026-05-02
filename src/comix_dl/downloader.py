@@ -14,7 +14,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from comix_dl.config import AppConfig, resolve_config
-from comix_dl.errors import PartialDownloadError
+from comix_dl.errors import (
+    BrowserTimeoutError,
+    Http403Error,
+    PagePoolUnavailableError,
+    PartialDownloadError,
+)
 from comix_dl.fileio import atomic_write_bytes, atomic_write_text
 from comix_dl.logging_utils import log_context
 
@@ -132,18 +137,26 @@ class Downloader:
 
     @staticmethod
     def _describe_download_error(url: str, filename: str, exc: Exception) -> str:
-        """Return a clearer error message for common image-download failures."""
-        message = str(exc)
-        if "timed out" in message:
-            return f"Image request timed out for {filename} from {url}: {message}"
-        if "HTTP 403" in message or "403 Forbidden" in message:
+        """Return a clearer error message for common image-download failures.
+
+        Dispatches by exception type rather than parsing message strings.
+        Raw exceptions that escape the browser-boundary translation fall
+        through to a generic representation so the caller still gets a
+        message rather than a silent failure.
+        """
+        if isinstance(exc, BrowserTimeoutError):
+            return f"Image request timed out for {filename} from {url}: {exc}"
+        if isinstance(exc, Http403Error):
             return (
                 f"Image request was blocked by HTTP 403 for {filename} from {url}; "
                 "Cloudflare clearance may have expired."
             )
-        if "page pool" in message.lower():
-            return f"Browser page pool is unavailable while downloading {filename} from {url}: {message}"
-        return message
+        if isinstance(exc, PagePoolUnavailableError):
+            return (
+                f"Browser page pool is unavailable while downloading {filename} "
+                f"from {url}: {exc}"
+            )
+        return str(exc)
 
     def is_chapter_complete(self, title: str, chapter: str) -> bool:
         """Check whether a chapter has already been downloaded."""
