@@ -3,19 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-import atexit
 import contextlib
 import logging
 import os
-import signal
+import platform
 import socket
 import subprocess
 import time
-import weakref
-from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
 from comix_dl.core.config import AppConfig, resolve_config
+from comix_dl.core.engines.chrome_process import (
+    _LIVE_SESSIONS,
+    _cleanup_stale_profile_chrome,
+    _find_chrome,
+    _find_free_port,
+    _lock_file_handle,
+    _remove_pid_file,
+    _unlock_file_handle,
+    _write_pid_file,
+)
 from comix_dl.core.errors import (
     BrowserTimeoutError,
     ConfigurationError,
@@ -35,217 +42,6 @@ _POOL_UNAVAILABLE_MESSAGE = (
     "Browser page pool is unavailable; pooled download requests cannot proceed. "
     "This usually means pooled page creation failed or the browser context is unavailable."
 )
-
-
-# Live BrowserSessionManager instances tracked weakly so the atexit
-# handler can clean up Chrome subprocesses every still-running session
-# owns, without anyone holding a global pointer that would prevent
-# garbage collection. This replaces the previous module-level
-# ``_ChromeProcessState`` singleton.
-_LIVE_SESSIONS: weakref.WeakSet[BrowserSessionManager] = weakref.WeakSet()
-
-
-def _atexit_cleanup_all() -> None:
-    """Last-resort cleanup walked over every still-alive session.
-
-    Each live session is responsible for its own Chrome subprocess and
-    PID file; this function only iterates the registry and delegates.
-    """
-    for session in list(_LIVE_SESSIONS):
-        session._atexit_cleanup()
-
-
-atexit.register(_atexit_cleanup_all)
-
-
-def _lock_file_handle(fileobj: TextIOWrapper) -> None:
-    """Acquire a non-blocking exclusive file lock."""
-    if os.name == "nt":
-        import msvcrt
-
-        fileobj.seek(0)
-        msvcrt.locking(fileobj.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
-        return
-
-    import fcntl
-
-    fcntl.flock(fileobj.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-
-def _unlock_file_handle(fileobj: TextIOWrapper) -> None:
-    """Release a previously acquired file lock."""
-    if os.name == "nt":
-        import msvcrt
-
-        fileobj.seek(0)
-        msvcrt.locking(fileobj.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
-        return
-
-    import fcntl
-
-    fcntl.flock(fileobj.fileno(), fcntl.LOCK_UN)
-
-
-def _find_free_port() -> int:
-    """Find an available port for CDP."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
-
-
-def _is_port_in_use(port: int) -> bool:
-    """Check whether a TCP port is already bound."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.connect(("127.0.0.1", port))
-            return True
-        except (ConnectionRefusedError, OSError):
-            return False
-
-
-def _write_pid_file(pid_file: Path, pid: int) -> None:
-    """Persist the most recently launched Chrome PID for crash recovery."""
-    with contextlib.suppress(OSError):
-        pid_file.parent.mkdir(parents=True, exist_ok=True)
-        pid_file.write_text(f"{pid}\n", encoding="utf-8")
-
-
-def _remove_pid_file(pid_file: Path | None) -> None:
-    """Remove a persisted Chrome PID file if present."""
-    if pid_file is None:
-        return
-    with contextlib.suppress(OSError):
-        pid_file.unlink(missing_ok=True)
-
-
-def _command_line_for_pid(pid: int) -> str | None:
-    """Best-effort command line lookup for a live PID."""
-    proc_cmdline = Path(f"/proc/{pid}/cmdline")
-    if proc_cmdline.exists():
-        with contextlib.suppress(OSError):
-            raw = proc_cmdline.read_bytes().replace(b"\0", b" ").decode("utf-8", errors="ignore").strip()
-            if raw:
-                return raw
-
-    if os.name == "nt":
-        return None
-
-    with contextlib.suppress(Exception):
-        result = subprocess.run(
-            ["ps", "-o", "command=", "-p", str(pid)],
-            capture_output=True,
-            text=True,
-            timeout=1,
-            check=False,
-        )
-        command = result.stdout.strip()
-        if command:
-            return command
-
-    return None
-
-
-def _pid_matches_profile_chrome(pid: int, user_data_dir: Path) -> bool:
-    """Return whether *pid* still looks like our Chrome for *user_data_dir*."""
-    command = _command_line_for_pid(pid)
-    if not command:
-        return False
-
-    expected_flag = f"--user-data-dir={user_data_dir}"
-    lowered = command.lower()
-    return expected_flag in command and ("chrome" in lowered or "chromium" in lowered)
-
-
-def _terminate_pid(pid: int) -> None:
-    """Terminate a live process, escalating to SIGKILL when available."""
-    os.kill(pid, signal.SIGTERM)
-    deadline = time.monotonic() + 3.0
-    while time.monotonic() < deadline:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.3)
-
-    kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
-    with contextlib.suppress(ProcessLookupError):
-        os.kill(pid, kill_signal)
-
-
-def _cleanup_stale_profile_chrome(pid_file: Path, user_data_dir: Path) -> None:
-    """Terminate a stale Chrome process previously launched for *user_data_dir*."""
-    if not pid_file.exists():
-        return
-
-    try:
-        pid = int(pid_file.read_text(encoding="utf-8").strip())
-    except (ValueError, OSError):
-        _remove_pid_file(pid_file)
-        return
-
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        _remove_pid_file(pid_file)
-        return
-    except PermissionError as exc:
-        raise RuntimeError(
-            f"Chrome profile {user_data_dir} appears to still be in use by PID {pid}. "
-            "Close the stale Chrome process and retry.",
-        ) from exc
-
-    if not _pid_matches_profile_chrome(pid, user_data_dir):
-        _remove_pid_file(pid_file)
-        return
-
-    logger.warning("Found stale Chrome for %s (PID %d), terminating before startup", user_data_dir, pid)
-    try:
-        _terminate_pid(pid)
-    except Exception as exc:
-        raise RuntimeError(
-            f"Chrome profile {user_data_dir} is still being used by stale process {pid}. "
-            "Close it and retry.",
-        ) from exc
-
-    _remove_pid_file(pid_file)
-
-
-def _find_chrome(system: str) -> str:
-    """Auto-detect Chrome executable path for the current platform."""
-    import shutil
-
-    if system == "Darwin":
-        candidates = [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            str(Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
-            "/opt/homebrew/bin/chromium",
-        ]
-        for candidate_path in candidates:
-            if Path(candidate_path).exists():
-                return candidate_path
-        return candidates[0]
-
-    if system == "Linux":
-        for name in ("google-chrome", "google-chrome-stable", "chromium-browser", "chromium"):
-            found = shutil.which(name)
-            if found:
-                return found
-        return "google-chrome"
-
-    env_candidates: list[Path] = []
-    for env_var in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
-        base = os.environ.get(env_var)
-        if base:
-            env_candidates.append(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe")
-
-    for env_candidate in env_candidates:
-        if env_candidate.exists():
-            return str(env_candidate)
-
-    found = shutil.which("chrome") or shutil.which("chrome.exe")
-    if found:
-        return found
-    return "chrome.exe"
 
 
 class BrowserSessionManager:
@@ -352,13 +148,15 @@ class BrowserSessionManager:
         # we can't rely on fcntl/msvcrt alone to detect a sibling
         # session in the same Python process. Walk the live-session
         # weakset to enforce the same-process constraint explicitly.
+        # The weakset is typed against the minimal _AtExitCleanup
+        # protocol so we use getattr with a default rather than
+        # tightening that protocol with lock-management attributes.
         for other in _LIVE_SESSIONS:
             if other is self:
                 continue
-            if (
-                other._instance_lock_handle is not None
-                and other._lock_file == self._lock_file
-            ):
+            other_handle = getattr(other, "_instance_lock_handle", None)
+            other_lock_file = getattr(other, "_lock_file", None)
+            if other_handle is not None and other_lock_file == self._lock_file:
                 raise RuntimeError(
                     f"Another comix-dl browser session is already running "
                     f"(lock file: {self._lock_file}).",
@@ -401,7 +199,6 @@ class BrowserSessionManager:
 
     def _launch_chrome(self) -> None:
         """Launch Chrome subprocess with remote debugging enabled."""
-        import platform
 
         system = platform.system()
         chrome_path = self._config.browser.chrome_path or _find_chrome(system)

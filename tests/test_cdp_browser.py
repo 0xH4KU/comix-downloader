@@ -11,14 +11,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import comix_dl.core.engines.browser_session as browser_session_module
 from comix_dl.core.config import AppConfig, BrowserConfig, DownloadConfig
-from comix_dl.core.engines.browser_session import (
-    BrowserSessionManager,
-    _find_free_port,
-    _is_port_in_use,
-)
+from comix_dl.core.engines.browser_session import BrowserSessionManager
 from comix_dl.core.engines.cdp_browser import CdpBrowser
+from comix_dl.core.engines.chrome_process import _find_free_port, _is_port_in_use
 from comix_dl.core.errors import CloudflareChallengeError, ConfigurationError
 
 
@@ -369,6 +365,8 @@ class TestBrowserTimeouts:
         assert manager._chrome_process is None
 
     def test_cleanup_stale_profile_chrome_terminates_matching_process(self, tmp_path, monkeypatch):
+        from comix_dl.core.engines import chrome_process
+
         pid_file = tmp_path / "chrome.pid"
         pid_file.write_text("4242\n", encoding="utf-8")
         user_data_dir = tmp_path / "chrome-profile"
@@ -386,11 +384,13 @@ class TestBrowserTimeouts:
                 return
             raise AssertionError(f"unexpected signal {sig}")
 
-        monkeypatch.setattr(browser_session_module.os, "kill", fake_kill)
-        monkeypatch.setattr(browser_session_module.time, "sleep", lambda _seconds: None)
-        monkeypatch.setattr(browser_session_module, "_pid_matches_profile_chrome", lambda pid, path: True)
+        # Patch the chrome_process module — _cleanup_stale_profile_chrome
+        # and the helpers it calls all live there now.
+        monkeypatch.setattr(chrome_process.os, "kill", fake_kill)
+        monkeypatch.setattr(chrome_process.time, "sleep", lambda _seconds: None)
+        monkeypatch.setattr(chrome_process, "_pid_matches_profile_chrome", lambda pid, path: True)
 
-        browser_session_module._cleanup_stale_profile_chrome(pid_file, user_data_dir)
+        chrome_process._cleanup_stale_profile_chrome(pid_file, user_data_dir)
 
         assert not pid_file.exists()
 
