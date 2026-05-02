@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from comix_dl.application.download_reporting import build_download_report, format_download_counts
-from comix_dl.application.download_usecase import DownloadIssue, DownloadSummary
+from comix_dl.core.application.download_reporting import build_download_report, format_download_counts
+from comix_dl.core.application.download_usecase import DownloadIssue, DownloadSummary
 
 
 def test_format_download_counts_uses_stable_order() -> None:

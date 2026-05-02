@@ -1,4 +1,4 @@
-"""Tests for comix_dl.comix_service — data parsing, dedup, and API response handling."""
+"""Tests for comix_dl.core.comix_service — data parsing, dedup, and API response handling."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from comix_dl.comix_service import ChapterImages, ChapterInfo, ComixService, SearchResult, SeriesInfo
-from comix_dl.errors import BrowserTimeoutError, Http403Error, RemoteApiError
+from comix_dl.core.comix_service import ChapterImages, ChapterInfo, ComixService, SearchResult, SeriesInfo
+from comix_dl.core.errors import BrowserTimeoutError, Http403Error, RemoteApiError
 
 if TYPE_CHECKING:
     from unittest.mock import AsyncMock

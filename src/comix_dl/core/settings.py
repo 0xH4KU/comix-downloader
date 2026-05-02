@@ -8,8 +8,8 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, ClassVar
 
-from comix_dl.config import AppConfig
-from comix_dl.fileio import atomic_write_text
+from comix_dl.core.config import AppConfig
+from comix_dl.core.fileio import atomic_write_text
 
 logger = logging.getLogger(__name__)
 

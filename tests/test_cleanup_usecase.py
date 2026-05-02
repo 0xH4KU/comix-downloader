@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from comix_dl.application.cleanup_usecase import apply_cleanup_plan, build_cleanup_plan, list_downloaded_series
+from comix_dl.core.application.cleanup_usecase import apply_cleanup_plan, build_cleanup_plan, list_downloaded_series
 
 if TYPE_CHECKING:
     from pathlib import Path

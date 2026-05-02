@@ -14,8 +14,8 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
-from comix_dl.config import AppConfig, resolve_config
-from comix_dl.errors import (
+from comix_dl.core.config import AppConfig, resolve_config
+from comix_dl.core.errors import (
     BrowserTimeoutError,
     ConfigurationError,
     PagePoolUnavailableError,

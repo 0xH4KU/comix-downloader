@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from comix_dl.history import (
+from comix_dl.core.history import (
     MAX_ENTRIES,
     HistoryEntry,
     HistoryRepository,
@@ -21,8 +21,8 @@ from comix_dl.history import (
 def _history_in_tmp(tmp_path):
     """Redirect history storage to a temp directory for each test."""
     with (
-        patch("comix_dl.history._HISTORY_DIR", tmp_path),
-        patch("comix_dl.history._HISTORY_FILE", tmp_path / "history.json"),
+        patch("comix_dl.core.history._HISTORY_DIR", tmp_path),
+        patch("comix_dl.core.history._HISTORY_FILE", tmp_path / "history.json"),
     ):
         yield
 

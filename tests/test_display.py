@@ -1,9 +1,9 @@
-"""Tests for comix_dl.cli.display helpers."""
+"""Tests for comix_dl.core.cli.display helpers."""
 
 from __future__ import annotations
 
-from comix_dl.cli.display import console, print_dedup_report
-from comix_dl.comix_service import DedupDecision
+from comix_dl.core.cli.display import console, print_dedup_report
+from comix_dl.core.comix_service import DedupDecision
 
 
 class TestDedupDisplay:

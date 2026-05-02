@@ -9,8 +9,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from comix_dl.config import AppConfig, resolve_config
-from comix_dl.errors import ConversionError
+from comix_dl.core.config import AppConfig, resolve_config
+from comix_dl.core.errors import ConversionError
 
 logger = logging.getLogger(__name__)
 

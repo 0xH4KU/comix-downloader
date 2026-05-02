@@ -1,4 +1,4 @@
-"""Tests for comix_dl.cli — argument parsing and chapter selection."""
+"""Tests for comix_dl.core.cli — argument parsing and chapter selection."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from comix_dl import cli as cli_module
-from comix_dl.cli import _build_parser, _parse_chapter_selection
-from comix_dl.comix_service import ChapterInfo
-from comix_dl.settings import Settings
+from comix_dl.core import cli as cli_module
+from comix_dl.core.cli import _build_parser, _parse_chapter_selection
+from comix_dl.core.comix_service import ChapterInfo
+from comix_dl.core.settings import Settings
 
 # ---------------------------------------------------------------------------
 # Helpers

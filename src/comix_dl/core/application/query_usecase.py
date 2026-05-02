@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from comix_dl.errors import RemoteApiError
+from comix_dl.core.errors import RemoteApiError
 
 if TYPE_CHECKING:
-    from comix_dl.comix_service import ComixService, SearchResult, SeriesInfo
+    from comix_dl.core.comix_service import ComixService, SearchResult, SeriesInfo
 
 
 @dataclass

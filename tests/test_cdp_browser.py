@@ -1,4 +1,4 @@
-"""Tests for comix_dl.cdp_browser utilities and timeout wiring."""
+"""Tests for comix_dl.core.engines.cdp_browser utilities and timeout wiring."""
 
 from __future__ import annotations
 
@@ -11,16 +11,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import comix_dl.browser_session as browser_session_module
-from comix_dl.browser_session import (
+import comix_dl.core.engines.browser_session as browser_session_module
+from comix_dl.core.config import AppConfig, BrowserConfig, DownloadConfig
+from comix_dl.core.engines.browser_session import (
     BrowserSessionManager,
     _atexit_kill_chrome,
     _find_free_port,
     _is_port_in_use,
 )
-from comix_dl.cdp_browser import CdpBrowser
-from comix_dl.config import AppConfig, BrowserConfig, DownloadConfig
-from comix_dl.errors import CloudflareChallengeError, ConfigurationError
+from comix_dl.core.engines.cdp_browser import CdpBrowser
+from comix_dl.core.errors import CloudflareChallengeError, ConfigurationError
 
 
 def _make_config(
@@ -119,7 +119,7 @@ class TestBrowserTimeouts:
             assert endpoint == "http://127.0.0.1:9444"
             return {"ok": True}
 
-        monkeypatch.setattr("comix_dl.browser_session.asyncio.wait_for", fake_wait_for)
+        monkeypatch.setattr("comix_dl.core.engines.browser_session.asyncio.wait_for", fake_wait_for)
         browser._playwright = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=connect))
 
         result = await browser._connect_over_cdp_with_timeout()
@@ -187,9 +187,9 @@ class TestBrowserTimeouts:
         def fail_connect(*_args: object, **_kwargs: object) -> None:
             raise ConnectionRefusedError()
 
-        monkeypatch.setattr("comix_dl.browser_session.time.monotonic", clock.monotonic)
-        monkeypatch.setattr("comix_dl.browser_session.time.sleep", clock.sleep)
-        monkeypatch.setattr("comix_dl.browser_session.socket.create_connection", fail_connect)
+        monkeypatch.setattr("comix_dl.core.engines.browser_session.time.monotonic", clock.monotonic)
+        monkeypatch.setattr("comix_dl.core.engines.browser_session.time.sleep", clock.sleep)
+        monkeypatch.setattr("comix_dl.core.engines.browser_session.socket.create_connection", fail_connect)
 
         with pytest.raises(
             RuntimeError,
@@ -712,8 +712,8 @@ class TestBrowserHelpers:
 
         clock = _Clock()
 
-        monkeypatch.setattr("comix_dl.cdp_browser.time.monotonic", clock.monotonic)
-        monkeypatch.setattr("comix_dl.cdp_browser.asyncio.sleep", AsyncMock(side_effect=clock.sleep))
+        monkeypatch.setattr("comix_dl.core.engines.cdp_browser.time.monotonic", clock.monotonic)
+        monkeypatch.setattr("comix_dl.core.engines.cdp_browser.asyncio.sleep", AsyncMock(side_effect=clock.sleep))
 
         await browser._wait_for_cf_clearance(page)
 
@@ -742,8 +742,8 @@ class TestBrowserHelpers:
 
         clock = _Clock()
 
-        monkeypatch.setattr("comix_dl.cdp_browser.time.monotonic", clock.monotonic)
-        monkeypatch.setattr("comix_dl.cdp_browser.asyncio.sleep", AsyncMock(side_effect=clock.sleep))
+        monkeypatch.setattr("comix_dl.core.engines.cdp_browser.time.monotonic", clock.monotonic)
+        monkeypatch.setattr("comix_dl.core.engines.cdp_browser.asyncio.sleep", AsyncMock(side_effect=clock.sleep))
 
         await browser._wait_for_cf_clearance(page)
 

@@ -11,12 +11,12 @@ from rich.panel import Panel
 from rich.prompt import IntPrompt, Prompt
 from rich.table import Table
 
-from comix_dl.application.download_reporting import format_download_counts
-from comix_dl.cli.display import console, format_bytes, print_chapters_table
-from comix_dl.settings import SettingsRepository
+from comix_dl.core.application.download_reporting import format_download_counts
+from comix_dl.core.cli.display import console, format_bytes, print_chapters_table
+from comix_dl.core.settings import SettingsRepository
 
 if TYPE_CHECKING:
-    from comix_dl.comix_service import ChapterInfo
+    from comix_dl.core.comix_service import ChapterInfo
 
 
 def flow_settings() -> None:
@@ -108,7 +108,7 @@ def flow_settings() -> None:
 
 def flow_history(*, action: str | None = None) -> int:
     """Show or clear download history."""
-    from comix_dl.history import HistoryRepository
+    from comix_dl.core.history import HistoryRepository
 
     repository = HistoryRepository()
 

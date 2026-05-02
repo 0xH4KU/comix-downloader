@@ -10,20 +10,20 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from comix_dl.application.download_reporting import build_download_report
-from comix_dl.converters import convert_async
-from comix_dl.downloader import Downloader, DownloadProgress, ensure_complete_download
-from comix_dl.errors import ConversionError, PartialDownloadError
-from comix_dl.history import HistoryRepository
-from comix_dl.logging_utils import log_context
-from comix_dl.notify import send_notification
+from comix_dl.core.application.download_reporting import build_download_report
+from comix_dl.core.converters import convert_async
+from comix_dl.core.downloader import Downloader, DownloadProgress, ensure_complete_download
+from comix_dl.core.errors import ConversionError, PartialDownloadError
+from comix_dl.core.history import HistoryRepository
+from comix_dl.core.logging_utils import log_context
+from comix_dl.core.notify import send_notification
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from comix_dl.cdp_browser import CdpBrowser
-    from comix_dl.comix_service import ChapterInfo, ComixService
-    from comix_dl.config import AppConfig
+    from comix_dl.core.comix_service import ChapterInfo, ComixService
+    from comix_dl.core.config import AppConfig
+    from comix_dl.core.engines.cdp_browser import CdpBrowser
 
 
 logger = logging.getLogger(__name__)

@@ -1,4 +1,4 @@
-"""Tests for comix_dl.config — default configuration values."""
+"""Tests for comix_dl.core.config — default configuration values."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-import comix_dl.config as config_module
-from comix_dl.config import AppConfig, BrowserConfig, ConvertConfig, DownloadConfig, ServiceConfig
+import comix_dl.core.config as config_module
+from comix_dl.core.config import AppConfig, BrowserConfig, ConvertConfig, DownloadConfig, ServiceConfig
 
 
 class TestBrowserConfig:

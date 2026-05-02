@@ -7,23 +7,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from comix_dl.application.download_usecase import (
+from comix_dl.core.application.download_usecase import (
     DownloadEventHandler,
     DownloadSummary,
     ShutdownCheck,
     download_chapters,
 )
-from comix_dl.application.query_usecase import load_series, resolve_series_from_input, search_series
-from comix_dl.cdp_browser import CdpBrowser
-from comix_dl.comix_service import ComixService
-from comix_dl.settings import Settings, SettingsRepository, build_runtime_config
+from comix_dl.core.application.query_usecase import load_series, resolve_series_from_input, search_series
+from comix_dl.core.comix_service import ComixService
+from comix_dl.core.engines.cdp_browser import CdpBrowser
+from comix_dl.core.settings import Settings, SettingsRepository, build_runtime_config
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from comix_dl.application.query_usecase import SeriesLookupResult
-    from comix_dl.comix_service import ChapterInfo, SearchResult, SeriesInfo
-    from comix_dl.config import AppConfig
+    from comix_dl.core.application.query_usecase import SeriesLookupResult
+    from comix_dl.core.comix_service import ChapterInfo, SearchResult, SeriesInfo
+    from comix_dl.core.config import AppConfig
 
 
 @dataclass(frozen=True)

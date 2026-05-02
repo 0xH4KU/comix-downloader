@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from comix_dl.application.query_usecase import extract_slug, load_series, resolve_series_from_input, search_series
-from comix_dl.comix_service import SearchResult, SeriesInfo
-from comix_dl.errors import RemoteApiError
+from comix_dl.core.application.query_usecase import extract_slug, load_series, resolve_series_from_input, search_series
+from comix_dl.core.comix_service import SearchResult, SeriesInfo
+from comix_dl.core.errors import RemoteApiError
 
 
 def _series(title: str = "Test Series") -> SeriesInfo:

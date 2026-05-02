@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from comix_dl.cli import main
+from comix_dl.core.cli import main
 
 raise SystemExit(main())

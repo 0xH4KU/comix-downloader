@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING
 import pytest
 
 from comix_dl import sites
-from comix_dl.errors import ConfigurationError
+from comix_dl.core.errors import ConfigurationError
 from comix_dl.sites.base import SiteAdapter
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-    from comix_dl.comix_service import (
+    from comix_dl.core.comix_service import (
         ChapterImages,
         ChapterInfo,
         DedupDecision,

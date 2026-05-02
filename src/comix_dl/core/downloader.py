@@ -13,20 +13,20 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from comix_dl.config import AppConfig, resolve_config
-from comix_dl.errors import (
+from comix_dl.core.config import AppConfig, resolve_config
+from comix_dl.core.errors import (
     BrowserTimeoutError,
     Http403Error,
     PagePoolUnavailableError,
     PartialDownloadError,
 )
-from comix_dl.fileio import atomic_write_bytes, atomic_write_text
-from comix_dl.logging_utils import log_context
+from comix_dl.core.fileio import atomic_write_bytes, atomic_write_text
+from comix_dl.core.logging_utils import log_context
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from comix_dl.cdp_browser import CdpBrowser
+    from comix_dl.core.engines.cdp_browser import CdpBrowser
 
 logger = logging.getLogger(__name__)
 

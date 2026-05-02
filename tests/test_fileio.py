@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from comix_dl.fileio import atomic_write_bytes, atomic_write_text
+from comix_dl.core.fileio import atomic_write_bytes, atomic_write_text
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from comix_dl.errors import ConfigurationError
+from comix_dl.core.errors import ConfigurationError
 
 if TYPE_CHECKING:
     from comix_dl.sites.base import SiteAdapter

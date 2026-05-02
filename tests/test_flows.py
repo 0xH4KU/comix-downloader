@@ -9,20 +9,20 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from comix_dl.application.cleanup_usecase import (
+from comix_dl.core.application.cleanup_usecase import (
     CleanupCandidate,
     CleanupPlan,
     CleanupResult,
     DownloadedSeries,
 )
-from comix_dl.application.download_usecase import DownloadChapterEvent, DownloadIssue, DownloadSummary
-from comix_dl.application.query_usecase import SeriesLookupResult
-from comix_dl.application.session import RuntimeContext
-from comix_dl.cli import flows
-from comix_dl.comix_service import ChapterInfo, SearchResult, SeriesInfo
-from comix_dl.config import AppConfig
-from comix_dl.errors import RemoteApiError
-from comix_dl.settings import Settings
+from comix_dl.core.application.download_usecase import DownloadChapterEvent, DownloadIssue, DownloadSummary
+from comix_dl.core.application.query_usecase import SeriesLookupResult
+from comix_dl.core.application.session import RuntimeContext
+from comix_dl.core.cli import flows
+from comix_dl.core.comix_service import ChapterInfo, SearchResult, SeriesInfo
+from comix_dl.core.config import AppConfig
+from comix_dl.core.errors import RemoteApiError
+from comix_dl.core.settings import Settings
 
 
 class _SessionContext:

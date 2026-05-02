@@ -16,10 +16,10 @@ from rich.progress import (
 )
 from rich.prompt import Prompt
 
-from comix_dl.application.cleanup_usecase import apply_cleanup_plan, build_cleanup_plan, list_downloaded_series
-from comix_dl.application.download_reporting import build_download_report
-from comix_dl.application.session import ApplicationSession, load_runtime, open_application_session
-from comix_dl.cli.display import (
+from comix_dl.core.application.cleanup_usecase import apply_cleanup_plan, build_cleanup_plan, list_downloaded_series
+from comix_dl.core.application.download_reporting import build_download_report
+from comix_dl.core.application.session import ApplicationSession, load_runtime, open_application_session
+from comix_dl.core.cli.display import (
     console,
     format_bytes,
     print_chapters_table,
@@ -27,21 +27,21 @@ from comix_dl.cli.display import (
     print_search_table,
     print_series_header,
 )
-from comix_dl.cli.interactive import filter_chapters_interactive, parse_chapter_selection
-from comix_dl.errors import RemoteApiError
+from comix_dl.core.cli.interactive import filter_chapters_interactive, parse_chapter_selection
+from comix_dl.core.errors import RemoteApiError
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from comix_dl.application.download_usecase import DownloadChapterEvent, DownloadSummary
-    from comix_dl.comix_service import ChapterInfo, SearchResult, SeriesInfo
-    from comix_dl.config import AppConfig
-    from comix_dl.settings import Settings
+    from comix_dl.core.application.download_usecase import DownloadChapterEvent, DownloadSummary
+    from comix_dl.core.comix_service import ChapterInfo, SearchResult, SeriesInfo
+    from comix_dl.core.config import AppConfig
+    from comix_dl.core.settings import Settings
 
 
 def _is_shutdown() -> bool:
     """Check the module-level shutdown flag."""
-    from comix_dl.cli import _shutdown_event
+    from comix_dl.core.cli import _shutdown_event
 
     return _shutdown_event.is_set()
 

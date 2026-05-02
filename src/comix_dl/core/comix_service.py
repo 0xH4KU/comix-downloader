@@ -18,11 +18,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
-from comix_dl.config import AppConfig, resolve_config
-from comix_dl.errors import BrowserTimeoutError, Http403Error, RemoteApiError
+from comix_dl.core.config import AppConfig, resolve_config
+from comix_dl.core.errors import BrowserTimeoutError, Http403Error, RemoteApiError
 
 if TYPE_CHECKING:
-    from comix_dl.cdp_browser import CdpBrowser
+    from comix_dl.core.engines.cdp_browser import CdpBrowser
 
 logger = logging.getLogger(__name__)
 

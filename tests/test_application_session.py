@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from comix_dl.application import session as app_session
-from comix_dl.settings import Settings
+from comix_dl.core.application import session as app_session
+from comix_dl.core.settings import Settings
 
 if TYPE_CHECKING:
-    from comix_dl.config import AppConfig
+    from comix_dl.core.config import AppConfig
 
 
 def test_load_runtime_uses_explicit_output_override() -> None:

@@ -1,4 +1,4 @@
-"""Tests for comix_dl.downloader — sanitization, extension guessing, resume, and download logic."""
+"""Tests for comix_dl.core.downloader — sanitization, extension guessing, resume, and download logic."""
 
 from __future__ import annotations
 
@@ -8,15 +8,15 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from comix_dl.config import AppConfig
-from comix_dl.downloader import (
+from comix_dl.core.config import AppConfig
+from comix_dl.core.downloader import (
     ChapterDownloadResult,
     Downloader,
     DownloadProgress,
     ensure_complete_download,
     sanitize_dirname,
 )
-from comix_dl.errors import BrowserTimeoutError, PagePoolUnavailableError, PartialDownloadError
+from comix_dl.core.errors import BrowserTimeoutError, PagePoolUnavailableError, PartialDownloadError
 
 if TYPE_CHECKING:
     from pathlib import Path

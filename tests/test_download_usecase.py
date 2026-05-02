@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from comix_dl.application import download_usecase
-from comix_dl.comix_service import ChapterImages, ChapterInfo
-from comix_dl.config import AppConfig
-from comix_dl.downloader import ChapterDownloadResult, DownloadProgress
+from comix_dl.core.application import download_usecase
+from comix_dl.core.comix_service import ChapterImages, ChapterInfo
+from comix_dl.core.config import AppConfig
+from comix_dl.core.downloader import ChapterDownloadResult, DownloadProgress
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -91,7 +91,7 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
         image_urls=["https://img/1", "https://img/2"],
     )
 
-    with caplog.at_level(logging.INFO, logger="comix_dl.application.download_usecase"):
+    with caplog.at_level(logging.INFO, logger="comix_dl.core.application.download_usecase"):
         summary = await download_usecase.download_chapters(
             browser=object(),
             service=service,

@@ -31,8 +31,8 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from comix_dl import __version__
-from comix_dl.cli.display import console
-from comix_dl.cli.flows import (
+from comix_dl.core.cli.display import console
+from comix_dl.core.cli.flows import (
     flow_clean,
     flow_info,
     flow_list,
@@ -40,9 +40,9 @@ from comix_dl.cli.flows import (
     flow_search,
     flow_url_download,
 )
-from comix_dl.cli.interactive import flow_history, flow_settings, parse_chapter_selection, run_doctor
-from comix_dl.logging_utils import configure_logging
-from comix_dl.settings import SettingsRepository
+from comix_dl.core.cli.interactive import flow_history, flow_settings, parse_chapter_selection, run_doctor
+from comix_dl.core.logging_utils import configure_logging
+from comix_dl.core.settings import SettingsRepository
 
 _shutdown_event = threading.Event()
 
@@ -288,5 +288,5 @@ def _main_menu() -> int:
 
 
 # -- Backward-compatible re-exports for tests ---------------------------------
-# Tests import _build_parser and _parse_chapter_selection from comix_dl.cli
+# Tests import _build_parser and _parse_chapter_selection from comix_dl.core.cli
 _parse_chapter_selection = parse_chapter_selection

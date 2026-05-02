@@ -16,10 +16,10 @@ import logging
 import time
 from typing import TYPE_CHECKING, cast
 
-from comix_dl.browser_session import (
+from comix_dl.core.engines.browser_session import (
     BrowserSessionManager,
 )
-from comix_dl.errors import (
+from comix_dl.core.errors import (
     BrowserTimeoutError,
     CloudflareChallengeError,
     ComixError,
@@ -30,7 +30,7 @@ from comix_dl.errors import (
 if TYPE_CHECKING:
     from playwright.async_api import Page
 
-    from comix_dl.config import AppConfig
+    from comix_dl.core.config import AppConfig
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ def _translate_browser_error(exc: Exception) -> Exception:
     Playwright and other low-level layers raise generic ``RuntimeError``
     or ``Exception`` instances whose meaning is encoded in the message
     string. This function inspects the message once at the browser
-    boundary and re-emits a typed :mod:`comix_dl.errors` subclass so that
+    boundary and re-emits a typed :mod:`comix_dl.core.errors` subclass so that
     upstream callers can rely on ``isinstance`` checks instead of fragile
     string matching.
 

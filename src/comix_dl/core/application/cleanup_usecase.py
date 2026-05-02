@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from comix_dl.downloader import sanitize_dirname
+from comix_dl.core.downloader import sanitize_dirname
 
 if TYPE_CHECKING:
     from pathlib import Path
