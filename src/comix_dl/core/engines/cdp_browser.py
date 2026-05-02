@@ -5,6 +5,28 @@ launched by us (not Playwright), there are no ``--enable-automation`` flags
 and no "Chrome is being controlled by automated test software" banner.
 
 This prevents Cloudflare from detecting automation.
+
+Site-specific hooks
+-------------------
+
+Although the public surface (``get_json`` / ``get_bytes`` / ``post_json``
+/ ``fetch_page``) is intentionally site-agnostic, two extension points
+let a :class:`~comix_dl.sites.base.SiteAdapter` inject behaviour:
+
+* :meth:`CdpBrowser.register_url_transformer` accepts a JS IIFE that
+  pushes a function onto ``window.__comixUrlTransformers``. The fetch
+  helpers run that array in registration order on every outbound
+  request, allowing adapters to add request signing, auth headers,
+  etc. The IIFE is replayed against every page in the pool — main
+  page, every existing pooled page, and every lazily-created page.
+* :meth:`CdpBrowser.register_on_engine_ready` accepts a coroutine to
+  run exactly once after Cloudflare clearance has been confirmed and
+  before any caller-visible request runs. Adapters use it to install
+  signing functions, prime cookies, etc.
+
+Both registries are populated outside this module — typically by the
+application session bootstrap calling
+``adapter.on_engine_ready(engine)`` after wiring the engine up.
 """
 
 from __future__ import annotations
@@ -14,6 +36,7 @@ import base64
 import contextlib
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, cast
 
 from comix_dl.core.engines.browser_session import (
@@ -43,9 +66,33 @@ _CF_CONTENT_MARKERS = (
     "verify you are human",
 )
 
+# A coroutine invoked once after the engine completes Cloudflare
+# clearance. The engine passes itself in so the hook can run setup
+# work (install signing, prime caches, etc.) using the public engine
+# API.
+OnEngineReadyHook = Callable[["CdpBrowser"], Awaitable[None]]
+
+# JS snippet appended to the start of every outbound fetch helper.
+# It runs registered URL transformers in order. Errors in any single
+# transformer are swallowed so a misbehaving adapter does not break
+# unrelated requests.
+_URL_TRANSFORMER_JS_PRELUDE = """
+    if (Array.isArray(window.__comixUrlTransformers)) {
+        for (const t of window.__comixUrlTransformers) {
+            try {
+                const transformed = t(__comixMethod, url);
+                if (typeof transformed === 'string' && transformed) {
+                    url = transformed;
+                }
+            } catch (e) { /* per-transformer errors do not block the fetch */ }
+        }
+    }
+"""
+
 __all__ = [
     "BrowserSessionManager",
     "CdpBrowser",
+    "OnEngineReadyHook",
 ]
 
 
@@ -84,6 +131,9 @@ class CdpBrowser(BrowserSessionManager):
         self._cf_lock = asyncio.Lock()
         self._main_page_lock = asyncio.Lock()
         self._signing_installed = False
+        self._url_transformer_iifes: list[str] = []
+        self._on_ready_hooks: list[OnEngineReadyHook] = []
+        self._on_ready_hooks_done = False
 
     async def close(self) -> None:
         try:
@@ -91,6 +141,7 @@ class CdpBrowser(BrowserSessionManager):
         finally:
             self._cf_cleared = False
             self._signing_installed = False
+            self._on_ready_hooks_done = False
 
     async def __aenter__(self) -> CdpBrowser:
         await self.start()
@@ -98,6 +149,60 @@ class CdpBrowser(BrowserSessionManager):
 
     async def __aexit__(self, *_: object) -> None:
         await self.close()
+
+    # -- Site-specific hook registration ---------------------------------
+
+    def register_url_transformer(self, iife_js: str) -> None:
+        """Register a JS IIFE that adds a URL transformer to every page.
+
+        ``iife_js`` must be a self-contained immediately-invoked function
+        expression. When evaluated on a page it should push a callable
+        onto ``window.__comixUrlTransformers``; the callable receives
+        ``(method, url)`` and returns either a (possibly modified) URL
+        string or ``undefined`` to leave the URL unchanged.
+
+        Registered transformers are replayed against the main page and
+        every pooled page as they are created. Existing pages get the
+        transformer asynchronously the next time they receive any
+        engine-driven JS evaluation; in practice this is fine because
+        adapters register transformers from inside the
+        :meth:`register_on_engine_ready` hook, which fires before the
+        first content request.
+        """
+        self._url_transformer_iifes.append(iife_js)
+
+    def register_on_engine_ready(self, hook: OnEngineReadyHook) -> None:
+        """Register a coroutine to run once after CF clearance succeeds.
+
+        Hooks fire after the engine has completed Cloudflare clearance
+        and warmed the page pool, but before any caller-visible request
+        proceeds. Each hook receives this engine instance and runs to
+        completion in registration order; an exception aborts the chain
+        and propagates to the original ``ensure_cf_clearance`` caller.
+        """
+        self._on_ready_hooks.append(hook)
+
+    async def _install_url_transformers_on_page(self, page: Page) -> None:
+        """Replay every registered URL transformer IIFE on *page*."""
+        for iife in self._url_transformer_iifes:
+            try:
+                await self._evaluate_with_timeout(
+                    page,
+                    iife,
+                    None,
+                    timeout_ms=self._config.browser.timeout_ms,
+                    action="Installing URL transformer",
+                )
+            except Exception as exc:
+                logger.warning("Failed to install a URL transformer on page: %s", exc)
+
+    async def _run_on_engine_ready_hooks(self) -> None:
+        """Invoke registered on-engine-ready hooks once."""
+        if self._on_ready_hooks_done:
+            return
+        self._on_ready_hooks_done = True
+        for hook in self._on_ready_hooks:
+            await hook(self)
 
     def _is_cf_access_error(self, exc: Exception) -> bool:
         """Return whether an exception indicates expired Cloudflare clearance.
@@ -282,6 +387,12 @@ class CdpBrowser(BrowserSessionManager):
             logger.info("CF clearance confirmed")
             await self._install_api_signing(page)
             await self._init_pool_pages(url)
+            # F-4: adapter on-engine-ready hooks fire after CF clearance
+            # and pool warm-up. Hooks may call register_url_transformer
+            # to inject site-specific request rewriting; we replay every
+            # registered transformer across all known pages right after.
+            await self._run_on_engine_ready_hooks()
+            await self._install_url_transformers_on_all_pages()
 
     async def fetch_page(self, url: str) -> str:
         """Navigate to *url* and return HTML."""
@@ -319,6 +430,8 @@ class CdpBrowser(BrowserSessionManager):
         result = await self._evaluate_request_with_cf_retry(
             url=url,
             expression="""async ([url, headers]) => {
+                const __comixMethod = 'GET';
+""" + _URL_TRANSFORMER_JS_PRELUDE + """
                 const resp = await fetch(url, { headers: headers || {} });
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
                 const buf = await resp.arrayBuffer();
@@ -341,6 +454,8 @@ class CdpBrowser(BrowserSessionManager):
         result = await self._evaluate_request_with_cf_retry(
             url=url,
             expression="""async ([url, body]) => {
+                const __comixMethod = 'POST';
+""" + _URL_TRANSFORMER_JS_PRELUDE + """
                 const resp = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -358,12 +473,20 @@ class CdpBrowser(BrowserSessionManager):
     async def get_json(self, url: str, *, use_page_pool: bool = True) -> dict[str, object]:
         """GET JSON via page.evaluate(fetch()).
 
-        Applies API request signing automatically for endpoints that
-        require it (e.g. ``/manga/*/chapters``).
+        Outbound requests run through the registered URL transformer
+        chain (see :meth:`register_url_transformer`) before the actual
+        fetch. The legacy comix.to ``/chapters`` signing block remains
+        in place until F-3 relocates it to a SiteAdapter-registered
+        transformer, at which point it can be deleted.
         """
         result = await self._evaluate_request_with_cf_retry(
             url=url,
             expression="""async (url) => {
+                const __comixMethod = 'GET';
+""" + _URL_TRANSFORMER_JS_PRELUDE + """
+                // Legacy comix.to /chapters signing. F-3 moves this into a
+                // SiteAdapter URL transformer; until then it stays here so
+                // wave-1 keeps the current request signing behaviour.
                 if (url.includes('/chapters') && typeof window.__comixSign === 'function') {
                     const u = new URL(url);
                     const path = u.pathname.replace(new RegExp("^/api/v2"), '');
@@ -489,6 +612,8 @@ class CdpBrowser(BrowserSessionManager):
         page = await super()._create_pooled_page(action=action, navigate_to_base=navigate_to_base)
         if navigate_to_base and self._signing_installed:
             await self._install_signing_on_page(page)
+        if navigate_to_base and self._url_transformer_iifes:
+            await self._install_url_transformers_on_page(page)
         return page
 
     async def _init_pool_pages(self, url: str) -> None:
@@ -506,6 +631,36 @@ class CdpBrowser(BrowserSessionManager):
 
         if pages:
             await asyncio.gather(*[self._install_signing_on_page(p) for p in pages])
+            for page in pages:
+                self._page_pool.put_nowait(page)
+
+    async def _install_url_transformers_on_all_pages(self) -> None:
+        """Replay every registered URL transformer on the main page and the pool.
+
+        Called once per session, right after the on-engine-ready hooks
+        run. Hooks may register transformers; this helper makes sure
+        the registrations are reflected on every page that already
+        exists when the hooks finish. Pages created later go through
+        :meth:`_create_pooled_page`, which installs transformers
+        directly.
+        """
+        if not self._url_transformer_iifes:
+            return
+
+        if self._page is not None:
+            await self._install_url_transformers_on_page(self._page)
+
+        pages: list[Page] = []
+        while not self._page_pool.empty():
+            try:
+                pages.append(self._page_pool.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+
+        if pages:
+            await asyncio.gather(
+                *[self._install_url_transformers_on_page(p) for p in pages],
+            )
             for page in pages:
                 self._page_pool.put_nowait(page)
 

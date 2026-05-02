@@ -769,3 +769,147 @@ class TestBrowserHelpers:
 
         assert "without a cf_clearance cookie" in caplog.text
         browser._init_pool_pages.assert_awaited_once_with(browser._config.service.base_url)
+
+
+class TestExtensionHooks:
+    """F-4: register_url_transformer / register_on_engine_ready wiring."""
+
+    def test_register_url_transformer_appends_iife(self) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        assert browser._url_transformer_iifes == []
+
+        browser.register_url_transformer("(function() {})()")
+        browser.register_url_transformer("(function() { other; })()")
+
+        assert browser._url_transformer_iifes == [
+            "(function() {})()",
+            "(function() { other; })()",
+        ]
+
+    def test_register_on_engine_ready_appends_hook(self) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        assert browser._on_ready_hooks == []
+
+        async def hook_a(_engine: CdpBrowser) -> None: ...
+        async def hook_b(_engine: CdpBrowser) -> None: ...
+
+        browser.register_on_engine_ready(hook_a)
+        browser.register_on_engine_ready(hook_b)
+
+        assert browser._on_ready_hooks == [hook_a, hook_b]
+
+    async def test_install_url_transformers_on_page_evaluates_each_iife(self) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        browser.register_url_transformer("(function() { a; })()")
+        browser.register_url_transformer("(function() { b; })()")
+        browser._evaluate_with_timeout = AsyncMock()
+
+        page = MagicMock()
+        await browser._install_url_transformers_on_page(page)
+
+        assert browser._evaluate_with_timeout.await_count == 2
+        first_iife = browser._evaluate_with_timeout.await_args_list[0].args[1]
+        second_iife = browser._evaluate_with_timeout.await_args_list[1].args[1]
+        assert first_iife == "(function() { a; })()"
+        assert second_iife == "(function() { b; })()"
+
+    async def test_install_url_transformers_logs_when_one_iife_fails(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        browser.register_url_transformer("ok-iife")
+        browser.register_url_transformer("bad-iife")
+        browser.register_url_transformer("ok-iife-2")
+
+        async def evaluate_side_effect(*args: object, **_kwargs: object) -> object:
+            if args[1] == "bad-iife":
+                raise RuntimeError("boom")
+            return None
+
+        browser._evaluate_with_timeout = AsyncMock(side_effect=evaluate_side_effect)
+        page = MagicMock()
+
+        with caplog.at_level("WARNING"):
+            await browser._install_url_transformers_on_page(page)
+
+        assert browser._evaluate_with_timeout.await_count == 3
+        assert "Failed to install a URL transformer" in caplog.text
+
+    async def test_run_on_engine_ready_hooks_runs_each_once(self) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        calls: list[str] = []
+
+        async def hook_a(_engine: CdpBrowser) -> None:
+            calls.append("a")
+
+        async def hook_b(_engine: CdpBrowser) -> None:
+            calls.append("b")
+
+        browser.register_on_engine_ready(hook_a)
+        browser.register_on_engine_ready(hook_b)
+
+        await browser._run_on_engine_ready_hooks()
+        assert calls == ["a", "b"]
+
+        # Calling again is a no-op so adapter setup never runs twice
+        # (even if ensure_cf_clearance is somehow re-entered).
+        await browser._run_on_engine_ready_hooks()
+        assert calls == ["a", "b"]
+
+    async def test_ensure_cf_clearance_runs_hooks_after_clearance(self) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        page = MagicMock()
+        browser._page = page
+        browser._ensure_page = AsyncMock(return_value=page)
+        browser._goto_with_timeout = AsyncMock()
+        browser._is_cf_challenge = AsyncMock(return_value=False)
+        browser._has_cf_clearance_cookie = AsyncMock(return_value=True)
+        browser._install_api_signing = AsyncMock()
+        browser._init_pool_pages = AsyncMock()
+        browser._install_url_transformers_on_all_pages = AsyncMock()
+
+        ran: list[str] = []
+
+        async def hook(_engine: CdpBrowser) -> None:
+            ran.append("hook")
+
+        browser.register_on_engine_ready(hook)
+
+        await browser.ensure_cf_clearance()
+
+        assert ran == ["hook"]
+        browser._install_url_transformers_on_all_pages.assert_awaited_once()
+
+    async def test_create_pooled_page_installs_transformers_when_registered(self) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        browser.register_url_transformer("(function() {})()")
+        browser._install_signing_on_page = AsyncMock()
+        browser._install_url_transformers_on_page = AsyncMock()
+
+        new_page = MagicMock()
+        with patch.object(
+            BrowserSessionManager,
+            "_create_pooled_page",
+            AsyncMock(return_value=new_page),
+        ):
+            page = await browser._create_pooled_page(action="creating", navigate_to_base=True)
+
+        assert page is new_page
+        browser._install_url_transformers_on_page.assert_awaited_once_with(new_page)
+
+    async def test_create_pooled_page_skips_transformer_install_when_no_navigation(self) -> None:
+        browser = CdpBrowser(config=AppConfig())
+        browser.register_url_transformer("(function() {})()")
+        browser._install_url_transformers_on_page = AsyncMock()
+
+        new_page = MagicMock()
+        with patch.object(
+            BrowserSessionManager,
+            "_create_pooled_page",
+            AsyncMock(return_value=new_page),
+        ):
+            await browser._create_pooled_page(action="creating", navigate_to_base=False)
+
+        browser._install_url_transformers_on_page.assert_not_awaited()

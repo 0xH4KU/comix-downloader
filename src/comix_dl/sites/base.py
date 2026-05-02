@@ -38,6 +38,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from comix_dl.core.comix_service import (
         ChapterImages,
         ChapterInfo,
@@ -45,6 +47,12 @@ if TYPE_CHECKING:
         SearchResult,
         SeriesInfo,
     )
+
+
+# Type alias for on-engine-ready hooks. Held as a string so the forward
+# reference to ``Engine`` resolves correctly when this module is
+# imported from contexts where ``Engine`` is not yet defined.
+OnEngineReadyHook = "Callable[[Engine], Awaitable[None]]"
 
 
 @runtime_checkable
@@ -93,6 +101,36 @@ class Engine(Protocol):
 
         Mainly useful for adapters that need to inspect or extract
         embedded JS / data attributes from the site itself.
+        """
+        ...
+
+    # -- Site-specific extension points ----------------------------------
+
+    def register_url_transformer(self, iife_js: str) -> None:
+        """Register a JS IIFE that injects a URL transformer.
+
+        ``iife_js`` is evaluated on every page (main + pool); when
+        evaluated it must push a callable onto
+        ``window.__comixUrlTransformers``. Each callable receives
+        ``(method, url)`` and returns either a (possibly modified)
+        URL string or ``undefined`` to leave the URL unchanged.
+
+        Adapters use this from inside
+        :meth:`SiteAdapter.on_engine_ready` to inject request signing
+        or auth header rewriting.
+        """
+        ...
+
+    def register_on_engine_ready(
+        self,
+        hook: Callable[[Engine], Awaitable[None]],
+    ) -> None:
+        """Register a coroutine to run once after engine bootstrap.
+
+        Hooks fire after the engine has cleared any required
+        challenges and warmed the page pool, but before any
+        adapter-level request runs. Each hook receives the engine and
+        runs to completion in registration order.
         """
         ...
 
@@ -209,5 +247,6 @@ class SiteAdapter(Protocol):
 
 __all__ = [
     "Engine",
+    "OnEngineReadyHook",
     "SiteAdapter",
 ]
