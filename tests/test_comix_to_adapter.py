@@ -78,7 +78,7 @@ def _adapter() -> ComixToAdapter:
 # ---------------------------------------------------------------------------
 
 class TestOnEngineReady:
-    async def test_registers_signing_transformer(self) -> None:
+    async def test_registers_frontend_api_client_hook(self) -> None:
         adapter = _adapter()
         registered: list[str] = []
 
@@ -90,12 +90,14 @@ class TestOnEngineReady:
 
         assert len(registered) == 1
         iife = registered[0]
-        # IIFE must include the signing-extraction logic and push a
-        # transformer onto the global array; both are required for
-        # /chapters requests to be signed.
-        assert "window.__comixSign" in iife
+        # IIFE must import the site's frontend module and expose the
+        # JSON request hook consumed by CdpBrowser so v1 signing and
+        # encrypted-response decoding stay delegated to the live client.
+        assert "window.__comixJsonRequest" in iife
+        assert "window.__comixGetApiClient" in iife
         assert "window.__comixUrlTransformers" in iife
-        assert "/chapters" in iife
+        assert "import(moduleUrl)" in iife
+        assert "/api/v1/" in iife
 
 
 # ---------------------------------------------------------------------------
@@ -105,15 +107,19 @@ class TestOnEngineReady:
 class TestUrlHandling:
     def test_matches_canonical_host(self) -> None:
         a = _adapter()
-        assert a.matches_url("https://comix.to/manga/x") is True
+        assert a.matches_url("https://comix.to/title/x") is True
         assert a.matches_url("https://www.comix.to/manga/x") is True
         assert a.matches_url("https://other.example/manga/x") is False
         assert a.matches_url("not a url") is False
 
     def test_parse_identifier_from_url(self) -> None:
         a = _adapter()
+        assert a.parse_identifier("https://comix.to/title/lzdj-omori") == "lzdj"
+        assert a.parse_identifier("https://comix.to/title/lzdj-omori/") == "lzdj"
+
+    def test_parse_identifier_preserves_legacy_manga_slug(self) -> None:
+        a = _adapter()
         assert a.parse_identifier("https://comix.to/manga/test-series") == "test-series"
-        assert a.parse_identifier("https://comix.to/manga/test-series/") == "test-series"
 
     def test_parse_identifier_from_bare_slug(self) -> None:
         a = _adapter()
@@ -136,8 +142,8 @@ class TestUrlHandling:
 class TestParseChapterItems:
     def test_basic_parsing(self) -> None:
         items = [
-            {"chapter_id": 100, "number": 1, "name": "Intro", "language": "en", "pages_count": 20},
-            {"chapter_id": 200, "number": 2, "name": "", "language": "en", "pages_count": 15},
+            {"id": 100, "number": 1, "name": "Intro", "language": "en", "pagesCount": 20},
+            {"id": 200, "number": 2, "name": "", "language": "en", "pagesCount": 15},
         ]
         result = ComixToAdapter._parse_chapter_items(items)
         assert len(result) == 2
@@ -156,14 +162,21 @@ class TestParseChapterItems:
         assert ComixToAdapter._parse_chapter_items(items) == []
 
     def test_missing_chapter_id_skipped(self) -> None:
-        items = [{"number": 1, "name": "test"}]  # no chapter_id → defaults to 0 → skipped
+        items = [{"number": 1, "name": "test"}]  # no id/chapter_id -> defaults to 0 -> skipped
         assert ComixToAdapter._parse_chapter_items(items) == []
 
     def test_non_int_pages_count(self) -> None:
-        items = [{"chapter_id": 1, "number": 1, "pages_count": "invalid"}]
+        items = [{"id": 1, "number": 1, "pagesCount": "invalid"}]
         result = ComixToAdapter._parse_chapter_items(items)
         assert len(result) == 1
         assert result[0].image_count == 0
+
+    def test_legacy_chapter_id_still_supported(self) -> None:
+        items = [{"chapter_id": 9, "number": 1, "pages_count": 3}]
+        result = ComixToAdapter._parse_chapter_items(items)
+        assert len(result) == 1
+        assert result[0].chapter_id == 9
+        assert result[0].image_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -276,17 +289,25 @@ class TestSearch:
         mock_browser.get_json.return_value = {
             "result": {
                 "items": [
-                    {"title": "One Piece", "slug": "one-piece", "hash_id": "abc123"},
-                    {"title": "Naruto", "slug": "naruto", "hash_id": "def456"},
+                    {
+                        "title": "OMORI",
+                        "hid": "lzdj",
+                        "url": "https://comix.to/title/lzdj-omori",
+                    },
+                    {
+                        "title": "Naruto",
+                        "hid": "def456",
+                        "url": "https://comix.to/title/def456-naruto",
+                    },
                 ],
             },
         }
         results = await _adapter().search(mock_browser, "test")
         assert len(results) == 2
-        assert results[0].title == "One Piece"
-        assert results[0].hash_id == "abc123"
-        assert results[0].slug == "one-piece"
-        assert "one-piece" in results[0].url
+        assert results[0].title == "OMORI"
+        assert results[0].hash_id == "lzdj"
+        assert results[0].slug == "omori"
+        assert results[0].url == "https://comix.to/title/lzdj-omori"
 
     async def test_empty_result(self, mock_browser: AsyncMock) -> None:
         mock_browser.get_json.return_value = {"result": {"items": []}}
@@ -298,13 +319,23 @@ class TestSearch:
             "result": {
                 "items": [
                     {"title": "No Hash", "slug": "no-hash"},
-                    {"title": "Has Hash", "slug": "has-hash", "hash_id": "abc"},
+                    {"title": "Has Hid", "hid": "abc", "url": "https://comix.to/title/abc-has-hid"},
                 ],
             },
         }
         results = await _adapter().search(mock_browser, "test")
         assert len(results) == 1
-        assert results[0].title == "Has Hash"
+        assert results[0].title == "Has Hid"
+
+    async def test_accepts_unwrapped_search_response(self, mock_browser: AsyncMock) -> None:
+        mock_browser.get_json.return_value = {
+            "items": [
+                {"title": "OMORI", "hid": "lzdj", "url": "https://comix.to/title/lzdj-omori"},
+            ],
+        }
+        results = await _adapter().search(mock_browser, "omori")
+        assert len(results) == 1
+        assert results[0].hash_id == "lzdj"
 
     async def test_api_error_raises_remote_api_error(self, mock_browser: AsyncMock) -> None:
         mock_browser.get_json.side_effect = Exception("Network error")
@@ -341,16 +372,20 @@ class TestGetChapterImages:
             "result": {
                 "number": 5,
                 "name": "The Beginning",
-                "images": [
-                    {"url": "https://cdn.example.com/img1.webp"},
-                    {"url": "https://cdn.example.com/img2.webp"},
-                    {"url": "https://cdn.example.com/img3.webp"},
-                ],
+                "pages": {
+                    "baseUrl": "https://cdn.example.com/chapter/",
+                    "items": [
+                        {"url": "img1.webp"},
+                        {"url": "img2.webp"},
+                        {"url": "img3.webp"},
+                    ],
+                },
             },
         }
         result = await _adapter().get_chapter_images(mock_browser, 12345)
         assert result is not None
         assert len(result.image_urls) == 3
+        assert result.image_urls[0] == "https://cdn.example.com/chapter/img1.webp"
         assert result.chapter_label == "Chapter 5 - The Beginning"
 
     async def test_normalizes_chapter_label_number(self, mock_browser: AsyncMock) -> None:
@@ -358,7 +393,7 @@ class TestGetChapterImages:
             "result": {
                 "number": 1.0,
                 "name": "",
-                "images": [{"url": "https://cdn.example.com/img1.webp"}],
+                "pages": {"baseUrl": "https://cdn.example.com/", "items": [{"url": "img1.webp"}]},
             },
         }
         result = await _adapter().get_chapter_images(mock_browser, 12345)
@@ -368,7 +403,7 @@ class TestGetChapterImages:
 
     async def test_empty_images_returns_none(self, mock_browser: AsyncMock) -> None:
         mock_browser.get_json.return_value = {
-            "result": {"number": 1, "name": "", "images": []},
+            "result": {"number": 1, "name": "", "pages": {"baseUrl": "https://cdn.example.com/", "items": []}},
         }
         result = await _adapter().get_chapter_images(mock_browser, 12345)
         assert result is None
@@ -378,7 +413,7 @@ class TestGetChapterImages:
             "result": {
                 "number": 1,
                 "name": "",
-                "images": [
+                "pages": [
                     {"url": "https://valid.com/img.webp"},
                     {"not_url": "missing"},
                     "not_a_dict",
@@ -389,6 +424,18 @@ class TestGetChapterImages:
         result = await _adapter().get_chapter_images(mock_browser, 12345)
         assert result is not None
         assert len(result.image_urls) == 1
+
+    async def test_legacy_images_still_supported(self, mock_browser: AsyncMock) -> None:
+        mock_browser.get_json.return_value = {
+            "result": {
+                "number": 1,
+                "name": "",
+                "images": [{"url": "https://cdn.example.com/img.webp"}],
+            },
+        }
+        result = await _adapter().get_chapter_images(mock_browser, 12345)
+        assert result is not None
+        assert result.image_urls == ["https://cdn.example.com/img.webp"]
 
     async def test_api_error_returns_none(self, mock_browser: AsyncMock) -> None:
         mock_browser.get_json.side_effect = Exception("timeout")
@@ -410,10 +457,13 @@ class TestGetChapterImages:
             "result": {
                 "number": 5,
                 "name": "The Beginning",
-                "images": [
-                    {"url": "https://cdn.example.com/img1.webp"},
-                    {"url": "https://cdn.example.com/img2.webp"},
-                ],
+                "pages": {
+                    "baseUrl": "https://cdn.example.com/",
+                    "items": [
+                        {"url": "img1.webp"},
+                        {"url": "img2.webp"},
+                    ],
+                },
             },
         }
         adapter = _adapter()
@@ -430,12 +480,93 @@ class TestGetChapterImages:
 # ---------------------------------------------------------------------------
 
 class TestGetSeries:
+    async def test_parses_series_detail_and_chapters(self, mock_browser: AsyncMock) -> None:
+        mock_browser.get_json.side_effect = [
+            {
+                "result": {
+                    "hid": "lzdj",
+                    "title": "OMORI",
+                    "synopsis": "After something changed...",
+                    "url": "https://comix.to/title/lzdj-omori",
+                    "authors": [{"name": "Omocat"}],
+                    "genres": [{"title": "Drama"}, {"title": "Horror"}],
+                },
+            },
+            {
+                "result": {
+                    "items": [
+                        {"id": 2459745, "number": 2, "name": "A Home For Flowers", "language": "en"},
+                    ],
+                },
+            },
+            {
+                "result": {
+                    "number": 2,
+                    "name": "A Home For Flowers",
+                    "pages": {"baseUrl": "https://cdn.example.com/", "items": [{"url": "01.webp"}]},
+                },
+            },
+        ]
+
+        series = await _adapter().get_series(mock_browser, "lzdj")
+
+        assert series.title == "OMORI"
+        assert series.hash_id == "lzdj"
+        assert series.url == "https://comix.to/title/lzdj-omori"
+        assert series.authors == ["Omocat"]
+        assert series.genres == ["Drama", "Horror"]
+        assert len(series.chapters) == 1
+        assert series.chapters[0].chapter_id == 2459745
+        assert series.chapters[0].image_count == 1
+
+    async def test_accepts_unwrapped_series_and_chapter_payloads(self, mock_browser: AsyncMock) -> None:
+        mock_browser.get_json.side_effect = [
+            {
+                "hid": "lzdj",
+                "title": "OMORI",
+                "url": "https://comix.to/title/lzdj-omori",
+            },
+            {"items": [{"id": 1, "number": 1, "name": "", "language": "en"}]},
+            {"number": 1, "name": "", "pages": {"baseUrl": "https://cdn.example.com/", "items": [{"url": "1.webp"}]}},
+        ]
+
+        series = await _adapter().get_series(mock_browser, "lzdj")
+
+        assert series.hash_id == "lzdj"
+        assert len(series.chapters) == 1
+        assert series.chapters[0].image_count == 1
+
     async def test_404_falls_back_to_search_then_raises_when_missing(
         self, mock_browser: AsyncMock,
     ) -> None:
         mock_browser.get_json.return_value = {"result": {"items": []}}
         with pytest.raises(RemoteApiError, match="Could not find manga"):
             await _adapter().get_series(mock_browser, "missing-slug")
+
+    async def test_slug_fallback_uses_matched_search_hid(self, mock_browser: AsyncMock) -> None:
+        mock_browser.get_json.side_effect = [
+            Exception("404"),
+            {
+                "result": {
+                    "items": [
+                        {
+                            "title": "OMORI",
+                            "hid": "lzdj",
+                            "url": "https://comix.to/title/lzdj-omori",
+                        },
+                    ],
+                },
+            },
+            {"result": {"hid": "lzdj", "title": "OMORI", "url": "https://comix.to/title/lzdj-omori"}},
+            {"result": {"items": []}},
+        ]
+
+        series = await _adapter().get_series(mock_browser, "omori")
+
+        assert series.hash_id == "lzdj"
+        awaited_urls = [call.args[0] for call in mock_browser.get_json.await_args_list]
+        assert "https://comix.to/api/v1/manga/omori" in awaited_urls
+        assert "https://comix.to/api/v1/manga/lzdj" in awaited_urls
 
 
 # ---------------------------------------------------------------------------
