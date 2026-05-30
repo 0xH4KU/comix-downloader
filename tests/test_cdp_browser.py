@@ -161,6 +161,24 @@ class TestBrowserTimeouts:
         browser._replace_dead_page.assert_awaited_once_with(page)
         browser.release_page.assert_not_called()
 
+    async def test_get_json_request_error_returns_healthy_page_to_pool(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+        browser.release_page = MagicMock()
+        browser._replace_dead_page = AsyncMock()
+
+        page = MagicMock()
+        page.is_closed.return_value = False
+        browser.acquire_page = AsyncMock(return_value=page)
+        browser._evaluate_with_timeout = AsyncMock(side_effect=RuntimeError("HTTP 500"))
+
+        with pytest.raises(RuntimeError, match=r"HTTP 500"):
+            await browser.get_json("https://api.example.com/data")
+
+        browser.release_page.assert_called_once_with(page)
+        browser._replace_dead_page.assert_not_awaited()
+
     def test_wait_for_cdp_ready_uses_configured_timeout(self, monkeypatch: pytest.MonkeyPatch):
         config = _make_config(download=DownloadConfig(connect_timeout_ms=600))
 

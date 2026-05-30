@@ -311,7 +311,10 @@ class CdpBrowser(BrowserSessionManager):
                     f"to {url} after HTTP 403.",
                 ) from typed
             if use_page_pool:
-                await self._replace_dead_page(page)
+                if isinstance(typed, BrowserTimeoutError) or not self._page_is_healthy(page):
+                    await self._replace_dead_page(page)
+                else:
+                    self.release_page(page)
             if typed is exc:
                 raise
             raise typed from exc
