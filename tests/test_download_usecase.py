@@ -11,7 +11,7 @@ import pytest
 from comix_dl.core.application import download_usecase
 from comix_dl.core.config import AppConfig
 from comix_dl.core.downloader import ChapterDownloadResult, DownloadProgress
-from comix_dl.core.models import ChapterImages, ChapterInfo
+from comix_dl.core.models import ChapterImages, ChapterInfo, ChapterPage
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -58,13 +58,16 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
 
         async def download_chapter(
             self,
-            image_urls: list[str],
+            image_pages: list[ChapterPage],
             title: str,
             chapter_label: str,
             *,
             on_progress: object = None,
         ) -> ChapterDownloadResult:
-            assert len(image_urls) == 2
+            assert image_pages == [
+                ChapterPage(url="https://img/1"),
+                ChapterPage(url="https://img/2", width=968, height=1378, scrambled=True),
+            ]
             if on_progress is not None:
                 on_progress(DownloadProgress(1, 2, 0, 0, "001", total_bytes=1024))
                 on_progress(DownloadProgress(2, 2, 0, 0, "002", total_bytes=2048))
@@ -91,6 +94,10 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
         title="Chapter 1",
         chapter_label="Chapter 1",
         image_urls=["https://img/1", "https://img/2"],
+        pages=[
+            ChapterPage(url="https://img/1"),
+            ChapterPage(url="https://img/2", width=968, height=1378, scrambled=True),
+        ],
     )
 
     with caplog.at_level(logging.INFO, logger="comix_dl.core.application.download_usecase"):

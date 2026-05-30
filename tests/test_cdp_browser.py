@@ -717,6 +717,75 @@ class TestBrowserHelpers:
 
         browser._get_bytes_direct.assert_not_awaited()
 
+    async def test_get_scrambled_image_bytes_renders_canvas_and_screenshots_element(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+        page = MagicMock()
+        page.is_closed.return_value = False
+        element = MagicMock()
+        element.screenshot = AsyncMock(return_value=b"unscrambled-png")
+        page.query_selector = AsyncMock(return_value=element)
+        browser.acquire_page = AsyncMock(return_value=page)
+        browser.release_page = MagicMock()
+        browser._evaluate_with_timeout = AsyncMock(return_value={"ok": True, "selector": "#__comix_scrambled_canvas"})
+
+        result = await browser.get_scrambled_image_bytes(
+            "https://static.comix.to/c0db/si/b/page-009.webp",
+            width=968,
+            height=1378,
+            referer="https://comix.to/title/lzdj-omori",
+        )
+
+        assert result == b"unscrambled-png"
+        browser.ensure_cf_clearance.assert_awaited_once()
+        browser.acquire_page.assert_awaited_once()
+        browser.release_page.assert_called_once_with(page)
+        element.screenshot.assert_awaited_once_with(
+            type="png",
+            timeout=30_000,
+            style=None,
+        )
+        expression = browser._evaluate_with_timeout.await_args.args[1]
+        arg = browser._evaluate_with_timeout.await_args.args[2]
+        assert arg == [
+            "https://static.comix.to/c0db/si/b/page-009.webp",
+            968,
+            1378,
+            {"Referer": "https://comix.to/title/lzdj-omori"},
+        ]
+        assert "window.__comixRenderScrambledImage" in expression
+        assert "secure-" in expression
+        assert "document.body.appendChild" in expression
+
+    async def test_get_scrambled_image_bytes_retries_with_cache_bust_after_render_failure(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+        page = MagicMock()
+        page.is_closed.return_value = False
+        element = MagicMock()
+        element.screenshot = AsyncMock(return_value=b"retry-png")
+        page.query_selector = AsyncMock(return_value=element)
+        browser.acquire_page = AsyncMock(return_value=page)
+        browser.release_page = MagicMock()
+        browser._evaluate_with_timeout = AsyncMock(
+            side_effect=[
+                RuntimeError("Page.evaluate: InvalidStateError: The source image could not be decoded."),
+                {"ok": True, "selector": "#__comix_scrambled_canvas"},
+            ],
+        )
+
+        result = await browser.get_scrambled_image_bytes("https://cdn.example.com/img.webp")
+
+        assert result == b"retry-png"
+        assert browser._evaluate_with_timeout.await_count == 2
+        first_arg = browser._evaluate_with_timeout.await_args_list[0].args[2]
+        second_arg = browser._evaluate_with_timeout.await_args_list[1].args[2]
+        assert first_arg[0] == "https://cdn.example.com/img.webp"
+        assert second_arg[0] == "https://cdn.example.com/img.webp?r=1"
+        browser.release_page.assert_called_once_with(page)
+
     def test_get_bytes_direct_sync_sends_browser_like_headers_and_timeout(self):
         config = _make_config(download=DownloadConfig(read_timeout_ms=1234))
         browser = CdpBrowser(config=config)

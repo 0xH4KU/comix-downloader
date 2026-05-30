@@ -175,7 +175,7 @@ async def _process_one_chapter(
         ))
 
     download_result = await downloader.download_chapter(
-        chapter_data.image_urls, series_title, chapter_data.chapter_label,
+        chapter_data.pages, series_title, chapter_data.chapter_label,
         on_progress=_on_progress,
     )
     dl_bytes = downloader.bytes_downloaded

@@ -102,12 +102,35 @@ class ChapterInfo:
 
 
 @dataclass
+class ChapterPage:
+    """A single resolved chapter page.
+
+    ``scrambled`` marks comix.to pages that must be rendered through
+    the site's reader canvas before saving. ``image_urls`` remains on
+    :class:`ChapterImages` for compatibility with callers that only
+    need plain URLs.
+    """
+
+    url: str
+    width: int | None = None
+    height: int | None = None
+    scrambled: bool = False
+
+
+@dataclass
 class ChapterImages:
-    """Resolved image URLs for a single chapter."""
+    """Resolved image pages for a single chapter."""
 
     title: str
     chapter_label: str
     image_urls: list[str]
+    pages: list[ChapterPage] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.pages:
+            self.image_urls = [page.url for page in self.pages]
+            return
+        self.pages = [ChapterPage(url=url) for url in self.image_urls]
 
 
 @dataclass
@@ -142,6 +165,7 @@ class SeriesInfo:
 __all__ = [
     "ChapterImages",
     "ChapterInfo",
+    "ChapterPage",
     "DedupDecision",
     "SearchResult",
     "SeriesInfo",
