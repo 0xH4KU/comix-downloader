@@ -90,6 +90,15 @@ _URL_TRANSFORMER_JS_PRELUDE = """
     }
 """
 
+_JSON_REQUESTER_JS_PRELUDE = """
+    if (typeof window.__comixJsonRequest === 'function') {
+        const handled = await window.__comixJsonRequest(__comixMethod, url, __comixBody);
+        if (handled && handled.__handled) {
+            return handled.data;
+        }
+    }
+"""
+
 __all__ = [
     "BrowserSessionManager",
     "CdpBrowser",
@@ -327,7 +336,7 @@ class CdpBrowser(BrowserSessionManager):
             return False
         # The lightweight probe path is comix.to-specific; F-5 will move
         # it onto the SiteAdapter so each site supplies its own probe.
-        probe_url = f"{self._base_url}/api/v2/manga?keyword=test&limit=1"
+        probe_url = f"{self._base_url}/api/v1/manga?keyword=test&limit=1"
         try:
             result = await self._evaluate_with_timeout(
                 page,
@@ -469,6 +478,8 @@ class CdpBrowser(BrowserSessionManager):
             url=url,
             expression="""async ([url, body]) => {
                 const __comixMethod = 'POST';
+                const __comixBody = body;
+""" + _JSON_REQUESTER_JS_PRELUDE + """
 """ + _URL_TRANSFORMER_JS_PRELUDE + """
                 const resp = await fetch(url, {
                     method: 'POST',
@@ -496,6 +507,8 @@ class CdpBrowser(BrowserSessionManager):
             url=url,
             expression="""async (url) => {
                 const __comixMethod = 'GET';
+                const __comixBody = undefined;
+""" + _JSON_REQUESTER_JS_PRELUDE + """
 """ + _URL_TRANSFORMER_JS_PRELUDE + """
                 const resp = await fetch(url);
                 if (!resp.ok) throw new Error(`HTTP ${resp.status}`);

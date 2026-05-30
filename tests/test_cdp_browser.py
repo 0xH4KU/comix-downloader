@@ -632,6 +632,44 @@ class TestBrowserHelpers:
         assert call_kwargs["use_page_pool"] is False
         assert call_kwargs["arg"] == ["https://api.example.com/post", {"name": "value"}]
 
+    async def test_get_json_expression_allows_json_requester_override(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._evaluate_request_with_cf_retry = AsyncMock(return_value={"ok": True})
+
+        await browser.get_json("https://api.example.com/data")
+
+        expression = browser._evaluate_request_with_cf_retry.await_args.kwargs["expression"]
+        assert "window.__comixJsonRequest" in expression
+        assert "const __comixBody = undefined" in expression
+        assert "return handled.data" in expression
+
+    async def test_post_json_expression_allows_json_requester_override(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._evaluate_request_with_cf_retry = AsyncMock(return_value={"ok": True})
+
+        await browser.post_json("https://api.example.com/post", {"name": "value"})
+
+        expression = browser._evaluate_request_with_cf_retry.await_args.kwargs["expression"]
+        assert "window.__comixJsonRequest" in expression
+        assert "const __comixBody = body" in expression
+        assert "return handled.data" in expression
+
+    async def test_probe_service_access_uses_current_v1_manga_endpoint(self):
+        browser = CdpBrowser(config=AppConfig(), base_url="https://example.test")
+        browser._evaluate_with_timeout = AsyncMock(
+            return_value={
+                "ok": True,
+                "url": "https://example.test/api/v1/manga?keyword=test&limit=1",
+                "contentType": "application/json",
+            },
+        )
+        page = MagicMock()
+
+        assert await browser._probe_service_access(page) is True
+
+        probe_url = browser._evaluate_with_timeout.await_args.args[2]
+        assert probe_url == "https://example.test/api/v1/manga?keyword=test&limit=1"
+
     async def test_ensure_cf_clearance_brings_challenge_tab_to_front(self):
         browser = CdpBrowser(config=AppConfig(), base_url="https://example.test")
         browser._started = True
