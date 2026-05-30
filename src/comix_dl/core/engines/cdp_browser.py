@@ -38,6 +38,9 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, cast
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from comix_dl.core.engines.browser_session import (
     BrowserSessionManager,
@@ -98,6 +101,12 @@ _JSON_REQUESTER_JS_PRELUDE = """
     }
 """
 
+_DIRECT_BYTES_ACCEPT = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+_DIRECT_BYTES_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+)
+
 __all__ = [
     "BrowserSessionManager",
     "CdpBrowser",
@@ -129,6 +138,21 @@ def _translate_browser_error(exc: Exception) -> Exception:
     if "page pool" in message.lower():
         return PagePoolUnavailableError(message)
     return exc
+
+
+def _is_direct_bytes_fallback_candidate(exc: Exception) -> bool:
+    """Return whether browser fetch failed in a way direct HTTP can recover."""
+    typed = _translate_browser_error(exc)
+    if isinstance(typed, BrowserTimeoutError):
+        return True
+    if isinstance(typed, Http403Error):
+        return False
+    return "Failed to fetch" in str(exc)
+
+
+def _direct_bytes_url_supported(url: str) -> bool:
+    """Return whether *url* can be fetched by the stdlib HTTP client."""
+    return urlparse(url).scheme in {"http", "https"}
 
 
 class CdpBrowser(BrowserSessionManager):
@@ -311,7 +335,7 @@ class CdpBrowser(BrowserSessionManager):
                     f"to {url} after HTTP 403.",
                 ) from typed
             if use_page_pool:
-                if isinstance(typed, BrowserTimeoutError) or not self._page_is_healthy(page):
+                if not self._page_is_healthy(page):
                     await self._replace_dead_page(page)
                 else:
                     self.release_page(page)
@@ -451,28 +475,88 @@ class CdpBrowser(BrowserSessionManager):
         raise AssertionError("CF retry loop exited unexpectedly")
 
     async def get_bytes(self, url: str, *, referer: str | None = None) -> bytes:
-        """Download binary content via page.evaluate(fetch()) with base64 encoding."""
-        result = await self._evaluate_request_with_cf_retry(
-            url=url,
-            expression="""async ([url, headers]) => {
-                const __comixMethod = 'GET';
+        """Download binary content via browser fetch, with direct HTTP fallback."""
+        browser_fetch_timeout_ms = max(1, self._config.download.read_timeout_ms - 1_000)
+        try:
+            result = await self._evaluate_request_with_cf_retry(
+                url=url,
+                expression="""async ([url, headers, timeoutMs]) => {
+                    const __comixMethod = 'GET';
 """ + _URL_TRANSFORMER_JS_PRELUDE + """
-                const resp = await fetch(url, { headers: headers || {} });
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                const buf = await resp.arrayBuffer();
-                const bytes = new Uint8Array(buf);
-                let binary = '';
-                const chunkSize = 8192;
-                for (let i = 0; i < bytes.length; i += chunkSize) {
-                    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-                }
-                return btoa(binary);
-            }""",
-            arg=[url, {"Referer": referer} if referer else {}],
-            action=f"Fetching binary response from {url}",
-            use_page_pool=True,
-        )
+                    const controller = new AbortController();
+                    const timer = setTimeout(() => controller.abort(), timeoutMs);
+                    let resp;
+                    try {
+                        resp = await fetch(url, {
+                            headers: headers || {},
+                            signal: controller.signal,
+                        });
+                    } catch (e) {
+                        if (e && e.name === 'AbortError') {
+                            throw new Error(`Fetch timed out after ${timeoutMs}ms`);
+                        }
+                        throw e;
+                    } finally {
+                        clearTimeout(timer);
+                    }
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const buf = await resp.arrayBuffer();
+                    const bytes = new Uint8Array(buf);
+                    let binary = '';
+                    const chunkSize = 8192;
+                    for (let i = 0; i < bytes.length; i += chunkSize) {
+                        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+                    }
+                    return btoa(binary);
+                }""",
+                arg=[url, {"Referer": referer} if referer else {}, browser_fetch_timeout_ms],
+                action=f"Fetching binary response from {url}",
+                use_page_pool=True,
+            )
+        except Exception as exc:
+            if _is_direct_bytes_fallback_candidate(exc) and _direct_bytes_url_supported(url):
+                logger.debug("Browser binary fetch failed for %s; retrying with direct HTTP: %s", url, exc)
+                return await self._get_bytes_direct(url, referer=referer)
+            raise
         return base64.b64decode(cast("str", result))
+
+    async def _get_bytes_direct(self, url: str, *, referer: str | None = None) -> bytes:
+        """Fetch binary content with direct HTTP in a worker thread."""
+        return await asyncio.to_thread(self._get_bytes_direct_sync, url, referer=referer)
+
+    def _get_bytes_direct_sync(self, url: str, *, referer: str | None = None) -> bytes:
+        """Blocking direct HTTP implementation used when in-browser fetch is flaky."""
+        headers = {
+            "Accept": _DIRECT_BYTES_ACCEPT,
+            "User-Agent": _DIRECT_BYTES_USER_AGENT,
+        }
+        if referer:
+            headers["Referer"] = referer
+
+        request = Request(url, headers=headers)
+        timeout = self._config.download.read_timeout_ms / 1000
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                status = getattr(response, "status", 200)
+                if status == 403:
+                    raise Http403Error(f"HTTP 403 while fetching binary response from {url}")
+                if status >= 400:
+                    raise RuntimeError(f"HTTP {status} while fetching binary response from {url}")
+                return cast("bytes", response.read())
+        except HTTPError as exc:
+            if exc.code == 403:
+                raise Http403Error(f"HTTP 403 while fetching binary response from {url}") from exc
+            raise RuntimeError(f"HTTP {exc.code} while fetching binary response from {url}") from exc
+        except TimeoutError as exc:
+            raise BrowserTimeoutError(
+                f"Direct binary response from {url} timed out after {self._config.download.read_timeout_ms}ms.",
+            ) from exc
+        except URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                raise BrowserTimeoutError(
+                    f"Direct binary response from {url} timed out after {self._config.download.read_timeout_ms}ms.",
+                ) from exc
+            raise RuntimeError(f"Direct binary response from {url} failed: {exc.reason}") from exc
 
     async def post_json(self, url: str, payload: dict[str, object]) -> dict[str, object]:
         """POST JSON via page.evaluate(fetch())."""

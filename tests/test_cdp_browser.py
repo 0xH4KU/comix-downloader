@@ -7,7 +7,9 @@ import base64
 import signal
 import socket
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -15,7 +17,12 @@ from comix_dl.core.config import AppConfig, BrowserConfig, DownloadConfig
 from comix_dl.core.engines.browser_session import BrowserSessionManager
 from comix_dl.core.engines.cdp_browser import CdpBrowser
 from comix_dl.core.engines.chrome_process import _find_free_port, _is_port_in_use
-from comix_dl.core.errors import CloudflareChallengeError, ConfigurationError
+from comix_dl.core.errors import (
+    BrowserTimeoutError,
+    CloudflareChallengeError,
+    ConfigurationError,
+    Http403Error,
+)
 
 
 def _make_config(
@@ -139,7 +146,7 @@ class TestBrowserTimeouts:
         ):
             await browser.fetch_page("https://example.com")
 
-    async def test_get_json_timeout_replaces_dead_page(self):
+    async def test_get_json_timeout_returns_healthy_page_to_pool(self):
         config = _make_config(download=DownloadConfig(read_timeout_ms=20))
 
         browser = CdpBrowser(config=config)
@@ -149,6 +156,30 @@ class TestBrowserTimeouts:
         browser._replace_dead_page = AsyncMock()
 
         page = MagicMock()
+        page.is_closed.return_value = False
+        page.evaluate = AsyncMock(side_effect=_hang)
+        browser.acquire_page = AsyncMock(return_value=page)
+
+        with pytest.raises(
+            RuntimeError,
+            match=r"Fetching JSON from https://api\.example\.com/data timed out after 20ms\.",
+        ):
+            await browser.get_json("https://api.example.com/data")
+
+        browser.release_page.assert_called_once_with(page)
+        browser._replace_dead_page.assert_not_awaited()
+
+    async def test_get_json_timeout_replaces_closed_page(self):
+        config = _make_config(download=DownloadConfig(read_timeout_ms=20))
+
+        browser = CdpBrowser(config=config)
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+        browser.release_page = MagicMock()
+        browser._replace_dead_page = AsyncMock()
+
+        page = MagicMock()
+        page.is_closed.return_value = True
         page.evaluate = AsyncMock(side_effect=_hang)
         browser.acquire_page = AsyncMock(return_value=page)
 
@@ -628,16 +659,122 @@ class TestBrowserHelpers:
         browser._evaluate_request_with_cf_retry = AsyncMock(
             return_value=base64.b64encode(b"hello").decode("ascii"),
         )
+        browser._get_bytes_direct = AsyncMock()
 
         result = await browser.get_bytes("https://cdn.example.com/img", referer="https://ref.example.com")
 
         assert result == b"hello"
+        browser._get_bytes_direct.assert_not_awaited()
         call_kwargs = browser._evaluate_request_with_cf_retry.await_args.kwargs
         assert call_kwargs["use_page_pool"] is True
+        assert "AbortController" in call_kwargs["expression"]
+        assert "signal: controller.signal" in call_kwargs["expression"]
         assert call_kwargs["arg"] == [
             "https://cdn.example.com/img",
             {"Referer": "https://ref.example.com"},
+            29_000,
         ]
+
+    async def test_get_bytes_falls_back_to_direct_http_after_browser_fetch_failure(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._evaluate_request_with_cf_retry = AsyncMock(
+            side_effect=RuntimeError("Page.evaluate: TypeError: Failed to fetch"),
+        )
+        browser._get_bytes_direct = AsyncMock(return_value=b"image")
+
+        result = await browser.get_bytes("https://cdn.example.com/img.webp", referer="https://ref.example.com")
+
+        assert result == b"image"
+        browser._get_bytes_direct.assert_awaited_once_with(
+            "https://cdn.example.com/img.webp",
+            referer="https://ref.example.com",
+        )
+
+    async def test_get_bytes_falls_back_to_direct_http_after_browser_timeout(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._evaluate_request_with_cf_retry = AsyncMock(
+            side_effect=BrowserTimeoutError(
+                "Fetching binary response from https://cdn.example.com/img.webp timed out after 30000ms.",
+            ),
+        )
+        browser._get_bytes_direct = AsyncMock(return_value=b"image")
+
+        result = await browser.get_bytes("https://cdn.example.com/img.webp")
+
+        assert result == b"image"
+        browser._get_bytes_direct.assert_awaited_once_with(
+            "https://cdn.example.com/img.webp",
+            referer=None,
+        )
+
+    async def test_get_bytes_does_not_fallback_after_http_403(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._evaluate_request_with_cf_retry = AsyncMock(side_effect=Http403Error("HTTP 403 Forbidden"))
+        browser._get_bytes_direct = AsyncMock()
+
+        with pytest.raises(Http403Error, match="HTTP 403 Forbidden"):
+            await browser.get_bytes("https://cdn.example.com/img.webp")
+
+        browser._get_bytes_direct.assert_not_awaited()
+
+    def test_get_bytes_direct_sync_sends_browser_like_headers_and_timeout(self):
+        config = _make_config(download=DownloadConfig(read_timeout_ms=1234))
+        browser = CdpBrowser(config=config)
+        captured: dict[str, object] = {}
+
+        class Response:
+            status = 200
+
+            def __enter__(self) -> Response:
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b"image"
+
+        def fake_urlopen(request: object, *, timeout: float) -> Response:
+            captured["headers"] = dict(request.header_items())  # type: ignore[attr-defined]
+            captured["timeout"] = timeout
+            return Response()
+
+        with patch("comix_dl.core.engines.cdp_browser.urlopen", fake_urlopen):
+            result = browser._get_bytes_direct_sync(
+                "https://cdn.example.com/img.webp",
+                referer="https://ref.example.com",
+            )
+
+        headers = {str(key).lower(): value for key, value in cast("dict[str, object]", captured["headers"]).items()}
+        assert result == b"image"
+        assert captured["timeout"] == pytest.approx(1.234)
+        assert headers["user-agent"].startswith("Mozilla/5.0")
+        assert "image/webp" in str(headers["accept"])
+        assert headers["referer"] == "https://ref.example.com"
+
+    def test_get_bytes_direct_sync_translates_http_403(self):
+        browser = CdpBrowser(config=AppConfig())
+
+        def fake_urlopen(*_args: object, **_kwargs: object) -> object:
+            raise HTTPError("https://cdn.example.com/img.webp", 403, "Forbidden", {}, None)
+
+        with (
+            patch("comix_dl.core.engines.cdp_browser.urlopen", fake_urlopen),
+            pytest.raises(Http403Error, match="HTTP 403"),
+        ):
+            browser._get_bytes_direct_sync("https://cdn.example.com/img.webp")
+
+    def test_get_bytes_direct_sync_translates_wrapped_timeout(self):
+        browser = CdpBrowser(config=AppConfig())
+
+        def fake_urlopen(*_args: object, **_kwargs: object) -> object:
+            raise URLError(TimeoutError("timed out"))
+
+        with (
+            patch("comix_dl.core.engines.cdp_browser.urlopen", fake_urlopen),
+            pytest.raises(BrowserTimeoutError, match="Direct binary response"),
+        ):
+            browser._get_bytes_direct_sync("https://cdn.example.com/img.webp")
 
     async def test_post_json_delegates_without_using_page_pool(self):
         browser = CdpBrowser(config=AppConfig())
