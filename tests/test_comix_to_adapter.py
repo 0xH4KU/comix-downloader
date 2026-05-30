@@ -90,14 +90,16 @@ class TestOnEngineReady:
 
         assert len(registered) == 1
         iife = registered[0]
-        # IIFE must import the site's frontend module and expose the
-        # JSON request hook consumed by CdpBrowser so v1 signing and
-        # encrypted-response decoding stay delegated to the live client.
+        # IIFE must import the site's frontend modules and expose the
+        # JSON request hook consumed by CdpBrowser so protected v1
+        # endpoints keep using the site's live request client for
+        # signing and encrypted-response decoding.
         assert "window.__comixJsonRequest" in iife
         assert "window.__comixGetApiClient" in iife
         assert "window.__comixUrlTransformers" in iife
         assert "import(moduleUrl)" in iife
         assert "/api/v1/" in iife
+        assert "Could not find comix.to API client export" not in iife
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +294,7 @@ class TestSearch:
                     {
                         "title": "OMORI",
                         "hid": "lzdj",
-                        "url": "https://comix.to/title/lzdj-omori",
+                        "url": "/title/lzdj-omori",
                     },
                     {
                         "title": "Naruto",
@@ -314,12 +316,12 @@ class TestSearch:
         results = await _adapter().search(mock_browser, "nonexistent")
         assert results == []
 
-    async def test_missing_hash_id_skipped(self, mock_browser: AsyncMock) -> None:
+    async def test_missing_hid_skipped(self, mock_browser: AsyncMock) -> None:
         mock_browser.get_json.return_value = {
             "result": {
                 "items": [
                     {"title": "No Hash", "slug": "no-hash"},
-                    {"title": "Has Hid", "hid": "abc", "url": "https://comix.to/title/abc-has-hid"},
+                    {"title": "Has Hid", "hid": "abc", "url": "/title/abc-has-hid"},
                 ],
             },
         }
@@ -330,7 +332,7 @@ class TestSearch:
     async def test_accepts_unwrapped_search_response(self, mock_browser: AsyncMock) -> None:
         mock_browser.get_json.return_value = {
             "items": [
-                {"title": "OMORI", "hid": "lzdj", "url": "https://comix.to/title/lzdj-omori"},
+                {"title": "OMORI", "hid": "lzdj", "url": "/title/lzdj-omori"},
             ],
         }
         results = await _adapter().search(mock_browser, "omori")
@@ -487,7 +489,7 @@ class TestGetSeries:
                     "hid": "lzdj",
                     "title": "OMORI",
                     "synopsis": "After something changed...",
-                    "url": "https://comix.to/title/lzdj-omori",
+                    "url": "/title/lzdj-omori",
                     "authors": [{"name": "Omocat"}],
                     "genres": [{"title": "Drama"}, {"title": "Horror"}],
                 },

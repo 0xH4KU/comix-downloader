@@ -47,47 +47,73 @@ _URL_HOST_PATTERN = re.compile(r"^(?:www\.)?comix\.to$", re.IGNORECASE)
 
 
 # JS IIFE registered with the engine after Cloudflare clearance. The
-# rewritten comix.to frontend is a Vite app whose API helper owns both
-# request signing and encrypted-response decoding. Rather than
-# reimplementing either brittle detail, each browser page imports the
-# live main module and exposes a small request hook consumed by
-# CdpBrowser.get_json/post_json.
+# current comix.to frontend is a Vite app whose API helper owns both
+# request signing and encrypted-response decoding. Each browser page
+# imports same-origin frontend modules and dynamically selects the
+# export that looks like the API client, avoiding brittle dependency on
+# minified export names.
 _COMIX_API_CLIENT_IIFE = """
 (async function() {
     try {
         window.__comixUrlTransformers = window.__comixUrlTransformers || [];
 
+        function __comixLooksLikeApiClient(value) {
+            return value
+                && typeof value === 'object'
+                && typeof value.get === 'function'
+                && typeof value.post === 'function';
+        }
+
         window.__comixGetApiClient = window.__comixGetApiClient || async function() {
             if (window.__comixApiClient) return window.__comixApiClient;
 
             const scripts = Array.from(document.querySelectorAll('script[src]'));
+            const moduleUrls = [];
+            for (const script of scripts) {
+                const src = script.getAttribute('src') || '';
+                if (src.includes('/assets/build/') && src.endsWith('.js')) {
+                    moduleUrls.push(new URL(src, window.location.href).href);
+                }
+            }
+
+            for (const moduleUrl of moduleUrls) {
+                try {
+                    const mod = await import(moduleUrl);
+                    for (const exported of Object.values(mod)) {
+                        if (__comixLooksLikeApiClient(exported)) {
+                            window.__comixApiClient = exported;
+                            return window.__comixApiClient;
+                        }
+                    }
+                } catch (e) { continue; }
+            }
+
             const mainScript = scripts.find((script) => {
                 const src = script.getAttribute('src') || '';
                 return src.includes('/assets/build/')
                     && src.includes('/dist/main-')
                     && src.endsWith('.js');
             });
-            if (!mainScript) {
-                throw new Error('Could not find comix.to main module script.');
+            if (mainScript) {
+                try {
+                    const moduleUrl = new URL(mainScript.getAttribute('src'), window.location.href).href;
+                    const resp = await fetch(moduleUrl);
+                    const text = await resp.text();
+                    const envMatch = text.match(/from"\\.\\/(env-[^"]+\\.js)"/);
+                    if (envMatch) {
+                        const envUrl = new URL(envMatch[1], moduleUrl).href;
+                        const mod = await import(envUrl);
+                        for (const exported of Object.values(mod)) {
+                            if (__comixLooksLikeApiClient(exported)) {
+                                window.__comixApiClient = exported;
+                                return window.__comixApiClient;
+                            }
+                        }
+                    }
+                } catch (e) { /* fall through to fetch fallback */ }
             }
 
-            const moduleUrl = new URL(mainScript.getAttribute('src'), window.location.href).href;
-            const mod = await import(moduleUrl);
-            if (mod.I && typeof mod.I.get === 'function') {
-                window.__comixApiClient = mod.I;
-                return window.__comixApiClient;
-            }
-            if (mod.L && typeof mod.L.get === 'function') {
-                window.__comixApiClient = {
-                    get: async (path, config) => (await mod.L.get(path, config)).data,
-                    post: async (path, body, config) => (await mod.L.post(path, body, config)).data,
-                    put: async (path, body, config) => (await mod.L.put(path, body, config)).data,
-                    patch: async (path, body, config) => (await mod.L.patch(path, body, config)).data,
-                    delete: async (path, config) => (await mod.L.delete(path, config)).data,
-                };
-                return window.__comixApiClient;
-            }
-            throw new Error('Could not find comix.to API client export.');
+            return null;
         };
 
         window.__comixJsonRequest = async function(method, url, body) {
@@ -111,6 +137,8 @@ _COMIX_API_CLIENT_IIFE = """
             });
 
             const api = await window.__comixGetApiClient();
+            if (!api) return { __handled: false };
+
             const config = Object.keys(params).length ? { params } : undefined;
             const upper = String(method || 'GET').toUpperCase();
 
@@ -180,8 +208,8 @@ class ComixToAdapter:
 
         The hook IIFE is replayed against every browser page the
         engine creates (main and pool). It imports the site's current
-        frontend module and routes API JSON requests through the same
-        client the reader uses, preserving request signing and
+        frontend modules and routes protected API JSON requests through
+        the same client the reader uses, preserving request signing and
         encrypted-response decoding.
         """
         engine.register_url_transformer(_COMIX_API_CLIENT_IIFE)
@@ -278,7 +306,7 @@ class ComixToAdapter:
             url = str(item.get("url", "") or "")
             slug = self._slug_from_title_url(url, hid)
             if title and hid:
-                series_url = url or f"{base}/title/{hid}"
+                series_url = self._absolute_site_url(base, url) if url else f"{base}/title/{hid}"
                 results.append(SearchResult(
                     title=str(title), url=series_url, slug=slug, hash_id=hid,
                 ))
@@ -340,7 +368,7 @@ class ComixToAdapter:
         synopsis = str(data.get("synopsis", "") or data.get("description", "") or "")
         authors = self._names_from_people(data.get("authors", []))
         genres = self._titles_from_taxonomy(data.get("genres", []))
-        series_url = str(data.get("url", "") or f"{base}/title/{hash_id}")
+        series_url = self._absolute_site_url(base, str(data.get("url", "") or "")) or f"{base}/title/{hash_id}"
 
         chapters, dedup_decisions = await self._fetch_chapters(engine, hash_id)
 
@@ -603,6 +631,12 @@ class ComixToAdapter:
         return max(candidates, key=lambda ch: (ch.image_count, len(ch.title)))
 
     @staticmethod
+    def _absolute_site_url(base: str, url: str) -> str:
+        if not url:
+            return ""
+        return urljoin(base.rstrip("/") + "/", url)
+
+    @staticmethod
     def _slug_from_title_url(url: str, hid: str) -> str:
         """Extract the human-readable title slug from a v1 title URL."""
         if not url:
@@ -660,7 +694,10 @@ class ComixToAdapter:
                     continue
                 raw_url = item.get("url")
                 if isinstance(raw_url, str) and raw_url:
-                    urls.append(urljoin(base_url, raw_url))
+                    image_base = base_url
+                    if item.get("s") == 1:
+                        image_base = re.sub(r"/i/(?=[bh])", "/si/", image_base)
+                    urls.append(urljoin(image_base, raw_url))
             return urls
         if isinstance(pages, list):
             urls = []

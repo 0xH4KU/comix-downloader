@@ -654,6 +654,22 @@ class TestBrowserHelpers:
         assert "const __comixBody = body" in expression
         assert "return handled.data" in expression
 
+    async def test_probe_service_access_uses_current_v1_manga_endpoint(self):
+        browser = CdpBrowser(config=AppConfig(), base_url="https://example.test")
+        browser._evaluate_with_timeout = AsyncMock(
+            return_value={
+                "ok": True,
+                "url": "https://example.test/api/v1/manga?keyword=test&limit=1",
+                "contentType": "application/json",
+            },
+        )
+        page = MagicMock()
+
+        assert await browser._probe_service_access(page) is True
+
+        probe_url = browser._evaluate_with_timeout.await_args.args[2]
+        assert probe_url == "https://example.test/api/v1/manga?keyword=test&limit=1"
+
     async def test_ensure_cf_clearance_brings_challenge_tab_to_front(self):
         browser = CdpBrowser(config=AppConfig(), base_url="https://example.test")
         browser._started = True
