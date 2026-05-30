@@ -59,7 +59,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _CF_CONTENT_MARKERS = (
-    "/cdn-cgi/challenge-platform/",
     "__cf_chl_",
     "cf-browser-verification",
     "cf-chl-widget",

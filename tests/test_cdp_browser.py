@@ -728,7 +728,7 @@ class TestBrowserHelpers:
         page.title = AsyncMock(return_value="regular page")
         page.query_selector = AsyncMock(return_value=None)
         page.content = AsyncMock(
-            return_value="<script src='/cdn-cgi/challenge-platform/h/g/orchestrate'></script>",
+            return_value="<html><body>Checking your browser <script>var __cf_chl_opt = {}</script></body></html>",
         )
 
         assert await browser._is_cf_challenge(page) is True

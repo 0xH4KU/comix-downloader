@@ -47,10 +47,11 @@ _URL_HOST_PATTERN = re.compile(r"^(?:www\.)?comix\.to$", re.IGNORECASE)
 
 
 # JS IIFE registered with the engine after Cloudflare clearance. The
-# current comix.to frontend is a Vite app whose request client handles
-# protected chapter endpoints. Each browser page imports same-origin
-# frontend modules and dynamically selects the export that looks like
-# the API client, avoiding brittle dependency on minified export names.
+# current comix.to frontend is a Vite app whose API helper owns both
+# request signing and encrypted-response decoding. Each browser page
+# imports same-origin frontend modules and dynamically selects the
+# export that looks like the API client, avoiding brittle dependency on
+# minified export names.
 _COMIX_API_CLIENT_IIFE = """
 (async function() {
     try {
@@ -207,8 +208,9 @@ class ComixToAdapter:
 
         The hook IIFE is replayed against every browser page the
         engine creates (main and pool). It imports the site's current
-        frontend module and routes protected API JSON requests through
-        the same client the reader uses.
+        frontend modules and routes protected API JSON requests through
+        the same client the reader uses, preserving request signing and
+        encrypted-response decoding.
         """
         engine.register_url_transformer(_COMIX_API_CLIENT_IIFE)
 

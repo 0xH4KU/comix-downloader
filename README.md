@@ -220,8 +220,10 @@ Checks Python version, dependencies, Chrome availability, and output directory.
 3. **REST API** — all data comes from comix.to's v1 REST API:
    - `GET /api/v1/manga?keyword=...` — search
    - `GET /api/v1/manga/{hid}` — manga info
-   - `GET /api/v1/manga/{hid}/chapters` — chapter list (protected endpoint; handled through the browser session)
+   - `GET /api/v1/manga/{hid}/chapters` — chapter list (protected endpoint)
    - `GET /api/v1/chapters/{chapter_id}` — chapter images
+
+   Search and detail endpoints are plain JSON. Chapter endpoints use the live frontend API client inside the Chrome page context so comix.to's own signing and encrypted-response decoding stay in sync with site deployments.
 
 4. **Smart Dedup** — the API often returns duplicate entries for the same chapter (from different uploaders). comix-dl groups chapters by number, language, and subtitle, then keeps the same-language duplicate with the most images. Chapters with the same number but different subtitles (e.g. "Chapter 0 - Volume 11" vs "Chapter 0 - Volume 12") or different languages are correctly treated as distinct content.
 

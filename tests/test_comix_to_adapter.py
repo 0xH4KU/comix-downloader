@@ -92,7 +92,8 @@ class TestOnEngineReady:
         iife = registered[0]
         # IIFE must import the site's frontend modules and expose the
         # JSON request hook consumed by CdpBrowser so protected v1
-        # endpoints keep using the site's live request client.
+        # endpoints keep using the site's live request client for
+        # signing and encrypted-response decoding.
         assert "window.__comixJsonRequest" in iife
         assert "window.__comixGetApiClient" in iife
         assert "window.__comixUrlTransformers" in iife
@@ -500,17 +501,42 @@ class TestGetSeries:
                     ],
                 },
             },
+            {
+                "result": {
+                    "number": 2,
+                    "name": "A Home For Flowers",
+                    "pages": {"baseUrl": "https://cdn.example.com/", "items": [{"url": "01.webp"}]},
+                },
+            },
         ]
 
-        result = await _adapter().get_series(mock_browser, "lzdj")
+        series = await _adapter().get_series(mock_browser, "lzdj")
 
-        assert result.title == "OMORI"
-        assert result.hash_id == "lzdj"
-        assert result.authors == ["Omocat"]
-        assert result.genres == ["Drama", "Horror"]
-        assert result.url == "https://comix.to/title/lzdj-omori"
-        assert len(result.chapters) == 1
-        assert result.chapters[0].chapter_id == 2459745
+        assert series.title == "OMORI"
+        assert series.hash_id == "lzdj"
+        assert series.url == "https://comix.to/title/lzdj-omori"
+        assert series.authors == ["Omocat"]
+        assert series.genres == ["Drama", "Horror"]
+        assert len(series.chapters) == 1
+        assert series.chapters[0].chapter_id == 2459745
+        assert series.chapters[0].image_count == 1
+
+    async def test_accepts_unwrapped_series_and_chapter_payloads(self, mock_browser: AsyncMock) -> None:
+        mock_browser.get_json.side_effect = [
+            {
+                "hid": "lzdj",
+                "title": "OMORI",
+                "url": "https://comix.to/title/lzdj-omori",
+            },
+            {"items": [{"id": 1, "number": 1, "name": "", "language": "en"}]},
+            {"number": 1, "name": "", "pages": {"baseUrl": "https://cdn.example.com/", "items": [{"url": "1.webp"}]}},
+        ]
+
+        series = await _adapter().get_series(mock_browser, "lzdj")
+
+        assert series.hash_id == "lzdj"
+        assert len(series.chapters) == 1
+        assert series.chapters[0].image_count == 1
 
     async def test_404_falls_back_to_search_then_raises_when_missing(
         self, mock_browser: AsyncMock,
@@ -518,6 +544,31 @@ class TestGetSeries:
         mock_browser.get_json.return_value = {"result": {"items": []}}
         with pytest.raises(RemoteApiError, match="Could not find manga"):
             await _adapter().get_series(mock_browser, "missing-slug")
+
+    async def test_slug_fallback_uses_matched_search_hid(self, mock_browser: AsyncMock) -> None:
+        mock_browser.get_json.side_effect = [
+            Exception("404"),
+            {
+                "result": {
+                    "items": [
+                        {
+                            "title": "OMORI",
+                            "hid": "lzdj",
+                            "url": "https://comix.to/title/lzdj-omori",
+                        },
+                    ],
+                },
+            },
+            {"result": {"hid": "lzdj", "title": "OMORI", "url": "https://comix.to/title/lzdj-omori"}},
+            {"result": {"items": []}},
+        ]
+
+        series = await _adapter().get_series(mock_browser, "omori")
+
+        assert series.hash_id == "lzdj"
+        awaited_urls = [call.args[0] for call in mock_browser.get_json.await_args_list]
+        assert "https://comix.to/api/v1/manga/omori" in awaited_urls
+        assert "https://comix.to/api/v1/manga/lzdj" in awaited_urls
 
 
 # ---------------------------------------------------------------------------
