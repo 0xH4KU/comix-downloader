@@ -38,6 +38,9 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, cast
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from comix_dl.core.engines.browser_session import (
     BrowserSessionManager,
@@ -98,6 +101,12 @@ _JSON_REQUESTER_JS_PRELUDE = """
     }
 """
 
+_DIRECT_BYTES_ACCEPT = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+_DIRECT_BYTES_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+)
+
 __all__ = [
     "BrowserSessionManager",
     "CdpBrowser",
@@ -129,6 +138,21 @@ def _translate_browser_error(exc: Exception) -> Exception:
     if "page pool" in message.lower():
         return PagePoolUnavailableError(message)
     return exc
+
+
+def _is_direct_bytes_fallback_candidate(exc: Exception) -> bool:
+    """Return whether browser fetch failed in a way direct HTTP can recover."""
+    typed = _translate_browser_error(exc)
+    if isinstance(typed, BrowserTimeoutError):
+        return True
+    if isinstance(typed, Http403Error):
+        return False
+    return "Failed to fetch" in str(exc)
+
+
+def _direct_bytes_url_supported(url: str) -> bool:
+    """Return whether *url* can be fetched by the stdlib HTTP client."""
+    return urlparse(url).scheme in {"http", "https"}
 
 
 class CdpBrowser(BrowserSessionManager):
@@ -311,7 +335,10 @@ class CdpBrowser(BrowserSessionManager):
                     f"to {url} after HTTP 403.",
                 ) from typed
             if use_page_pool:
-                await self._replace_dead_page(page)
+                if not self._page_is_healthy(page):
+                    await self._replace_dead_page(page)
+                else:
+                    self.release_page(page)
             if typed is exc:
                 raise
             raise typed from exc
@@ -448,28 +475,254 @@ class CdpBrowser(BrowserSessionManager):
         raise AssertionError("CF retry loop exited unexpectedly")
 
     async def get_bytes(self, url: str, *, referer: str | None = None) -> bytes:
-        """Download binary content via page.evaluate(fetch()) with base64 encoding."""
-        result = await self._evaluate_request_with_cf_retry(
-            url=url,
-            expression="""async ([url, headers]) => {
-                const __comixMethod = 'GET';
+        """Download binary content via browser fetch, with direct HTTP fallback."""
+        browser_fetch_timeout_ms = max(1, self._config.download.read_timeout_ms - 1_000)
+        try:
+            result = await self._evaluate_request_with_cf_retry(
+                url=url,
+                expression="""async ([url, headers, timeoutMs]) => {
+                    const __comixMethod = 'GET';
 """ + _URL_TRANSFORMER_JS_PRELUDE + """
-                const resp = await fetch(url, { headers: headers || {} });
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                const buf = await resp.arrayBuffer();
-                const bytes = new Uint8Array(buf);
-                let binary = '';
-                const chunkSize = 8192;
-                for (let i = 0; i < bytes.length; i += chunkSize) {
-                    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-                }
-                return btoa(binary);
-            }""",
-            arg=[url, {"Referer": referer} if referer else {}],
-            action=f"Fetching binary response from {url}",
-            use_page_pool=True,
-        )
+                    const controller = new AbortController();
+                    const timer = setTimeout(() => controller.abort(), timeoutMs);
+                    let resp;
+                    try {
+                        resp = await fetch(url, {
+                            headers: headers || {},
+                            signal: controller.signal,
+                        });
+                    } catch (e) {
+                        if (e && e.name === 'AbortError') {
+                            throw new Error(`Fetch timed out after ${timeoutMs}ms`);
+                        }
+                        throw e;
+                    } finally {
+                        clearTimeout(timer);
+                    }
+                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                    const buf = await resp.arrayBuffer();
+                    const bytes = new Uint8Array(buf);
+                    let binary = '';
+                    const chunkSize = 8192;
+                    for (let i = 0; i < bytes.length; i += chunkSize) {
+                        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+                    }
+                    return btoa(binary);
+                }""",
+                arg=[url, {"Referer": referer} if referer else {}, browser_fetch_timeout_ms],
+                action=f"Fetching binary response from {url}",
+                use_page_pool=True,
+            )
+        except Exception as exc:
+            if _is_direct_bytes_fallback_candidate(exc) and _direct_bytes_url_supported(url):
+                logger.debug("Browser binary fetch failed for %s; retrying with direct HTTP: %s", url, exc)
+                return await self._get_bytes_direct(url, referer=referer)
+            raise
         return base64.b64decode(cast("str", result))
+
+    async def get_scrambled_image_bytes(
+        self,
+        url: str,
+        *,
+        width: int | None = None,
+        height: int | None = None,
+        referer: str | None = None,
+    ) -> bytes:
+        """Render a comix.to scrambled image through the site's reader canvas."""
+        if not self._started:
+            await self.start()
+        await self.ensure_cf_clearance()
+
+        page = await self.acquire_page()
+        try:
+            await self._render_scrambled_image_on_page(page, url=url, width=width, height=height, referer=referer)
+            screenshot = await self._screenshot_scrambled_canvas(page, url=url)
+        except Exception as exc:
+            retry_url = self._cache_busted_url(url)
+            if retry_url != url and self._page_is_healthy(page):
+                try:
+                    await self._render_scrambled_image_on_page(
+                        page,
+                        url=retry_url,
+                        width=width,
+                        height=height,
+                        referer=referer,
+                    )
+                    screenshot = await self._screenshot_scrambled_canvas(page, url=retry_url)
+                except Exception as retry_exc:
+                    typed = _translate_browser_error(retry_exc)
+                    if self._page_is_healthy(page):
+                        self.release_page(page)
+                    else:
+                        await self._replace_dead_page(page)
+                    if typed is retry_exc:
+                        raise
+                    raise typed from retry_exc
+                else:
+                    self.release_page(page)
+                    return screenshot
+
+            typed = _translate_browser_error(exc)
+            if self._page_is_healthy(page):
+                self.release_page(page)
+            else:
+                await self._replace_dead_page(page)
+            if typed is exc:
+                raise
+            raise typed from exc
+        else:
+            self.release_page(page)
+            return screenshot
+
+    async def _render_scrambled_image_on_page(
+        self,
+        page: Page,
+        *,
+        url: str,
+        width: int | None,
+        height: int | None,
+        referer: str | None,
+    ) -> dict[str, object]:
+        """Render a scrambled image URL into a reusable DOM canvas on *page*."""
+        result = await self._evaluate_with_timeout(
+            page,
+            """async ([url, width, height, headers]) => {
+                window.__comixRenderScrambledImage = window.__comixRenderScrambledImage || async function(
+                    imageUrl,
+                    imageWidth,
+                    imageHeight
+                ) {
+                    async function loadRenderer() {
+                        if (typeof globalThis.$r === 'function') return globalThis.$r;
+
+                        const scripts = Array.from(document.querySelectorAll('script[src]'));
+                        const mainScript = scripts.find((script) => {
+                            const src = script.getAttribute('src') || '';
+                            return src.includes('/assets/build/')
+                                && src.includes('/dist/main-')
+                                && src.endsWith('.js');
+                        });
+                        if (!mainScript) {
+                            throw new Error('Could not find comix.to main script.');
+                        }
+
+                        const mainUrl = new URL(mainScript.getAttribute('src'), window.location.href).href;
+                        const mainText = await fetch(mainUrl).then((resp) => resp.text());
+                        const secureMatch = mainText.match(/"([^"]*secure-[^"]+\\.js)"/)
+                            || mainText.match(/from"\\.\\/(secure-[^"]+\\.js)"/);
+                        if (!secureMatch) {
+                            throw new Error('Could not find comix.to secure image module.');
+                        }
+
+                        const securePath = secureMatch[1];
+                        const secureUrl = securePath.startsWith('./')
+                            ? new URL(securePath.slice(2), mainUrl).href
+                            : securePath.startsWith('/')
+                                ? new URL(securePath, window.location.origin).href
+                                : new URL(securePath, mainUrl).href;
+                        const secureModule = await import(secureUrl);
+                        const renderer = secureModule.t || globalThis.$r;
+                        if (typeof renderer !== 'function') {
+                            throw new Error('Could not find comix.to secure image renderer.');
+                        }
+                        return renderer;
+                    }
+
+                    const renderer = await loadRenderer();
+                    const old = document.getElementById('__comix_scrambled_wrap');
+                    if (old) old.remove();
+                    const wrap = document.createElement('div');
+                    wrap.id = '__comix_scrambled_wrap';
+                    wrap.style.cssText = [
+                        'position:absolute',
+                        'left:0',
+                        'top:0',
+                        'z-index:2147483647',
+                        'background:#fff',
+                    ].join(';');
+                    const canvas = document.createElement('canvas');
+                    canvas.id = '__comix_scrambled_canvas';
+                    canvas.className = 'rpage-page__img';
+                    if (Number.isFinite(imageWidth) && imageWidth > 0) canvas.width = imageWidth;
+                    if (Number.isFinite(imageHeight) && imageHeight > 0) canvas.height = imageHeight;
+                    wrap.appendChild(canvas);
+                    document.body.appendChild(wrap);
+                    await renderer(imageUrl, canvas);
+                    return {
+                        ok: true,
+                        selector: '#__comix_scrambled_canvas',
+                        width: canvas.width,
+                        height: canvas.height,
+                    };
+                };
+
+                return await window.__comixRenderScrambledImage(url, width, height);
+            }""",
+            [url, width, height, {"Referer": referer} if referer else {}],
+            timeout_ms=self._config.download.read_timeout_ms,
+            action=f"Rendering scrambled image from {url}",
+        )
+        if not isinstance(result, dict) or result.get("selector") != "#__comix_scrambled_canvas":
+            raise RuntimeError(f"Scrambled image renderer returned an invalid result for {url}.")
+        return cast("dict[str, object]", result)
+
+    async def _screenshot_scrambled_canvas(self, page: Page, *, url: str) -> bytes:
+        """Capture the rendered scrambled canvas as PNG bytes."""
+        element = await page.query_selector("#__comix_scrambled_canvas")
+        if element is None:
+            raise RuntimeError(f"Scrambled image canvas was not found after rendering {url}.")
+        return await self._run_with_timeout(
+            element.screenshot(
+                type="png",
+                timeout=self._config.download.read_timeout_ms,
+                style=None,
+            ),
+            timeout_ms=self._config.download.read_timeout_ms,
+            action=f"Capturing rendered scrambled image from {url}",
+        )
+
+    @staticmethod
+    def _cache_busted_url(url: str) -> str:
+        separator = "&" if "?" in url else "?"
+        return f"{url}{separator}r=1"
+
+    async def _get_bytes_direct(self, url: str, *, referer: str | None = None) -> bytes:
+        """Fetch binary content with direct HTTP in a worker thread."""
+        return await asyncio.to_thread(self._get_bytes_direct_sync, url, referer=referer)
+
+    def _get_bytes_direct_sync(self, url: str, *, referer: str | None = None) -> bytes:
+        """Blocking direct HTTP implementation used when in-browser fetch is flaky."""
+        headers = {
+            "Accept": _DIRECT_BYTES_ACCEPT,
+            "User-Agent": _DIRECT_BYTES_USER_AGENT,
+        }
+        if referer:
+            headers["Referer"] = referer
+
+        request = Request(url, headers=headers)
+        timeout = self._config.download.read_timeout_ms / 1000
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                status = getattr(response, "status", 200)
+                if status == 403:
+                    raise Http403Error(f"HTTP 403 while fetching binary response from {url}")
+                if status >= 400:
+                    raise RuntimeError(f"HTTP {status} while fetching binary response from {url}")
+                return cast("bytes", response.read())
+        except HTTPError as exc:
+            if exc.code == 403:
+                raise Http403Error(f"HTTP 403 while fetching binary response from {url}") from exc
+            raise RuntimeError(f"HTTP {exc.code} while fetching binary response from {url}") from exc
+        except TimeoutError as exc:
+            raise BrowserTimeoutError(
+                f"Direct binary response from {url} timed out after {self._config.download.read_timeout_ms}ms.",
+            ) from exc
+        except URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                raise BrowserTimeoutError(
+                    f"Direct binary response from {url} timed out after {self._config.download.read_timeout_ms}ms.",
+                ) from exc
+            raise RuntimeError(f"Direct binary response from {url} failed: {exc.reason}") from exc
 
     async def post_json(self, url: str, payload: dict[str, object]) -> dict[str, object]:
         """POST JSON via page.evaluate(fetch())."""

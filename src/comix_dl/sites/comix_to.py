@@ -29,6 +29,7 @@ from comix_dl.core.errors import BrowserTimeoutError, Http403Error, RemoteApiErr
 from comix_dl.core.models import (
     ChapterImages,
     ChapterInfo,
+    ChapterPage,
     DedupDecision,
     SearchResult,
     SeriesInfo,
@@ -182,6 +183,20 @@ def _describe_api_error(exc: Exception, *, action: str) -> str:
     if isinstance(exc, BrowserTimeoutError):
         return f"{action} failed: API request timed out. {exc}"
     return f"{action} failed: {exc}"
+
+
+def _int_or_none(value: object) -> int | None:
+    """Return a positive integer value when the API supplied one."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        return int(value) if value > 0 else None
+    if isinstance(value, str) and value.isdigit():
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+    return None
 
 
 class ComixToAdapter:
@@ -402,8 +417,8 @@ class ComixToAdapter:
 
         number = normalize_chapter_number(data.get("number", 0))
         name = str(data.get("name", "") or "")
-        image_urls = self._extract_image_urls(data)
-        if image_urls is None:
+        image_pages = self._extract_image_pages(data)
+        if image_pages is None:
             logger.warning("Invalid image payload for chapter %d", chapter_id)
             return None
 
@@ -411,11 +426,16 @@ class ComixToAdapter:
         if name:
             label += f" - {name}"
 
-        if not image_urls:
+        if not image_pages:
             logger.warning("No images found for chapter %d", chapter_id)
             return None
 
-        return ChapterImages(title=label, chapter_label=label, image_urls=image_urls)
+        return ChapterImages(
+            title=label,
+            chapter_label=label,
+            image_urls=[page.url for page in image_pages],
+            pages=image_pages,
+        )
 
     # -- Site-specific dedup rules -----------------------------------------
 
@@ -679,47 +699,61 @@ class ComixToAdapter:
                     values.append(value)
         return values
 
-    @staticmethod
-    def _extract_image_urls(data: dict[str, object]) -> list[str] | None:
+    @classmethod
+    def _extract_image_urls(cls, data: dict[str, object]) -> list[str] | None:
         """Extract page image URLs from v1 and legacy chapter payloads."""
+        pages = cls._extract_image_pages(data)
+        if pages is None:
+            return None
+        return [page.url for page in pages]
+
+    @staticmethod
+    def _extract_image_pages(data: dict[str, object]) -> list[ChapterPage] | None:
+        """Extract page image metadata from v1 and legacy chapter payloads."""
         pages = data.get("pages")
         if isinstance(pages, dict):
             base_url = str(pages.get("baseUrl", "") or "")
             items = pages.get("items", [])
             if not isinstance(items, list):
                 return None
-            urls: list[str] = []
+            image_pages: list[ChapterPage] = []
             for item in items:
                 if not isinstance(item, dict):
                     continue
                 raw_url = item.get("url")
                 if isinstance(raw_url, str) and raw_url:
                     image_base = base_url
-                    if item.get("s") == 1:
+                    scrambled = item.get("s") == 1
+                    if scrambled:
                         image_base = re.sub(r"/i/(?=[bh])", "/si/", image_base)
-                    urls.append(urljoin(image_base, raw_url))
-            return urls
+                    image_pages.append(ChapterPage(
+                        url=urljoin(image_base, raw_url),
+                        width=_int_or_none(item.get("width")),
+                        height=_int_or_none(item.get("height")),
+                        scrambled=scrambled,
+                    ))
+            return image_pages
         if isinstance(pages, list):
-            urls = []
+            image_pages = []
             for item in pages:
                 if not isinstance(item, dict):
                     continue
                 raw_url = item.get("url")
                 if isinstance(raw_url, str) and raw_url:
-                    urls.append(raw_url)
-            return urls
+                    image_pages.append(ChapterPage(url=raw_url))
+            return image_pages
 
         images = data.get("images", [])
         if not isinstance(images, list):
             return None
-        urls = []
+        image_pages = []
         for img in images:
             if not isinstance(img, dict):
                 continue
             url = img.get("url")
             if isinstance(url, str) and url:
-                urls.append(url)
-        return urls
+                image_pages.append(ChapterPage(url=url))
+        return image_pages
 
     async def _get_chapter_payload(
         self,

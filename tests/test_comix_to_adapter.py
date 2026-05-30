@@ -10,6 +10,7 @@ from comix_dl.core.errors import BrowserTimeoutError, Http403Error, RemoteApiErr
 from comix_dl.core.models import (
     ChapterImages,
     ChapterInfo,
+    ChapterPage,
     SearchResult,
     SeriesInfo,
 )
@@ -390,6 +391,43 @@ class TestGetChapterImages:
         assert result.image_urls[0] == "https://cdn.example.com/chapter/img1.webp"
         assert result.chapter_label == "Chapter 5 - The Beginning"
 
+    async def test_preserves_scrambled_page_metadata(self, mock_browser: AsyncMock) -> None:
+        mock_browser.get_json.return_value = {
+            "result": {
+                "number": 14,
+                "name": "SWALLOW HOLLOW",
+                "pages": {
+                    "baseUrl": "https://static.comix.to/c0db/i/b/d4/",
+                    "items": [
+                        {"url": "plain.webp", "width": 800, "height": 1200},
+                        {"url": "scrambled.webp", "width": 968, "height": 1378, "s": 1},
+                    ],
+                },
+            },
+        }
+
+        result = await _adapter().get_chapter_images(mock_browser, 12345)
+
+        assert result is not None
+        assert result.image_urls == [
+            "https://static.comix.to/c0db/i/b/d4/plain.webp",
+            "https://static.comix.to/c0db/si/b/d4/scrambled.webp",
+        ]
+        assert result.pages == [
+            ChapterPage(
+                url="https://static.comix.to/c0db/i/b/d4/plain.webp",
+                width=800,
+                height=1200,
+                scrambled=False,
+            ),
+            ChapterPage(
+                url="https://static.comix.to/c0db/si/b/d4/scrambled.webp",
+                width=968,
+                height=1378,
+                scrambled=True,
+            ),
+        ]
+
     async def test_normalizes_chapter_label_number(self, mock_browser: AsyncMock) -> None:
         mock_browser.get_json.return_value = {
             "result": {
@@ -591,6 +629,10 @@ class TestDataClasses:
     def test_chapter_images(self) -> None:
         ci = ChapterImages(title="Ch 1", chapter_label="Chapter 1", image_urls=["a", "b"])
         assert len(ci.image_urls) == 2
+        assert ci.pages == [
+            ChapterPage(url="a"),
+            ChapterPage(url="b"),
+        ]
 
     def test_series_info(self) -> None:
         si = SeriesInfo(

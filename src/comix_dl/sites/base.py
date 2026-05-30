@@ -92,6 +92,22 @@ class Engine(Protocol):
         """
         ...
 
+    async def get_scrambled_image_bytes(
+        self,
+        url: str,
+        *,
+        width: int | None = None,
+        height: int | None = None,
+        referer: str | None = None,
+    ) -> bytes:
+        """Render a site-scrambled image URL into normal image bytes.
+
+        Engines without a browser-backed canvas may raise
+        ``NotImplementedError``. The current CDP engine implements this
+        for comix.to by importing the reader's own secure image module.
+        """
+        ...
+
     async def post_json(self, url: str, payload: dict[str, object]) -> dict[str, object]:
         """POST *payload* as JSON to *url* and return the JSON response."""
         ...
