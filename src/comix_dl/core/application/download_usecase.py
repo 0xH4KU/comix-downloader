@@ -46,7 +46,7 @@ DownloadEventKind = Literal[
 DownloadEventHandler = Callable[["DownloadChapterEvent"], None]
 ShutdownCheck = Callable[[], bool]
 Notifier = Callable[[str, str], None]
-DownloadIssueKind = Literal["missing_images", "failed", "partial", "conversion_failed"]
+DownloadIssueKind = Literal["missing_images", "failed", "partial", "conversion_failed", "not_started"]
 
 
 @dataclass
@@ -267,10 +267,24 @@ async def download_chapters(
 
     async def _run_one(chapter: ChapterInfo) -> _ChapterOutcome | None:
         if should_stop():
-            return None
+            return _ChapterOutcome(
+                status="failed",
+                issue=DownloadIssue(
+                    chapter_title=chapter.title,
+                    kind="not_started",
+                    message="not started because shutdown was requested",
+                ),
+            )
         async with sem:
             if should_stop():
-                return None
+                return _ChapterOutcome(
+                    status="failed",
+                    issue=DownloadIssue(
+                        chapter_title=chapter.title,
+                        kind="not_started",
+                        message="not started because shutdown was requested",
+                    ),
+                )
             outcome = await _process_one_chapter(
                 chapter,
                 browser=browser,

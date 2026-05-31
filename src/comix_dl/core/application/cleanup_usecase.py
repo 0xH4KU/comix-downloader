@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import shutil
+import zipfile
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 from comix_dl.core.downloader import sanitize_dirname
 
-if TYPE_CHECKING:
-    from pathlib import Path
+_SUPPORTED_CONVERTED_IMAGE_EXTENSIONS = frozenset({"png", "jpg", "jpeg", "gif", "bmp", "webp", "avif"})
 
 
 @dataclass
@@ -46,6 +46,28 @@ class CleanupResult:
 
     removed_count: int
     failed: list[tuple[Path, str]]
+
+
+def _is_valid_converted_output(path: Path) -> bool:
+    """Return whether a converted PDF/CBZ artifact is safe enough for cleanup gating."""
+    try:
+        suffix = path.suffix.lower()
+        if suffix == ".pdf":
+            with path.open("rb") as fh:
+                return fh.read(4) == b"%PDF" and path.stat().st_size > 4
+        if suffix == ".cbz":
+            with zipfile.ZipFile(path) as zf:
+                image_names = [
+                    name
+                    for name in zf.namelist()
+                    if Path(name).suffix.lstrip(".").lower() in _SUPPORTED_CONVERTED_IMAGE_EXTENSIONS
+                ]
+                if not image_names:
+                    return False
+                return zf.testzip() is None
+    except (OSError, zipfile.BadZipFile):
+        return False
+    return False
 
 
 def list_downloaded_series(output_dir: Path) -> list[DownloadedSeries]:
@@ -101,10 +123,11 @@ def build_cleanup_plan(output_dir: Path, *, series_title: str | None = None) -> 
             if not chapter_dir.is_dir():
                 continue
 
-            has_output = (
-                (chapter_dir.parent / f"{chapter_dir.name}.pdf").exists()
-                or (chapter_dir.parent / f"{chapter_dir.name}.cbz").exists()
+            outputs = (
+                chapter_dir.parent / f"{chapter_dir.name}.pdf",
+                chapter_dir.parent / f"{chapter_dir.name}.cbz",
             )
+            has_output = any(path.exists() and _is_valid_converted_output(path) for path in outputs)
             if not has_output or not (chapter_dir / ".complete").exists():
                 continue
 

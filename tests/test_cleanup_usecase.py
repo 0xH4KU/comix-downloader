@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import zipfile
 from typing import TYPE_CHECKING
 
 from comix_dl.core.application.cleanup_usecase import apply_cleanup_plan, build_cleanup_plan, list_downloaded_series
@@ -13,6 +14,15 @@ if TYPE_CHECKING:
 def _write_text(path: Path, content: str = "data") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def _write_valid_pdf(path: Path) -> None:
+    path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+
+def _write_valid_cbz(path: Path) -> None:
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("001.jpg", b"\xff\xd8\xff\xe0")
 
 
 class TestListDownloadedSeries:
@@ -39,7 +49,7 @@ class TestBuildCleanupPlan:
         kept_dir = tmp_path / "Series A" / "Chapter 1"
         kept_dir.mkdir(parents=True)
         (kept_dir / ".complete").touch()
-        (kept_dir.parent / "Chapter 1.pdf").write_bytes(b"pdf")
+        _write_valid_pdf(kept_dir.parent / "Chapter 1.pdf")
         (kept_dir / "001.jpg").write_bytes(b"image-data")
 
         ignored_dir = tmp_path / "Series A" / "Chapter 2"
@@ -52,16 +62,39 @@ class TestBuildCleanupPlan:
         assert plan.candidates[0].size_bytes == len(b"image-data")
         assert plan.total_size_bytes == len(b"image-data")
 
+    def test_ignores_complete_chapter_when_converted_output_is_invalid(self, tmp_path: Path) -> None:
+        chapter_dir = tmp_path / "Series A" / "Chapter 1"
+        chapter_dir.mkdir(parents=True)
+        (chapter_dir / ".complete").touch()
+        (chapter_dir / "001.jpg").write_bytes(b"image-data")
+        (chapter_dir.parent / "Chapter 1.pdf").write_bytes(b"not-a-pdf")
+
+        plan = build_cleanup_plan(tmp_path)
+
+        assert plan.candidates == []
+
+    def test_ignores_complete_chapter_when_cbz_contains_no_images(self, tmp_path: Path) -> None:
+        chapter_dir = tmp_path / "Series A" / "Chapter 1"
+        chapter_dir.mkdir(parents=True)
+        (chapter_dir / ".complete").touch()
+        (chapter_dir / "001.jpg").write_bytes(b"image-data")
+        with zipfile.ZipFile(chapter_dir.parent / "Chapter 1.cbz", "w") as zf:
+            zf.writestr("readme.txt", "not an image")
+
+        plan = build_cleanup_plan(tmp_path)
+
+        assert plan.candidates == []
+
     def test_can_scope_cleanup_to_one_series(self, tmp_path: Path) -> None:
         scoped_dir = tmp_path / "Series - Special" / "Chapter 1"
         scoped_dir.mkdir(parents=True)
         (scoped_dir / ".complete").touch()
-        (scoped_dir.parent / "Chapter 1.cbz").write_bytes(b"archive")
+        _write_valid_cbz(scoped_dir.parent / "Chapter 1.cbz")
 
         other_dir = tmp_path / "Series B" / "Chapter 2"
         other_dir.mkdir(parents=True)
         (other_dir / ".complete").touch()
-        (other_dir.parent / "Chapter 2.pdf").write_bytes(b"archive")
+        _write_valid_pdf(other_dir.parent / "Chapter 2.pdf")
 
         plan = build_cleanup_plan(tmp_path, series_title="Series: Special")
 
@@ -73,7 +106,7 @@ class TestApplyCleanupPlan:
         chapter_dir = tmp_path / "Series A" / "Chapter 1"
         chapter_dir.mkdir(parents=True)
         (chapter_dir / ".complete").touch()
-        (chapter_dir.parent / "Chapter 1.pdf").write_bytes(b"pdf")
+        _write_valid_pdf(chapter_dir.parent / "Chapter 1.pdf")
         _write_text(chapter_dir / "001.jpg", "image")
 
         plan = build_cleanup_plan(tmp_path)

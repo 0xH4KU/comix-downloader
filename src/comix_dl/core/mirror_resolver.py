@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from comix_dl.core.config import validate_public_https_url
 from comix_dl.core.errors import ConfigurationError
 from comix_dl.core.fileio import atomic_write_text
 
@@ -163,6 +164,10 @@ def select_initial_mirror(
         ConfigurationError: if ``adapter.mirrors`` is empty.
     """
     if override:
+        try:
+            validate_public_https_url(override, label="mirror override")
+        except ValueError as exc:
+            raise ConfigurationError(str(exc)) from exc
         return override
 
     if not adapter.mirrors:

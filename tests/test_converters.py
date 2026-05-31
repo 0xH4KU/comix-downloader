@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from comix_dl.core.config import AppConfig
+from comix_dl.core.config import AppConfig, ConvertConfig
 from comix_dl.core.converters import collect_images, convert, to_cbz, to_pdf
 from comix_dl.core.errors import ConversionError
 
@@ -117,6 +117,32 @@ class TestToCbz:
         assert result == out
         assert result.exists()
 
+    def test_replaces_existing_cbz_only_after_successful_validation(self, tmp_path: Path):
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=1)
+        out = tmp_path / "chapter.cbz"
+        out.write_bytes(b"existing-good-output")
+
+        with (
+            patch("zipfile.ZipFile.testzip", return_value="001.png"),
+            pytest.raises(ConversionError, match="CBZ validation failed"),
+        ):
+            to_cbz(img_dir, output_path=out)
+
+        assert out.read_bytes() == b"existing-good-output"
+
+    def test_cbz_validation_uses_configured_image_extensions(self, tmp_path: Path):
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        (img_dir / "001.bin").write_bytes(b"custom image payload")
+        config = AppConfig(convert=ConvertConfig(supported_image_formats=("bin",)))
+
+        result = to_cbz(img_dir, config=config)
+
+        with zipfile.ZipFile(result) as zf:
+            assert zf.namelist() == ["001.bin"]
+
     def test_no_compression(self, tmp_path: Path):
         """CBZ should use ZIP_STORED (no compression) per comic book standard."""
         img_dir = tmp_path / "chapter"
@@ -161,6 +187,24 @@ class TestToPdf:
         result = to_pdf(img_dir, output_path=out)
         assert result == out
         assert result.exists()
+
+    def test_replaces_existing_pdf_only_after_successful_validation(self, tmp_path: Path):
+        img_dir = tmp_path / "chapter"
+        img_dir.mkdir()
+        _create_test_images(img_dir, count=1)
+        out = tmp_path / "chapter.pdf"
+        out.write_bytes(b"%PDF-existing-output")
+
+        with (
+            patch(
+                "comix_dl.core.converters._validate_pdf_output",
+                side_effect=ConversionError("PDF validation failed"),
+            ),
+            pytest.raises(ConversionError, match="PDF validation failed"),
+        ):
+            to_pdf(img_dir, output_path=out)
+
+        assert out.read_bytes() == b"%PDF-existing-output"
 
     def test_empty_directory_raises(self, tmp_path: Path):
         img_dir = tmp_path / "empty"

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import os
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -13,6 +15,58 @@ from comix_dl.core.config import AppConfig, resolve_config
 from comix_dl.core.errors import ConversionError
 
 logger = logging.getLogger(__name__)
+
+
+def _temporary_output_path(output: Path) -> Path:
+    """Create a temporary output path in the destination directory."""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(
+        prefix=f".{output.name}.",
+        suffix=".tmp",
+        dir=output.parent,
+    )
+    os.close(fd)
+    return Path(name)
+
+
+def _replace_output_atomically(temp_output: Path, output: Path) -> None:
+    """Atomically replace *output* with a validated temporary artifact."""
+    os.replace(temp_output, output)
+
+
+def _validate_cbz_output(path: Path, image_extensions: frozenset[str] | None = None) -> None:
+    """Raise ConversionError if *path* is not a readable CBZ archive."""
+    extensions = _get_image_extensions() if image_extensions is None else image_extensions
+    try:
+        with zipfile.ZipFile(path) as zf:
+            image_names = [
+                name for name in zf.namelist()
+                if Path(name).suffix.lstrip(".").lower() in extensions
+            ]
+            if not image_names:
+                raise ConversionError("CBZ validation failed: archive contains no images.")
+            bad_member = zf.testzip()
+            if bad_member is not None:
+                raise ConversionError(f"CBZ validation failed: corrupt member {bad_member}.")
+    except ConversionError:
+        raise
+    except Exception as exc:
+        raise ConversionError(f"CBZ validation failed: {exc}") from exc
+
+
+def _validate_pdf_output(path: Path) -> None:
+    """Raise ConversionError if *path* does not look like a readable PDF."""
+    try:
+        with path.open("rb") as fh:
+            header = fh.read(4)
+        if header != b"%PDF":
+            raise ConversionError("PDF validation failed: output does not start with %PDF.")
+        if path.stat().st_size <= 4:
+            raise ConversionError("PDF validation failed: output is empty.")
+    except ConversionError:
+        raise
+    except OSError as exc:
+        raise ConversionError(f"PDF validation failed: {exc}") from exc
 
 
 def _resolve_config(config: AppConfig | None = None) -> AppConfig:
@@ -61,9 +115,17 @@ def to_cbz(image_dir: Path, output_path: Path | None = None, config: AppConfig |
     out = output_path or (image_dir.parent / (image_dir.name + ".cbz"))
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_STORED) as zf:
-        for img in images:
-            zf.write(img, img.name)
+    temp_out = _temporary_output_path(out)
+    try:
+        with zipfile.ZipFile(temp_out, "w", compression=zipfile.ZIP_STORED) as zf:
+            for img in images:
+                zf.write(img, img.name)
+        _validate_cbz_output(temp_out, _get_image_extensions(config))
+        _replace_output_atomically(temp_out, out)
+    except Exception:
+        with contextlib.suppress(OSError):
+            temp_out.unlink()
+        raise
 
     logger.info("Created CBZ: %s (%d images)", out.name, len(images))
     return out
@@ -94,7 +156,15 @@ def to_pdf(image_dir: Path, output_path: Path | None = None, config: AppConfig |
     out.parent.mkdir(parents=True, exist_ok=True)
 
     dpi = cfg.convert.pdf_dpi
-    _build_pdf_batched(images, out, dpi, batch_size=_get_pdf_batch_size(cfg))
+    temp_out = _temporary_output_path(out)
+    try:
+        _build_pdf_batched(images, temp_out, dpi, batch_size=_get_pdf_batch_size(cfg))
+        _validate_pdf_output(temp_out)
+        _replace_output_atomically(temp_out, out)
+    except Exception:
+        with contextlib.suppress(OSError):
+            temp_out.unlink()
+        raise
 
     logger.info("Created PDF: %s (%d pages)", out.name, len(images))
     return out

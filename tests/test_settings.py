@@ -151,6 +151,20 @@ class TestLoadSettings:
         assert s.download_delay is True
         assert s.optimize_images is True
 
+    def test_invalid_integer_field_preserves_other_valid_settings(self, tmp_path: Path):
+        fake_file = tmp_path / "settings.json"
+        fake_file.write_text(json.dumps({
+            "version": 2,
+            "output_dir": "/keep/me",
+            "default_format": "cbz",
+            "max_retries": "oops",
+        }))
+        with patch("comix_dl.core.settings._SETTINGS_FILE", fake_file):
+            s = load_settings()
+        assert s.output_dir == "/keep/me"
+        assert s.default_format == "cbz"
+        assert s.max_retries == 3
+
 
 class TestSaveSettings:
     def test_save_creates_file(self, tmp_path: Path):

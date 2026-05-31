@@ -185,7 +185,7 @@ def _describe_api_error(exc: Exception, *, action: str) -> str:
     return f"{action} failed: {exc}"
 
 
-def _int_or_none(value: object) -> int | None:
+def _coerce_positive_int(value: object) -> int | None:
     """Return a positive integer value when the API supplied one."""
     if isinstance(value, bool):
         return None
@@ -196,6 +196,18 @@ def _int_or_none(value: object) -> int | None:
     if isinstance(value, str) and value.isdigit():
         parsed = int(value)
         return parsed if parsed > 0 else None
+    return None
+
+
+def _coerce_api_status(value: object) -> int | None:
+    """Best-effort integer coercion for remote API status fields."""
+    if isinstance(value, bool):
+        return None
+    try:
+        if isinstance(value, (int, float, str)):
+            return int(value)
+    except (TypeError, ValueError):
+        return None
     return None
 
 
@@ -489,21 +501,24 @@ class ComixToAdapter:
             try:
                 resp = await engine.get_json(api_url)
             except Exception as exc:
-                logger.error(
-                    "%s",
-                    _describe_api_error(exc, action=f"Fetch chapter list page {page} for '{hash_id}'"),
-                )
-                break
+                message = _describe_api_error(exc, action=f"Fetch chapter list page {page} for '{hash_id}'")
+                logger.error("%s", message)
+                raise RemoteApiError(message) from exc
 
             result_obj = resp.get("result", resp)
             api_status = resp.get("status")
-            if isinstance(api_status, (int, float, str)) and str(api_status).isdigit() and int(api_status) >= 400:
-                logger.error(
-                    "Chapter listing returned API status %s for '%s' (message: %s). "
-                    "Request signing may have failed.",
-                    api_status, hash_id, resp.get("message", "unknown"),
-                )
-                break
+            if api_status is not None:
+                status_code = _coerce_api_status(api_status)
+                if status_code is None:
+                    raise RemoteApiError(
+                        f"Fetch chapter list page {page} for '{hash_id}' failed: "
+                        f"invalid API status {api_status!r}.",
+                    )
+                if status_code >= 400:
+                    raise RemoteApiError(
+                        f"Chapter listing returned API status {api_status} for '{hash_id}' "
+                        f"(message: {resp.get('message', 'unknown')}). Request signing may have failed.",
+                    )
             items = result_obj.get("items", []) if isinstance(result_obj, dict) else []
             if not isinstance(items, list) or not items:
                 break
@@ -514,10 +529,20 @@ class ComixToAdapter:
 
         all_chapters.sort(key=lambda c: c.number_sort_key)
 
-        # Fill missing image counts before dedup so dedup is purely sync.
-        missing = [ch for ch in all_chapters if ch.image_count == 0]
+        # Fill missing image counts only for duplicate-number groups where
+        # image_count affects dedup choice. Unique chapters can stay lazy.
+        by_number: dict[str, list[ChapterInfo]] = defaultdict(list)
+        for ch in all_chapters:
+            by_number[ch.number].append(ch)
+        missing = [
+            ch
+            for number_group in by_number.values()
+            if len(number_group) > 1
+            for ch in number_group
+            if ch.image_count == 0
+        ]
         if missing:
-            logger.info("Fetching image counts for %d chapter(s)…", len(missing))
+            logger.info("Fetching image counts for %d duplicate chapter candidate(s)…", len(missing))
             count_sem = asyncio.Semaphore(10)
 
             async def _fetch_count(ch: ChapterInfo) -> None:
@@ -537,7 +562,7 @@ class ComixToAdapter:
             if not isinstance(item, dict):
                 continue
             raw_id = item.get("id", item.get("chapter_id", 0))
-            chapter_id = int(raw_id) if isinstance(raw_id, (int, float, str)) else 0
+            chapter_id = _coerce_positive_int(raw_id) or 0
             raw_num = item.get("number", 0)
             number = normalize_chapter_number(raw_num)
             name = str(item.get("name", "") or "")
@@ -728,8 +753,8 @@ class ComixToAdapter:
                         image_base = re.sub(r"/i/(?=[bh])", "/si/", image_base)
                     image_pages.append(ChapterPage(
                         url=urljoin(image_base, raw_url),
-                        width=_int_or_none(item.get("width")),
-                        height=_int_or_none(item.get("height")),
+                        width=_coerce_positive_int(item.get("width")),
+                        height=_coerce_positive_int(item.get("height")),
                         scrambled=scrambled,
                     ))
             return image_pages

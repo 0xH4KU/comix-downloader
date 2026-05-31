@@ -341,8 +341,11 @@ class Downloader:
             try:
                 data = await self._fetch_image_bytes(image, referer=referer)
 
-                # Determine extension from URL or content
-                ext = self._guess_extension(url, data)
+                ext = self._detect_image_extension(data)
+                if ext is None:
+                    raise ValueError(
+                        f"Response for {filename} from {url} is not a supported image."
+                    )
                 self._validate_image_bytes(data, filename=f"{filename}{ext}")
                 filepath = output_dir / f"{filename}{ext}"
                 atomic_write_bytes(filepath, data, sync=False)
@@ -394,6 +397,10 @@ class Downloader:
     @staticmethod
     def _guess_extension(url: str, data: bytes) -> str:
         """Determine image file extension from URL or magic bytes."""
+        detected = Downloader._detect_image_extension(data)
+        if detected is not None:
+            return detected
+
         # Try URL first
         url_lower = url.lower().split("?")[0]
         url_ext = next(
@@ -405,7 +412,11 @@ class Downloader:
             None,
         )
 
-        # Try magic bytes
+        return url_ext or ".jpg"  # default fallback for legacy callers
+
+    @staticmethod
+    def _detect_image_extension(data: bytes) -> str | None:
+        """Return the supported image extension indicated by magic bytes."""
         if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
             return ".webp"
         if data[:8] == b"\x89PNG\r\n\x1a\n":
@@ -418,8 +429,7 @@ class Downloader:
             return ".avif"
         if data[:2] == b"BM":
             return ".bmp"
-
-        return url_ext or ".jpg"  # default fallback
+        return None
 
     @staticmethod
     def _is_valid_image_file(path: Path) -> bool:

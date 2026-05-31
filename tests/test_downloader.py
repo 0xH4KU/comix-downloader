@@ -253,6 +253,39 @@ class TestDownloadChapter:
         images = [f for f in result.chapter_dir.iterdir() if f.suffix == ".jpg"]
         assert len(images) == 1
 
+    async def test_invalid_image_response_is_failed_and_not_saved(self, tmp_path: Path, mock_browser: AsyncMock):
+        """HTTP 200 HTML/error bodies must not be persisted as successful images."""
+        mock_browser.get_bytes.return_value = b"<html><title>Just a moment...</title></html>"
+
+        dl = _make_downloader(mock_browser, tmp_path, image_delay=0, max_retries=0)
+        result = await dl.download_chapter(
+            ["https://cdn.com/1.jpg"],
+            "Test Manga",
+            "Chapter 1",
+        )
+
+        assert result.status == "failed"
+        assert result.failed == 1
+        assert result.failed_files == ("001",)
+        assert not (result.chapter_dir / ".complete").exists()
+        assert not (result.chapter_dir / "001.jpg").exists()
+        state = json.loads((result.chapter_dir / "chapter.state.json").read_text(encoding="utf-8"))
+        assert "not a supported image" in state["failed_pages"][0]["error"]
+
+    async def test_extension_prefers_magic_bytes_over_url_suffix(self, tmp_path: Path, mock_browser: AsyncMock):
+        mock_browser.get_bytes.return_value = _valid_image_bytes("PNG")
+
+        dl = _make_downloader(mock_browser, tmp_path, image_delay=0, max_retries=0)
+        result = await dl.download_chapter(
+            ["https://cdn.com/1.jpg"],
+            "Test Manga",
+            "Chapter 1",
+        )
+
+        assert result.status == "complete"
+        assert (result.chapter_dir / "001.png").exists()
+        assert not (result.chapter_dir / "001.jpg").exists()
+
     async def test_resume_skips_existing_images(self, tmp_path: Path, mock_browser: AsyncMock):
         """If image file already exists, it should be skipped."""
         mock_browser.get_bytes.return_value = _valid_image_bytes("JPEG")
