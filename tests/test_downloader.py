@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from PIL import Image
 
 from comix_dl.core.config import AppConfig
 from comix_dl.core.downloader import (
@@ -17,6 +19,7 @@ from comix_dl.core.downloader import (
     sanitize_dirname,
 )
 from comix_dl.core.errors import BrowserTimeoutError, PagePoolUnavailableError, PartialDownloadError
+from comix_dl.core.models import ChapterPage
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -27,6 +30,16 @@ def _make_downloader(mock_browser: AsyncMock, output_dir: Path, **download_overr
     for name, value in download_overrides.items():
         setattr(config.download, name, value)
     return Downloader(mock_browser, output_dir=output_dir, config=config)
+
+
+def _valid_image_bytes(fmt: str = "JPEG") -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", (2, 2), color=(255, 255, 255)).save(buffer, format=fmt)
+    return buffer.getvalue()
+
+
+def _truncated_webp_bytes() -> bytes:
+    return b"RIFF" + (1_016_270).to_bytes(4, "little") + b"WEBPVP8 " + b"\x00" * 64
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +99,10 @@ class TestGuessExtension:
     def test_url_with_query_params(self):
         assert Downloader._guess_extension("https://cdn.com/img.png?token=abc", b"") == ".png"
 
+    def test_magic_bytes_win_when_url_extension_is_wrong(self):
+        data = b"\x89PNG\r\n\x1a\n"
+        assert Downloader._guess_extension("https://cdn.com/img.webp", data) == ".png"
+
     def test_webp_from_magic_bytes(self):
         data = b"RIFF\x00\x00\x00\x00WEBP"
         assert Downloader._guess_extension("https://cdn.com/unknown", data) == ".webp"
@@ -116,7 +133,7 @@ class TestGuessExtension:
 class TestImageValidation:
     def test_valid_jpeg_detected(self, tmp_path: Path):
         path = tmp_path / "001.jpg"
-        path.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 10)
+        path.write_bytes(_valid_image_bytes("JPEG"))
         assert Downloader._is_valid_image_file(path) is True
 
     def test_corrupt_jpeg_rejected(self, tmp_path: Path):
@@ -124,12 +141,17 @@ class TestImageValidation:
         path.write_bytes(b"not-a-jpeg")
         assert Downloader._is_valid_image_file(path) is False
 
+    def test_truncated_webp_rejected(self, tmp_path: Path):
+        path = tmp_path / "001.webp"
+        path.write_bytes(_truncated_webp_bytes())
+        assert Downloader._is_valid_image_file(path) is False
+
 
 class TestExistingDownloadIndex:
     def test_indexes_page_files_once(self, tmp_path: Path):
         chapter_dir = tmp_path / "chapter"
         chapter_dir.mkdir()
-        (chapter_dir / "001.jpg").write_bytes(b"\xff\xd8")
+        (chapter_dir / "001.jpg").write_bytes(_valid_image_bytes("JPEG"))
         (chapter_dir / "001.webp").write_bytes(b"RIFFxxxxWEBP")
         (chapter_dir / "002.png").write_bytes(b"\x89PNG\r\n\x1a\n")
         (chapter_dir / ".complete").touch()
@@ -215,8 +237,7 @@ class TestDownloadChapter:
 
     async def test_successful_download_creates_marker(self, tmp_path: Path, mock_browser: AsyncMock):
         """Successful download should create .complete marker."""
-        # Make get_bytes return valid JPEG data
-        mock_browser.get_bytes.return_value = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+        mock_browser.get_bytes.return_value = _valid_image_bytes("JPEG")
 
         dl = _make_downloader(mock_browser, tmp_path, image_delay=0, max_retries=0)
         result = await dl.download_chapter(
@@ -252,7 +273,7 @@ class TestDownloadChapter:
         assert "not a supported image" in state["failed_pages"][0]["error"]
 
     async def test_extension_prefers_magic_bytes_over_url_suffix(self, tmp_path: Path, mock_browser: AsyncMock):
-        mock_browser.get_bytes.return_value = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+        mock_browser.get_bytes.return_value = _valid_image_bytes("PNG")
 
         dl = _make_downloader(mock_browser, tmp_path, image_delay=0, max_retries=0)
         result = await dl.download_chapter(
@@ -267,14 +288,14 @@ class TestDownloadChapter:
 
     async def test_resume_skips_existing_images(self, tmp_path: Path, mock_browser: AsyncMock):
         """If image file already exists, it should be skipped."""
-        mock_browser.get_bytes.return_value = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+        mock_browser.get_bytes.return_value = _valid_image_bytes("JPEG")
 
         dl = _make_downloader(mock_browser, tmp_path, image_delay=0, max_retries=0)
         chapter_dir = tmp_path / "Test Manga" / "Chapter 1"
         chapter_dir.mkdir(parents=True)
 
         # Pre-create first image
-        (chapter_dir / "001.jpg").write_bytes(b"\xff\xd8" + b"\x00" * 50)
+        (chapter_dir / "001.jpg").write_bytes(_valid_image_bytes("JPEG"))
 
         result = await dl.download_chapter(
             ["https://cdn.com/1.jpg", "https://cdn.com/2.jpg"],
@@ -287,7 +308,7 @@ class TestDownloadChapter:
         assert mock_browser.get_bytes.call_count == 1
 
     async def test_resume_redownloads_corrupt_existing_image(self, tmp_path: Path, mock_browser: AsyncMock):
-        mock_browser.get_bytes.return_value = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+        mock_browser.get_bytes.return_value = _valid_image_bytes("JPEG")
 
         dl = _make_downloader(mock_browser, tmp_path, image_delay=0, max_retries=0)
         chapter_dir = tmp_path / "Test Manga" / "Chapter 1"
@@ -307,7 +328,7 @@ class TestDownloadChapter:
     async def test_resume_removes_invalid_stale_extension_before_redownload(
         self, tmp_path: Path, mock_browser: AsyncMock,
     ):
-        mock_browser.get_bytes.return_value = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+        mock_browser.get_bytes.return_value = _valid_image_bytes("JPEG")
 
         dl = _make_downloader(mock_browser, tmp_path, image_delay=0, max_retries=0)
         chapter_dir = tmp_path / "Test Manga" / "Chapter 1"
@@ -346,7 +367,7 @@ class TestDownloadChapter:
     async def test_partial_rerun_recovers_missing_page_and_clears_state(
         self, tmp_path: Path, mock_browser: AsyncMock,
     ):
-        valid_jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+        valid_jpeg = _valid_image_bytes("JPEG")
         dl = _make_downloader(
             mock_browser,
             tmp_path,
@@ -382,7 +403,7 @@ class TestDownloadChapter:
         assert (second.chapter_dir / "002.jpg").exists()
 
     async def test_resume_recovers_from_leftover_temp_files(self, tmp_path: Path, mock_browser: AsyncMock):
-        mock_browser.get_bytes.return_value = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+        mock_browser.get_bytes.return_value = _valid_image_bytes("JPEG")
 
         dl = _make_downloader(mock_browser, tmp_path, image_delay=0, max_retries=0)
         chapter_dir = tmp_path / "Test Manga" / "Chapter 1"
@@ -402,6 +423,33 @@ class TestDownloadChapter:
         assert not (chapter_dir / "001.jpg.part").exists()
         assert not (chapter_dir / ".001.jpg.stale.tmp").exists()
 
+    async def test_scrambled_page_uses_canvas_renderer(self, tmp_path: Path, mock_browser: AsyncMock):
+        mock_browser.get_scrambled_image_bytes = AsyncMock(return_value=_valid_image_bytes("PNG"))
+        dl = _make_downloader(mock_browser, tmp_path, image_delay=0, max_retries=0)
+        page = ChapterPage(
+            url="https://static.comix.to/c0db/si/b/page-009.webp",
+            width=968,
+            height=1378,
+            scrambled=True,
+        )
+
+        result = await dl.download_chapter(
+            [page],
+            "Test Manga",
+            "Chapter 1",
+            referer="https://comix.to/title/lzdj-omori",
+        )
+
+        assert result.status == "complete"
+        mock_browser.get_bytes.assert_not_awaited()
+        mock_browser.get_scrambled_image_bytes.assert_awaited_once_with(
+            page.url,
+            width=968,
+            height=1378,
+            referer="https://comix.to/title/lzdj-omori",
+        )
+        assert (result.chapter_dir / "001.png").exists()
+
 
 # ---------------------------------------------------------------------------
 # _download_image retry logic
@@ -417,7 +465,7 @@ class TestDownloadImageRetry:
             call_count += 1
             if call_count <= 2:
                 raise Exception("Temporary failure")
-            return b"\xff\xd8\xff\xe0" + b"\x00" * 100
+            return _valid_image_bytes("JPEG")
 
         mock_browser.get_bytes = mock_get_bytes
 
@@ -447,6 +495,24 @@ class TestDownloadImageRetry:
         assert error == "Persistent failure"
         # 1 initial + 2 retries = 3 calls
         assert mock_browser.get_bytes.call_count == 3
+
+    async def test_invalid_image_bytes_are_retried(self, tmp_path: Path, mock_browser: AsyncMock):
+        mock_browser.get_bytes.side_effect = [
+            _truncated_webp_bytes(),
+            _valid_image_bytes("WEBP"),
+        ]
+
+        dl = _make_downloader(mock_browser, tmp_path, max_retries=1, retry_delay=0)
+        success, error = await dl._download_image(
+            "https://cdn.com/test.webp",
+            tmp_path,
+            "001",
+        )
+
+        assert success is True
+        assert error is None
+        assert mock_browser.get_bytes.call_count == 2
+        assert Downloader._is_valid_image_file(tmp_path / "001.webp") is True
 
     async def test_timeout_error_is_contextualized(self, tmp_path: Path, mock_browser: AsyncMock):
         mock_browser.get_bytes.side_effect = BrowserTimeoutError(

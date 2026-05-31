@@ -217,11 +217,13 @@ Checks Python version, dependencies, Chrome availability, and output directory.
 
 2. **CF Clearance** — on first run, if a Cloudflare challenge appears, Chrome moves to the foreground for the user to solve it once. The Chrome profile is persisted at `~/.config/comix-dl/chrome-profile/`, so subsequent runs pass automatically. An `asyncio.Lock` prevents concurrent tasks from triggering duplicate CF checks. If a later API/image request starts returning `HTTP 403` or a challenge page reappears, comix-dl drops its cached clearance state, reacquires clearance once, and retries the request once before surfacing a clear failure.
 
-3. **REST API** — all data comes from comix.to's v2 REST API:
-   - `GET /api/v2/manga?keyword=...` — search
-   - `GET /api/v2/manga/{hash_id}` — manga info
-   - `GET /api/v2/manga/{hash_id}/chapters` — chapter list (requires request signing; handled transparently)
-   - `GET /api/v2/chapters/{chapter_id}` — chapter images
+3. **REST API** — all data comes from comix.to's v1 REST API:
+   - `GET /api/v1/manga?keyword=...` — search
+   - `GET /api/v1/manga/{hid}` — manga info
+   - `GET /api/v1/manga/{hid}/chapters` — chapter list (protected endpoint)
+   - `GET /api/v1/chapters/{chapter_id}` — chapter images
+
+   Search and detail endpoints are plain JSON. Chapter endpoints use the live frontend API client inside the Chrome page context so comix.to's own signing and encrypted-response decoding stay in sync with site deployments.
 
 4. **Smart Dedup** — the API often returns duplicate entries for the same chapter (from different uploaders). comix-dl groups chapters by number, language, and subtitle, then keeps the same-language duplicate with the most images. Chapters with the same number but different subtitles (e.g. "Chapter 0 - Volume 11" vs "Chapter 0 - Volume 12") or different languages are correctly treated as distinct content.
 

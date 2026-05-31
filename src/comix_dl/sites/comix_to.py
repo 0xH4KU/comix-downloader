@@ -1,16 +1,16 @@
 """comix.to site adapter.
 
 Implements the :class:`~comix_dl.sites.base.SiteAdapter` protocol against
-the comix.to v2 REST API. URL handling, JSON schema parsing, and
+the comix.to v1 REST API. URL handling, JSON schema parsing, and
 chapter deduplication rules are all comix.to-specific and live here so
 the framework code stays site-agnostic.
 
 Endpoints used:
 
-- ``GET /api/v2/manga?keyword=...`` — search
-- ``GET /api/v2/manga/{slug_or_hash}`` — series detail
-- ``GET /api/v2/manga/{hash_id}/chapters`` — paginated chapter list
-- ``GET /api/v2/chapters/{chapter_id}`` — chapter image URLs
+- ``GET /api/v1/manga?keyword=...`` - search
+- ``GET /api/v1/manga/{hid}`` - series detail
+- ``GET /api/v1/manga/{hid}/chapters`` - paginated chapter list
+- ``GET /api/v1/chapters/{chapter_id}`` - chapter image URLs
 
 This module registers a singleton adapter instance with the
 framework registry at import time.
@@ -23,12 +23,13 @@ import logging
 import re
 from collections import defaultdict
 from typing import TYPE_CHECKING
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 from comix_dl.core.errors import BrowserTimeoutError, Http403Error, RemoteApiError
 from comix_dl.core.models import (
     ChapterImages,
     ChapterInfo,
+    ChapterPage,
     DedupDecision,
     SearchResult,
     SeriesInfo,
@@ -46,66 +47,127 @@ logger = logging.getLogger(__name__)
 _URL_HOST_PATTERN = re.compile(r"^(?:www\.)?comix\.to$", re.IGNORECASE)
 
 
-# JS IIFE registered with the engine after Cloudflare clearance. Each
-# page (main + pool) evaluates this once at install time:
-#
-#   1. If the comix.to signing function is not yet on this page, scan
-#      the loaded Next.js chunks for the API client bundle and pull
-#      out the obfuscated signing IIFE the site itself uses.
-#   2. eval the IIFE so window.__comixSign(method, path, options) is
-#      available on this page.
-#   3. Push a URL transformer onto window.__comixUrlTransformers that
-#      signs ``/chapters`` requests on every outbound fetch.
-#
-# Hardening of the IIFE extraction step (hash + disk cache + sanity
-# whitelist) is deferred to a follow-up patch (todo.md / "待討論"
-# section). Today: we either get a fresh IIFE on every page or fail
-# loudly with a clear error message.
-_SIGNING_TRANSFORMER_IIFE = """
+# JS IIFE registered with the engine after Cloudflare clearance. The
+# current comix.to frontend is a Vite app whose API helper owns both
+# request signing and encrypted-response decoding. Each browser page
+# imports same-origin frontend modules and dynamically selects the
+# export that looks like the API client, avoiding brittle dependency on
+# minified export names.
+_COMIX_API_CLIENT_IIFE = """
 (async function() {
     try {
-        if (typeof window.__comixSign !== 'function') {
-            const scripts = document.querySelectorAll('script[src*="_next/static/chunks"]');
+        window.__comixUrlTransformers = window.__comixUrlTransformers || [];
+
+        function __comixLooksLikeApiClient(value) {
+            return value
+                && typeof value === 'object'
+                && typeof value.get === 'function'
+                && typeof value.post === 'function';
+        }
+
+        window.__comixGetApiClient = window.__comixGetApiClient || async function() {
+            if (window.__comixApiClient) return window.__comixApiClient;
+
+            const scripts = Array.from(document.querySelectorAll('script[src]'));
+            const moduleUrls = [];
             for (const script of scripts) {
+                const src = script.getAttribute('src') || '';
+                if (src.includes('/assets/build/') && src.endsWith('.js')) {
+                    moduleUrls.push(new URL(src, window.location.href).href);
+                }
+            }
+
+            for (const moduleUrl of moduleUrls) {
                 try {
-                    const resp = await fetch(script.src);
-                    const text = await resp.text();
-                    if (!text.includes('baseUrl:"https://comix.to/api/v2/"')) continue;
-                    const classIdx = text.indexOf('class n extends Error{response');
-                    if (classIdx === -1) continue;
-                    const iifeStart = text.lastIndexOf('let i=', classIdx);
-                    if (iifeStart === -1) continue;
-                    const iifeEndIdx = text.substring(iifeStart, classIdx).lastIndexOf('}();');
-                    if (iifeEndIdx === -1) continue;
-                    const iife = text.substring(iifeStart, iifeStart + iifeEndIdx + 4);
-                    eval('window.__comixSign = ' + iife.substring('let i='.length));
-                    if (typeof window.__comixSign === 'function') break;
+                    const mod = await import(moduleUrl);
+                    for (const exported of Object.values(mod)) {
+                        if (__comixLooksLikeApiClient(exported)) {
+                            window.__comixApiClient = exported;
+                            return window.__comixApiClient;
+                        }
+                    }
                 } catch (e) { continue; }
             }
-        }
-        if (typeof window.__comixSign !== 'function') {
-            console.warn('[comix-dl] could not extract /chapters signing function; '
-                       + 'chapter listings may return HTTP 403.');
-            return;
-        }
-        window.__comixUrlTransformers = window.__comixUrlTransformers || [];
-        window.__comixUrlTransformers.push(function(method, url) {
-            if (!url.includes('/chapters')) return url;
-            try {
-                const u = new URL(url);
-                const path = u.pathname.replace(new RegExp("^/api/v2"), '');
-                const queryObj = {};
-                u.searchParams.forEach((v, k) => { queryObj[k] = isNaN(v) ? v : Number(v); });
-                const signed = window.__comixSign('GET', path, { query: queryObj });
-                const newUrl = new URL(u.origin + u.pathname);
-                for (const [k, v] of Object.entries(signed.query)) {
-                    newUrl.searchParams.set(k, String(v));
+
+            const mainScript = scripts.find((script) => {
+                const src = script.getAttribute('src') || '';
+                return src.includes('/assets/build/')
+                    && src.includes('/dist/main-')
+                    && src.endsWith('.js');
+            });
+            if (mainScript) {
+                try {
+                    const moduleUrl = new URL(mainScript.getAttribute('src'), window.location.href).href;
+                    const resp = await fetch(moduleUrl);
+                    const text = await resp.text();
+                    const envMatch = text.match(/from"\\.\\/(env-[^"]+\\.js)"/);
+                    if (envMatch) {
+                        const envUrl = new URL(envMatch[1], moduleUrl).href;
+                        const mod = await import(envUrl);
+                        for (const exported of Object.values(mod)) {
+                            if (__comixLooksLikeApiClient(exported)) {
+                                window.__comixApiClient = exported;
+                                return window.__comixApiClient;
+                            }
+                        }
+                    }
+                } catch (e) { /* fall through to fetch fallback */ }
+            }
+
+            return null;
+        };
+
+        window.__comixJsonRequest = async function(method, url, body) {
+            const u = new URL(url, window.location.origin);
+            if (u.origin !== window.location.origin || !u.pathname.startsWith('/api/v1/')) {
+                return { __handled: false };
+            }
+
+            const path = u.pathname.replace(/^\\/api\\/v1/, '') || '/';
+            const params = {};
+            u.searchParams.forEach((rawValue, key) => {
+                const numeric = rawValue !== '' ? Number(rawValue) : NaN;
+                const value = Number.isNaN(numeric) ? rawValue : numeric;
+                if (Object.prototype.hasOwnProperty.call(params, key)) {
+                    params[key] = Array.isArray(params[key])
+                        ? [...params[key], value]
+                        : [params[key], value];
+                } else {
+                    params[key] = value;
                 }
-                return newUrl.toString();
-            } catch (e) { return url; }
-        });
+            });
+
+            const api = await window.__comixGetApiClient();
+            if (!api) return { __handled: false };
+
+            const config = Object.keys(params).length ? { params } : undefined;
+            const upper = String(method || 'GET').toUpperCase();
+
+            try {
+                if (upper === 'GET') {
+                    return { __handled: true, data: await api.get(path, config) };
+                }
+                if (upper === 'POST') {
+                    return { __handled: true, data: await api.post(path, body, config) };
+                }
+                if (upper === 'PUT') {
+                    return { __handled: true, data: await api.put(path, body, config) };
+                }
+                if (upper === 'PATCH') {
+                    return { __handled: true, data: await api.patch(path, body, config) };
+                }
+                if (upper === 'DELETE') {
+                    return { __handled: true, data: await api.delete(path, config) };
+                }
+            } catch (e) {
+                const status = e && e.response && e.response.status;
+                if (status) throw new Error(`HTTP ${status}`);
+                throw e;
+            }
+            return { __handled: false };
+        };
     } catch (e) {
-        console.warn('[comix-dl] signing transformer install failed:', e);
+        console.warn('[comix-dl] comix.to API client hook install failed:', e);
     }
 })();
 """
@@ -123,8 +185,24 @@ def _describe_api_error(exc: Exception, *, action: str) -> str:
     return f"{action} failed: {exc}"
 
 
-def _coerce_int(value: object) -> int | None:
-    """Best-effort integer coercion for remote API scalar fields."""
+def _coerce_positive_int(value: object) -> int | None:
+    """Return a positive integer value when the API supplied one."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        return int(value) if value > 0 else None
+    if isinstance(value, str) and value.isdigit():
+        parsed = int(value)
+        return parsed if parsed > 0 else None
+    return None
+
+
+def _coerce_api_status(value: object) -> int | None:
+    """Best-effort integer coercion for remote API status fields."""
+    if isinstance(value, bool):
+        return None
     try:
         if isinstance(value, (int, float, str)):
             return int(value)
@@ -153,15 +231,15 @@ class ComixToAdapter:
     # -- Lifecycle hooks ----------------------------------------------------
 
     async def on_engine_ready(self, engine: Engine) -> None:
-        """Install the comix.to URL signing transformer.
+        """Install the comix.to frontend API-client request hook.
 
-        The transformer IIFE is replayed against every browser page
-        the engine creates (main and pool); that IIFE extracts the
-        site's own signing function from its Next.js chunks and
-        registers a URL transformer that signs ``/chapters`` requests
-        before they leave the page.
+        The hook IIFE is replayed against every browser page the
+        engine creates (main and pool). It imports the site's current
+        frontend modules and routes protected API JSON requests through
+        the same client the reader uses, preserving request signing and
+        encrypted-response decoding.
         """
-        engine.register_url_transformer(_SIGNING_TRANSFORMER_IIFE)
+        engine.register_url_transformer(_COMIX_API_CLIENT_IIFE)
 
     async def probe_alive(self, engine: Engine) -> bool:
         """Best-effort reachability probe used during mirror selection.
@@ -191,10 +269,11 @@ class ComixToAdapter:
         return bool(_URL_HOST_PATTERN.match(host))
 
     def parse_identifier(self, url_or_slug: str) -> str | None:
-        """Extract a canonical comix.to slug or hash_id from input.
+        """Extract a canonical comix.to hid from input.
 
-        Accepts either a full ``https://comix.to/manga/<slug>`` URL or
-        a bare slug / hash. Returns ``None`` for empty input or URLs
+        Accepts either a full ``https://comix.to/title/<hid>-...`` URL,
+        an older ``/manga/<slug>`` URL, or a bare slug / hid. Returns
+        ``None`` for empty input or URLs
         whose host does not match a comix.to mirror.
         """
         token = url_or_slug.strip()
@@ -208,12 +287,15 @@ class ComixToAdapter:
             host = parsed.hostname or ""
             if not _URL_HOST_PATTERN.match(host):
                 return None
-            parts = parsed.path.strip("/").split("/")
+            parts = [part for part in parsed.path.strip("/").split("/") if part]
+            if len(parts) >= 2 and parts[0].lower() == "title":
+                return parts[1].split("-", 1)[0] or None
             if len(parts) >= 2 and parts[0].lower() == "manga":
                 return parts[1] or None
             # Final path segment fallback (older URL shapes).
-            return token.rstrip("/").split("/")[-1] or None
-        # Bare slug or hash — accept verbatim.
+            tail = token.rstrip("/").split("/")[-1]
+            return tail or None
+        # Bare slug or hid - accept verbatim.
         return token
 
     # -- Content operations -------------------------------------------------
@@ -228,7 +310,7 @@ class ComixToAdapter:
         """Search comix.to for series matching *query*."""
         base = self.mirrors[0]
         api_url = (
-            f"{base}/api/v2/manga"
+            f"{base}/api/v1/manga"
             f"?keyword={quote(query)}"
             f"&order[relevance]=desc"
             f"&limit={limit}"
@@ -241,73 +323,90 @@ class ComixToAdapter:
             raise RemoteApiError(message) from exc
 
         results: list[SearchResult] = []
-        result_obj = resp.get("result", {})
+        result_obj = resp.get("result", resp)
         items = result_obj.get("items", []) if isinstance(result_obj, dict) else []
         for item in items:
             if not isinstance(item, dict):
                 continue
             title = item.get("title", "")
-            slug = item.get("slug", "")
-            hash_id = item.get("hash_id", "")
-            if title and hash_id:
-                series_url = f"{base}/manga/{slug or hash_id}"
+            hid = str(item.get("hid", "") or item.get("hash_id", "") or "")
+            url = str(item.get("url", "") or "")
+            slug = self._slug_from_title_url(url, hid)
+            if title and hid:
+                series_url = self._absolute_site_url(base, url) if url else f"{base}/title/{hid}"
                 results.append(SearchResult(
-                    title=title, url=series_url, slug=slug, hash_id=hash_id,
+                    title=str(title), url=series_url, slug=slug, hash_id=hid,
                 ))
         logger.info("Search '%s': %d results", query, len(results))
         return results
 
     async def get_series(self, engine: Engine, identifier: str) -> SeriesInfo:
-        """Resolve *identifier* (slug or hash_id) into a full SeriesInfo.
+        """Resolve *identifier* (slug or hid) into a full SeriesInfo.
 
-        Tries direct lookup first, falling back to keyword search if
-        the identifier is a slug not recognised by the manga endpoint.
+        The v1 API accepts the short ``hid`` directly. If the caller
+        supplied an old slug that no longer resolves, fall back to
+        search and use the matched result's hid.
         """
         base = self.mirrors[0]
-        # Direct lookup (works for both slug and hash_id targets).
         info_resp: dict[str, object] | None = None
         try:
-            info_resp = await engine.get_json(f"{base}/api/v2/manga/{identifier}")
+            info_resp = await engine.get_json(f"{base}/api/v1/manga/{identifier}")
         except Exception:
             logger.debug("Direct lookup failed for '%s', trying search fallback", identifier)
 
         data: dict[str, object] = {}
         if info_resp is not None:
-            raw = info_resp.get("result", {})
+            raw = info_resp.get("result", info_resp)
             if isinstance(raw, dict):
                 data = raw
 
-        hash_id = str(data.get("hash_id", "") or "")
+        hash_id = str(data.get("hid", "") or data.get("hash_id", "") or "")
         if not hash_id:
             # Fallback: search and match by slug.
             results = await self.search(engine, identifier, limit=10)
-            matched = next((r for r in results if r.slug == identifier), None)
-            if matched is None:
+            matched = next((
+                r for r in results
+                if r.hash_id == identifier or r.slug == identifier or r.slug.startswith(f"{identifier}-")
+            ), None)
+            if matched is not None:
+                try:
+                    info_resp = await engine.get_json(f"{base}/api/v1/manga/{matched.hash_id}")
+                except Exception as exc:
+                    raise RemoteApiError(
+                        _describe_api_error(exc, action=f"Fetch series info for '{matched.hash_id}'"),
+                    ) from exc
+            elif "-" in identifier:
+                prefix = identifier.split("-", 1)[0]
+                try:
+                    info_resp = await engine.get_json(f"{base}/api/v1/manga/{prefix}")
+                except Exception as exc:
+                    raise RemoteApiError(f"Could not find manga with identifier '{identifier}'") from exc
+            else:
                 raise RemoteApiError(f"Could not find manga with identifier '{identifier}'")
-            try:
-                info_resp = await engine.get_json(f"{base}/api/v2/manga/{matched.hash_id}")
-            except Exception as exc:
-                raise RemoteApiError(
-                    _describe_api_error(exc, action=f"Fetch series info for '{matched.hash_id}'"),
-                ) from exc
-            raw = info_resp.get("result", {}) if isinstance(info_resp, dict) else {}
+            raw = info_resp.get("result", info_resp) if isinstance(info_resp, dict) else {}
             data = raw if isinstance(raw, dict) else {}
-            hash_id = str(data.get("hash_id", "") or matched.hash_id)
+            hash_id = str(data.get("hid", "") or data.get("hash_id", "") or "")
+            if not hash_id and matched is not None:
+                hash_id = matched.hash_id
+            if not hash_id:
+                raise RemoteApiError(f"Could not find manga with identifier '{identifier}'")
 
         title = str(data.get("title", "") or hash_id)
-        slug = str(data.get("slug", "") or "")
         synopsis = str(data.get("synopsis", "") or data.get("description", "") or "")
+        authors = self._names_from_people(data.get("authors", []))
+        genres = self._titles_from_taxonomy(data.get("genres", []))
+        series_url = self._absolute_site_url(base, str(data.get("url", "") or "")) or f"{base}/title/{hash_id}"
 
         chapters, dedup_decisions = await self._fetch_chapters(engine, hash_id)
 
         return SeriesInfo(
             title=title,
-            authors=[],
-            genres=[],
+            authors=authors,
+            genres=genres,
             description=synopsis,
             chapters=chapters,
             dedup_decisions=dedup_decisions,
-            url=f"{base}/manga/{slug or hash_id}",
+            url=series_url,
             hash_id=hash_id,
         )
 
@@ -330,8 +429,8 @@ class ComixToAdapter:
 
         number = normalize_chapter_number(data.get("number", 0))
         name = str(data.get("name", "") or "")
-        images = data.get("images", [])
-        if not isinstance(images, list):
+        image_pages = self._extract_image_pages(data)
+        if image_pages is None:
             logger.warning("Invalid image payload for chapter %d", chapter_id)
             return None
 
@@ -339,18 +438,16 @@ class ComixToAdapter:
         if name:
             label += f" - {name}"
 
-        image_urls: list[str] = []
-        for img in images:
-            if not isinstance(img, dict):
-                continue
-            url = img.get("url")
-            if isinstance(url, str) and url:
-                image_urls.append(url)
-        if not image_urls:
+        if not image_pages:
             logger.warning("No images found for chapter %d", chapter_id)
             return None
 
-        return ChapterImages(title=label, chapter_label=label, image_urls=image_urls)
+        return ChapterImages(
+            title=label,
+            chapter_label=label,
+            image_urls=[page.url for page in image_pages],
+            pages=image_pages,
+        )
 
     # -- Site-specific dedup rules -----------------------------------------
 
@@ -400,7 +497,7 @@ class ComixToAdapter:
         all_chapters: list[ChapterInfo] = []
         page = 1
         while True:
-            api_url = f"{base}/api/v2/manga/{hash_id}/chapters?limit={limit}&page={page}"
+            api_url = f"{base}/api/v1/manga/{hash_id}/chapters?limit={limit}&page={page}"
             try:
                 resp = await engine.get_json(api_url)
             except Exception as exc:
@@ -408,10 +505,10 @@ class ComixToAdapter:
                 logger.error("%s", message)
                 raise RemoteApiError(message) from exc
 
-            result_obj = resp.get("result", {})
+            result_obj = resp.get("result", resp)
             api_status = resp.get("status")
             if api_status is not None:
-                status_code = _coerce_int(api_status)
+                status_code = _coerce_api_status(api_status)
                 if status_code is None:
                     raise RemoteApiError(
                         f"Fetch chapter list page {page} for '{hash_id}' failed: "
@@ -464,12 +561,13 @@ class ComixToAdapter:
         for item in items:
             if not isinstance(item, dict):
                 continue
-            chapter_id = _coerce_int(item.get("chapter_id", 0)) or 0
+            raw_id = item.get("id", item.get("chapter_id", 0))
+            chapter_id = _coerce_positive_int(raw_id) or 0
             raw_num = item.get("number", 0)
             number = normalize_chapter_number(raw_num)
             name = str(item.get("name", "") or "")
             lang = str(item.get("language", "en") or "en")
-            pages_count = item.get("pages_count", 0)
+            pages_count = item.get("pages_count", item.get("pagesCount", 0))
             if chapter_id:
                 label = f"Chapter {number}"
                 if name:
@@ -577,6 +675,111 @@ class ComixToAdapter:
         """Pick the chapter with the highest page count (tie-break by title length)."""
         return max(candidates, key=lambda ch: (ch.image_count, len(ch.title)))
 
+    @staticmethod
+    def _absolute_site_url(base: str, url: str) -> str:
+        if not url:
+            return ""
+        return urljoin(base.rstrip("/") + "/", url)
+
+    @staticmethod
+    def _slug_from_title_url(url: str, hid: str) -> str:
+        """Extract the human-readable title slug from a v1 title URL."""
+        if not url:
+            return hid
+        try:
+            tail = urlparse(url).path.strip("/").split("/")[-1]
+        except (TypeError, ValueError):
+            return hid
+        if hid and tail.startswith(f"{hid}-"):
+            return tail[len(hid) + 1:]
+        return tail or hid
+
+    @staticmethod
+    def _titles_from_taxonomy(raw_items: object) -> list[str]:
+        """Pull title/name strings from taxonomy objects such as genres."""
+        if not isinstance(raw_items, list):
+            return []
+        values: list[str] = []
+        for item in raw_items:
+            if isinstance(item, str) and item:
+                values.append(item)
+            elif isinstance(item, dict):
+                value = item.get("title") or item.get("name")
+                if isinstance(value, str) and value:
+                    values.append(value)
+        return values
+
+    @staticmethod
+    def _names_from_people(raw_items: object) -> list[str]:
+        """Pull display names from author/artist payloads when present."""
+        if not isinstance(raw_items, list):
+            return []
+        values: list[str] = []
+        for item in raw_items:
+            if isinstance(item, str) and item:
+                values.append(item)
+            elif isinstance(item, dict):
+                value = item.get("name") or item.get("title")
+                if isinstance(value, str) and value:
+                    values.append(value)
+        return values
+
+    @classmethod
+    def _extract_image_urls(cls, data: dict[str, object]) -> list[str] | None:
+        """Extract page image URLs from v1 and legacy chapter payloads."""
+        pages = cls._extract_image_pages(data)
+        if pages is None:
+            return None
+        return [page.url for page in pages]
+
+    @staticmethod
+    def _extract_image_pages(data: dict[str, object]) -> list[ChapterPage] | None:
+        """Extract page image metadata from v1 and legacy chapter payloads."""
+        pages = data.get("pages")
+        if isinstance(pages, dict):
+            base_url = str(pages.get("baseUrl", "") or "")
+            items = pages.get("items", [])
+            if not isinstance(items, list):
+                return None
+            image_pages: list[ChapterPage] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                raw_url = item.get("url")
+                if isinstance(raw_url, str) and raw_url:
+                    image_base = base_url
+                    scrambled = item.get("s") == 1
+                    if scrambled:
+                        image_base = re.sub(r"/i/(?=[bh])", "/si/", image_base)
+                    image_pages.append(ChapterPage(
+                        url=urljoin(image_base, raw_url),
+                        width=_coerce_positive_int(item.get("width")),
+                        height=_coerce_positive_int(item.get("height")),
+                        scrambled=scrambled,
+                    ))
+            return image_pages
+        if isinstance(pages, list):
+            image_pages = []
+            for item in pages:
+                if not isinstance(item, dict):
+                    continue
+                raw_url = item.get("url")
+                if isinstance(raw_url, str) and raw_url:
+                    image_pages.append(ChapterPage(url=raw_url))
+            return image_pages
+
+        images = data.get("images", [])
+        if not isinstance(images, list):
+            return None
+        image_pages = []
+        for img in images:
+            if not isinstance(img, dict):
+                continue
+            url = img.get("url")
+            if isinstance(url, str) and url:
+                image_pages.append(ChapterPage(url=url))
+        return image_pages
+
     async def _get_chapter_payload(
         self,
         engine: Engine,
@@ -586,9 +789,9 @@ class ComixToAdapter:
         if chapter_id in self._chapter_payload_cache:
             return self._chapter_payload_cache[chapter_id]
         base = self.mirrors[0]
-        api_url = f"{base}/api/v2/chapters/{chapter_id}"
+        api_url = f"{base}/api/v1/chapters/{chapter_id}"
         resp = await engine.get_json(api_url)
-        data = resp.get("result", {})
+        data = resp.get("result", resp)
         payload = data if isinstance(data, dict) else None
         self._chapter_payload_cache[chapter_id] = payload
         return payload
@@ -598,9 +801,9 @@ class ComixToAdapter:
             data = await self._get_chapter_payload(engine, chapter_id)
             if data is None:
                 return 0
-            images = data.get("images", [])
-            if isinstance(images, list):
-                return len(images)
+            image_urls = self._extract_image_urls(data)
+            if image_urls is not None:
+                return len(image_urls)
         except Exception as exc:
             logger.debug("Failed to get image count for chapter %d: %s", chapter_id, exc)
         return 0

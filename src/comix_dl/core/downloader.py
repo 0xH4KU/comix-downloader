@@ -8,10 +8,13 @@ import json
 import logging
 import random
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from io import BytesIO
+from typing import TYPE_CHECKING, TypeAlias
+
+from PIL import Image, UnidentifiedImageError
 
 from comix_dl.core.config import AppConfig, resolve_config
 from comix_dl.core.errors import (
@@ -27,6 +30,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from comix_dl.core.engines.cdp_browser import CdpBrowser
+    from comix_dl.core.models import ChapterPage
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +78,7 @@ class ChapterDownloadResult:
 
 # Type alias for progress callback
 ProgressCallback = Callable[[DownloadProgress], None]
+ImageSource: TypeAlias = "str | ChapterPage"
 
 
 @dataclass
@@ -166,7 +171,7 @@ class Downloader:
 
     async def download_chapter(
         self,
-        image_urls: list[str],
+        image_urls: Sequence[ImageSource],
         title: str,
         chapter: str,
         *,
@@ -179,7 +184,7 @@ class Downloader:
         skipped.  A ``.complete`` marker is written after all images succeed.
 
         Args:
-            image_urls: List of image URLs to download.
+            image_urls: List of image URLs or page metadata to download.
             title: Series title (used for directory naming).
             chapter: Chapter label (used for directory naming).
             referer: Referer header for image requests.
@@ -237,7 +242,7 @@ class Downloader:
                         total_bytes=self.bytes_downloaded,
                     ))
 
-        async def fetch_one(index: int, url: str) -> _PageDownloadResult:
+        async def fetch_one(index: int, image: ImageSource) -> _PageDownloadResult:
             async with semaphore:
                 # Random delay to avoid rate limits
                 delay = self._config.download.image_delay
@@ -245,6 +250,7 @@ class Downloader:
                     await asyncio.sleep(random.uniform(delay * 0.3, delay * 1.7))
 
                 filename = f"{index + 1:03d}"
+                url = image.url if not isinstance(image, str) else image
 
                 # Resume: only trust existing files that still look like valid images.
                 existing = existing_files.pop(filename, [])
@@ -256,7 +262,7 @@ class Downloader:
                         with contextlib.suppress(OSError):
                             stale.unlink()
 
-                success, error = await self._download_image(url, chapter_dir, filename, referer=referer)
+                success, error = await self._download_image(image, chapter_dir, filename, referer=referer)
                 await _advance_progress(filename)
                 return _PageDownloadResult(
                     filename=filename,
@@ -315,7 +321,7 @@ class Downloader:
 
     async def _download_image(
         self,
-        url: str,
+        image: ImageSource,
         output_dir: Path,
         filename: str,
         *,
@@ -329,16 +335,18 @@ class Downloader:
         max_retries = self._config.download.max_retries
         retry_delay = self._config.download.retry_delay
         last_error: str | None = None
+        url = image.url if not isinstance(image, str) else image
 
         for attempt in range(max_retries + 1):
             try:
-                data = await self._client.get_bytes(url, referer=referer)
+                data = await self._fetch_image_bytes(image, referer=referer)
 
                 ext = self._detect_image_extension(data)
                 if ext is None:
                     raise ValueError(
                         f"Response for {filename} from {url} is not a supported image."
                     )
+                self._validate_image_bytes(data, filename=f"{filename}{ext}")
                 filepath = output_dir / f"{filename}{ext}"
                 atomic_write_bytes(filepath, data, sync=False)
                 self.bytes_downloaded += len(data)
@@ -375,6 +383,17 @@ class Downloader:
 
         return False, last_error
 
+    async def _fetch_image_bytes(self, image: ImageSource, *, referer: str | None) -> bytes:
+        url = image.url if not isinstance(image, str) else image
+        if not isinstance(image, str) and image.scrambled:
+            return await self._client.get_scrambled_image_bytes(
+                url,
+                width=image.width,
+                height=image.height,
+                referer=referer,
+            )
+        return await self._client.get_bytes(url, referer=referer)
+
     @staticmethod
     def _guess_extension(url: str, data: bytes) -> str:
         """Determine image file extension from URL or magic bytes."""
@@ -384,16 +403,20 @@ class Downloader:
 
         # Try URL first
         url_lower = url.lower().split("?")[0]
-        for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".avif"):
-            if url_lower.endswith(ext):
-                return ext
+        url_ext = next(
+            (
+                ext
+                for ext in (".webp", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".avif")
+                if url_lower.endswith(ext)
+            ),
+            None,
+        )
 
-        return ".jpg"  # default fallback for legacy callers
+        return url_ext or ".jpg"  # default fallback for legacy callers
 
     @staticmethod
     def _detect_image_extension(data: bytes) -> str | None:
         """Return the supported image extension indicated by magic bytes."""
-        # Try magic bytes
         if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
             return ".webp"
         if data[:8] == b"\x89PNG\r\n\x1a\n":
@@ -412,28 +435,28 @@ class Downloader:
     def _is_valid_image_file(path: Path) -> bool:
         """Best-effort validation for a previously downloaded image file."""
         try:
-            with path.open("rb") as fh:
-                header = fh.read(16)
+            data = path.read_bytes()
         except OSError:
             return False
 
-        if not header:
-            return False
+        return Downloader._image_bytes_are_valid(data)
 
-        suffix = path.suffix.lower()
-        if suffix == ".webp":
-            return header[:4] == b"RIFF" and header[8:12] == b"WEBP"
-        if suffix == ".png":
-            return header[:8] == b"\x89PNG\r\n\x1a\n"
-        if suffix in {".jpg", ".jpeg"}:
-            return header[:2] == b"\xff\xd8"
-        if suffix == ".gif":
-            return header[:4] == b"GIF8"
-        if suffix == ".bmp":
-            return header[:2] == b"BM"
-        if suffix == ".avif":
-            return len(header) >= 12 and header[4:12] == b"ftypavif"
-        return False
+    @staticmethod
+    def _validate_image_bytes(data: bytes, *, filename: str) -> None:
+        """Raise when downloaded bytes are not a fully decodable image."""
+        if not Downloader._image_bytes_are_valid(data):
+            raise ValueError(f"Downloaded image {filename} is incomplete or corrupt.")
+
+    @staticmethod
+    def _image_bytes_are_valid(data: bytes) -> bool:
+        if not data:
+            return False
+        try:
+            with Image.open(BytesIO(data)) as image:
+                image.load()
+        except (OSError, UnidentifiedImageError, ValueError):
+            return False
+        return True
 
     @staticmethod
     def _remove_state_file(chapter_dir: Path) -> None:
