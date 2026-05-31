@@ -144,6 +144,36 @@ async def test_flow_search_reloads_after_info_preview_and_downloads(
 
 
 @pytest.mark.asyncio
+async def test_confirm_and_download_series_reuses_interactive_download_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _make_session(tmp_path, default_format="cbz", optimize_images=False)
+    info = _make_series(chapters=_make_chapters(2))
+    selected = info.chapters[:1]
+    download_with_progress = AsyncMock()
+
+    monkeypatch.setattr(flows, "print_series_header", MagicMock())
+    monkeypatch.setattr(flows, "print_dedup_report", MagicMock())
+    monkeypatch.setattr(flows, "print_chapters_table", MagicMock())
+    monkeypatch.setattr(flows, "_prompt_chapter_selection", MagicMock(return_value=selected))
+    monkeypatch.setattr(flows, "_download_with_progress", download_with_progress)
+    monkeypatch.setattr(flows.Prompt, "ask", MagicMock(return_value="pdf"))
+
+    result = await flows._confirm_and_download_series(session, info, quiet=True)
+
+    assert result == 0
+    download_with_progress.assert_awaited_once_with(
+        session,
+        series_title="Series A",
+        chapters=selected,
+        fmt="pdf",
+        optimize=False,
+        auto_cleanup=True,
+    )
+
+
+@pytest.mark.asyncio
 async def test_flow_search_returns_one_when_no_chapters_selected(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

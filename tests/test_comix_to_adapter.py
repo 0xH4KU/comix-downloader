@@ -102,6 +102,15 @@ class TestOnEngineReady:
         assert "/api/v1/" in iife
         assert "Could not find comix.to API client export" not in iife
 
+    def test_frontend_api_client_hook_is_loaded_from_package_asset(self) -> None:
+        from comix_dl.sites.comix_to import _load_text_asset
+
+        source = _load_text_asset("comix_api_client.js")
+
+        assert "window.__comixJsonRequest" in source
+        assert "window.__comixGetApiClient" in source
+        assert len(source) > 1000
+
 
 # ---------------------------------------------------------------------------
 # URL handling

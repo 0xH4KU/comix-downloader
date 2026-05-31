@@ -364,6 +364,31 @@ class TestDownloadChapter:
         assert state["failed_pages"][0]["filename"] == "002"
         assert result.failed_files == ("002",)
 
+    async def test_progress_reports_cumulative_skipped_and_failed_counts(
+        self,
+        tmp_path: Path,
+        mock_browser: AsyncMock,
+    ) -> None:
+        dl = _make_downloader(mock_browser, tmp_path, max_concurrent_images=1)
+        chapter_dir = tmp_path / "Test Manga" / "Chapter 1"
+        chapter_dir.mkdir(parents=True)
+        (chapter_dir / "001.jpg").write_bytes(_valid_image_bytes("JPEG"))
+        snapshots: list[DownloadProgress] = []
+
+        with patch.object(dl, "_download_image", return_value=(False, "boom")):
+            result = await dl.download_chapter(
+                ["https://cdn.com/1.jpg", "https://cdn.com/2.jpg"],
+                "Test Manga",
+                "Chapter 1",
+                on_progress=snapshots.append,
+            )
+
+        assert result.status == "partial"
+        assert [(p.completed, p.skipped, p.failed, p.current_file) for p in snapshots] == [
+            (1, 1, 0, "001"),
+            (2, 1, 1, "002"),
+        ]
+
     async def test_partial_rerun_recovers_missing_page_and_clears_state(
         self, tmp_path: Path, mock_browser: AsyncMock,
     ):

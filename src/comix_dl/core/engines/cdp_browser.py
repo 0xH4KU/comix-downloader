@@ -255,6 +255,13 @@ class CdpBrowser(BrowserSessionManager):
         if page in self._all_pages:
             self.release_page(page)
 
+    async def _finish_with_pooled_page(self, page: Page) -> None:
+        """Return a healthy pooled page or replace it when it is no longer usable."""
+        if self._page_is_healthy(page):
+            self.release_page(page)
+        else:
+            await self._replace_dead_page(page)
+
     async def _refresh_cf_clearance(self, *, reason: str) -> None:
         """Drop cached clearance state and reacquire it once."""
         logger.warning("%s Resetting Cloudflare clearance and retrying once.", reason)
@@ -551,27 +558,21 @@ class CdpBrowser(BrowserSessionManager):
                     screenshot = await self._screenshot_scrambled_canvas(page, url=retry_url)
                 except Exception as retry_exc:
                     typed = _translate_browser_error(retry_exc)
-                    if self._page_is_healthy(page):
-                        self.release_page(page)
-                    else:
-                        await self._replace_dead_page(page)
+                    await self._finish_with_pooled_page(page)
                     if typed is retry_exc:
                         raise
                     raise typed from retry_exc
                 else:
-                    self.release_page(page)
+                    await self._finish_with_pooled_page(page)
                     return screenshot
 
             typed = _translate_browser_error(exc)
-            if self._page_is_healthy(page):
-                self.release_page(page)
-            else:
-                await self._replace_dead_page(page)
+            await self._finish_with_pooled_page(page)
             if typed is exc:
                 raise
             raise typed from exc
         else:
-            self.release_page(page)
+            await self._finish_with_pooled_page(page)
             return screenshot
 
     async def _render_scrambled_image_on_page(

@@ -19,6 +19,7 @@ framework registry at import time.
 from __future__ import annotations
 
 import asyncio
+import importlib.resources
 import logging
 import re
 from collections import defaultdict
@@ -47,130 +48,15 @@ logger = logging.getLogger(__name__)
 _URL_HOST_PATTERN = re.compile(r"^(?:www\.)?comix\.to$", re.IGNORECASE)
 
 
-# JS IIFE registered with the engine after Cloudflare clearance. The
-# current comix.to frontend is a Vite app whose API helper owns both
-# request signing and encrypted-response decoding. Each browser page
-# imports same-origin frontend modules and dynamically selects the
-# export that looks like the API client, avoiding brittle dependency on
-# minified export names.
-_COMIX_API_CLIENT_IIFE = """
-(async function() {
-    try {
-        window.__comixUrlTransformers = window.__comixUrlTransformers || [];
+def _load_text_asset(name: str) -> str:
+    """Load a packaged text asset used by the comix.to adapter."""
+    return importlib.resources.files("comix_dl.sites.assets").joinpath(name).read_text(encoding="utf-8")
 
-        function __comixLooksLikeApiClient(value) {
-            return value
-                && typeof value === 'object'
-                && typeof value.get === 'function'
-                && typeof value.post === 'function';
-        }
 
-        window.__comixGetApiClient = window.__comixGetApiClient || async function() {
-            if (window.__comixApiClient) return window.__comixApiClient;
-
-            const scripts = Array.from(document.querySelectorAll('script[src]'));
-            const moduleUrls = [];
-            for (const script of scripts) {
-                const src = script.getAttribute('src') || '';
-                if (src.includes('/assets/build/') && src.endsWith('.js')) {
-                    moduleUrls.push(new URL(src, window.location.href).href);
-                }
-            }
-
-            for (const moduleUrl of moduleUrls) {
-                try {
-                    const mod = await import(moduleUrl);
-                    for (const exported of Object.values(mod)) {
-                        if (__comixLooksLikeApiClient(exported)) {
-                            window.__comixApiClient = exported;
-                            return window.__comixApiClient;
-                        }
-                    }
-                } catch (e) { continue; }
-            }
-
-            const mainScript = scripts.find((script) => {
-                const src = script.getAttribute('src') || '';
-                return src.includes('/assets/build/')
-                    && src.includes('/dist/main-')
-                    && src.endsWith('.js');
-            });
-            if (mainScript) {
-                try {
-                    const moduleUrl = new URL(mainScript.getAttribute('src'), window.location.href).href;
-                    const resp = await fetch(moduleUrl);
-                    const text = await resp.text();
-                    const envMatch = text.match(/from"\\.\\/(env-[^"]+\\.js)"/);
-                    if (envMatch) {
-                        const envUrl = new URL(envMatch[1], moduleUrl).href;
-                        const mod = await import(envUrl);
-                        for (const exported of Object.values(mod)) {
-                            if (__comixLooksLikeApiClient(exported)) {
-                                window.__comixApiClient = exported;
-                                return window.__comixApiClient;
-                            }
-                        }
-                    }
-                } catch (e) { /* fall through to fetch fallback */ }
-            }
-
-            return null;
-        };
-
-        window.__comixJsonRequest = async function(method, url, body) {
-            const u = new URL(url, window.location.origin);
-            if (u.origin !== window.location.origin || !u.pathname.startsWith('/api/v1/')) {
-                return { __handled: false };
-            }
-
-            const path = u.pathname.replace(/^\\/api\\/v1/, '') || '/';
-            const params = {};
-            u.searchParams.forEach((rawValue, key) => {
-                const numeric = rawValue !== '' ? Number(rawValue) : NaN;
-                const value = Number.isNaN(numeric) ? rawValue : numeric;
-                if (Object.prototype.hasOwnProperty.call(params, key)) {
-                    params[key] = Array.isArray(params[key])
-                        ? [...params[key], value]
-                        : [params[key], value];
-                } else {
-                    params[key] = value;
-                }
-            });
-
-            const api = await window.__comixGetApiClient();
-            if (!api) return { __handled: false };
-
-            const config = Object.keys(params).length ? { params } : undefined;
-            const upper = String(method || 'GET').toUpperCase();
-
-            try {
-                if (upper === 'GET') {
-                    return { __handled: true, data: await api.get(path, config) };
-                }
-                if (upper === 'POST') {
-                    return { __handled: true, data: await api.post(path, body, config) };
-                }
-                if (upper === 'PUT') {
-                    return { __handled: true, data: await api.put(path, body, config) };
-                }
-                if (upper === 'PATCH') {
-                    return { __handled: true, data: await api.patch(path, body, config) };
-                }
-                if (upper === 'DELETE') {
-                    return { __handled: true, data: await api.delete(path, config) };
-                }
-            } catch (e) {
-                const status = e && e.response && e.response.status;
-                if (status) throw new Error(`HTTP ${status}`);
-                throw e;
-            }
-            return { __handled: false };
-        };
-    } catch (e) {
-        console.warn('[comix-dl] comix.to API client hook install failed:', e);
-    }
-})();
-"""
+# JS IIFE registered with the engine after Cloudflare clearance. The current
+# comix.to frontend owns request signing and encrypted-response decoding, so the
+# hook lives as a packaged JS asset instead of a large Python string literal.
+_COMIX_API_CLIENT_IIFE = _load_text_asset("comix_api_client.js")
 
 
 def _describe_api_error(exc: Exception, *, action: str) -> str:
@@ -209,6 +95,12 @@ def _coerce_api_status(value: object) -> int | None:
     except (TypeError, ValueError):
         return None
     return None
+
+
+def _unwrap_object_result(response: dict[str, object]) -> dict[str, object]:
+    """Return the object stored in result, or the response itself when unwrapped."""
+    raw = response.get("result", response)
+    return raw if isinstance(raw, dict) else {}
 
 
 class ComixToAdapter:
@@ -347,50 +239,8 @@ class ComixToAdapter:
         supplied an old slug that no longer resolves, fall back to
         search and use the matched result's hid.
         """
+        data, hash_id = await self._resolve_series_payload(engine, identifier)
         base = self.mirrors[0]
-        info_resp: dict[str, object] | None = None
-        try:
-            info_resp = await engine.get_json(f"{base}/api/v1/manga/{identifier}")
-        except Exception:
-            logger.debug("Direct lookup failed for '%s', trying search fallback", identifier)
-
-        data: dict[str, object] = {}
-        if info_resp is not None:
-            raw = info_resp.get("result", info_resp)
-            if isinstance(raw, dict):
-                data = raw
-
-        hash_id = str(data.get("hid", "") or data.get("hash_id", "") or "")
-        if not hash_id:
-            # Fallback: search and match by slug.
-            results = await self.search(engine, identifier, limit=10)
-            matched = next((
-                r for r in results
-                if r.hash_id == identifier or r.slug == identifier or r.slug.startswith(f"{identifier}-")
-            ), None)
-            if matched is not None:
-                try:
-                    info_resp = await engine.get_json(f"{base}/api/v1/manga/{matched.hash_id}")
-                except Exception as exc:
-                    raise RemoteApiError(
-                        _describe_api_error(exc, action=f"Fetch series info for '{matched.hash_id}'"),
-                    ) from exc
-            elif "-" in identifier:
-                prefix = identifier.split("-", 1)[0]
-                try:
-                    info_resp = await engine.get_json(f"{base}/api/v1/manga/{prefix}")
-                except Exception as exc:
-                    raise RemoteApiError(f"Could not find manga with identifier '{identifier}'") from exc
-            else:
-                raise RemoteApiError(f"Could not find manga with identifier '{identifier}'")
-            raw = info_resp.get("result", info_resp) if isinstance(info_resp, dict) else {}
-            data = raw if isinstance(raw, dict) else {}
-            hash_id = str(data.get("hid", "") or data.get("hash_id", "") or "")
-            if not hash_id and matched is not None:
-                hash_id = matched.hash_id
-            if not hash_id:
-                raise RemoteApiError(f"Could not find manga with identifier '{identifier}'")
-
         title = str(data.get("title", "") or hash_id)
         synopsis = str(data.get("synopsis", "") or data.get("description", "") or "")
         authors = self._names_from_people(data.get("authors", []))
@@ -409,6 +259,85 @@ class ComixToAdapter:
             url=series_url,
             hash_id=hash_id,
         )
+
+    async def _resolve_series_payload(
+        self,
+        engine: Engine,
+        identifier: str,
+    ) -> tuple[dict[str, object], str]:
+        """Resolve an identifier into raw series payload plus hash id."""
+        data = await self._fetch_series_payload_direct(engine, identifier)
+        hash_id = str(data.get("hid", "") or data.get("hash_id", "") or "")
+        if not hash_id:
+            data, hash_id = await self._fetch_series_payload_fallback(engine, identifier)
+        return data, hash_id
+
+    async def _fetch_series_payload_direct(self, engine: Engine, identifier: str) -> dict[str, object]:
+        """Return direct series lookup payload, or an empty dict when lookup fails."""
+        base = self.mirrors[0]
+        try:
+            info_resp = await engine.get_json(f"{base}/api/v1/manga/{identifier}")
+        except Exception:
+            logger.debug("Direct lookup failed for '%s', trying search fallback", identifier)
+            return {}
+        return self._unwrap_object_result(info_resp)
+
+    async def _fetch_series_payload_fallback(
+        self,
+        engine: Engine,
+        identifier: str,
+    ) -> tuple[dict[str, object], str]:
+        """Resolve old slugs through search or hid-prefix fallback."""
+        matched = await self._find_search_match(engine, identifier)
+        if matched is not None:
+            data = await self._fetch_series_payload_by_hash(engine, matched.hash_id)
+            hash_id = str(data.get("hid", "") or data.get("hash_id", "") or matched.hash_id)
+            return self._require_series_hash(data, hash_id, identifier)
+
+        if "-" in identifier:
+            prefix = identifier.split("-", 1)[0]
+            try:
+                data = await self._fetch_series_payload_by_hash(engine, prefix)
+            except RemoteApiError as exc:
+                raise RemoteApiError(f"Could not find manga with identifier '{identifier}'") from exc
+            hash_id = str(data.get("hid", "") or data.get("hash_id", "") or "")
+            return self._require_series_hash(data, hash_id, identifier)
+
+        raise RemoteApiError(f"Could not find manga with identifier '{identifier}'")
+
+    async def _find_search_match(self, engine: Engine, identifier: str) -> SearchResult | None:
+        """Find a search result that matches the requested slug or hash id."""
+        results = await self.search(engine, identifier, limit=10)
+        return next((
+            result for result in results
+            if (
+                result.hash_id == identifier
+                or result.slug == identifier
+                or result.slug.startswith(f"{identifier}-")
+            )
+        ), None)
+
+    async def _fetch_series_payload_by_hash(self, engine: Engine, hash_id: str) -> dict[str, object]:
+        """Fetch a series payload by hash id and wrap remote failures."""
+        base = self.mirrors[0]
+        try:
+            info_resp = await engine.get_json(f"{base}/api/v1/manga/{hash_id}")
+        except Exception as exc:
+            raise RemoteApiError(
+                _describe_api_error(exc, action=f"Fetch series info for '{hash_id}'"),
+            ) from exc
+        return self._unwrap_object_result(info_resp)
+
+    @staticmethod
+    def _require_series_hash(
+        data: dict[str, object],
+        hash_id: str,
+        identifier: str,
+    ) -> tuple[dict[str, object], str]:
+        """Return resolved data or raise the canonical missing-series error."""
+        if not hash_id:
+            raise RemoteApiError(f"Could not find manga with identifier '{identifier}'")
+        return data, hash_id
 
     async def get_chapter_images(
         self,
@@ -492,47 +421,85 @@ class ComixToAdapter:
         hash_id: str,
     ) -> tuple[list[ChapterInfo], list[DedupDecision]]:
         """Fetch every chapter page, fill missing image counts, then dedup."""
-        base = self.mirrors[0]
+        all_chapters = await self._fetch_all_chapter_pages(engine, hash_id)
+        all_chapters.sort(key=lambda c: c.number_sort_key)
+        await self._fill_duplicate_image_counts(engine, all_chapters)
+
+        deduped, decisions = self.deduplicate(all_chapters)
+        logger.info("Fetched %d chapters for '%s'", len(deduped), hash_id)
+        return deduped, decisions
+
+    async def _fetch_all_chapter_pages(self, engine: Engine, hash_id: str) -> list[ChapterInfo]:
+        """Paginate through the chapter listing endpoint."""
         limit = 100
-        all_chapters: list[ChapterInfo] = []
+        chapters: list[ChapterInfo] = []
         page = 1
         while True:
-            api_url = f"{base}/api/v1/manga/{hash_id}/chapters?limit={limit}&page={page}"
-            try:
-                resp = await engine.get_json(api_url)
-            except Exception as exc:
-                message = _describe_api_error(exc, action=f"Fetch chapter list page {page} for '{hash_id}'")
-                logger.error("%s", message)
-                raise RemoteApiError(message) from exc
-
-            result_obj = resp.get("result", resp)
-            api_status = resp.get("status")
-            if api_status is not None:
-                status_code = _coerce_api_status(api_status)
-                if status_code is None:
-                    raise RemoteApiError(
-                        f"Fetch chapter list page {page} for '{hash_id}' failed: "
-                        f"invalid API status {api_status!r}.",
-                    )
-                if status_code >= 400:
-                    raise RemoteApiError(
-                        f"Chapter listing returned API status {api_status} for '{hash_id}' "
-                        f"(message: {resp.get('message', 'unknown')}). Request signing may have failed.",
-                    )
-            items = result_obj.get("items", []) if isinstance(result_obj, dict) else []
-            if not isinstance(items, list) or not items:
+            items = await self._fetch_chapter_page_items(engine, hash_id, page=page, limit=limit)
+            if not items:
                 break
-            all_chapters.extend(self._parse_chapter_items(items))
+            chapters.extend(self._parse_chapter_items(items))
             if len(items) < limit:
                 break
             page += 1
+        return chapters
 
-        all_chapters.sort(key=lambda c: c.number_sort_key)
+    async def _fetch_chapter_page_items(
+        self,
+        engine: Engine,
+        hash_id: str,
+        *,
+        page: int,
+        limit: int,
+    ) -> list[dict[str, object]]:
+        """Fetch and validate one chapter-listing page."""
+        base = self.mirrors[0]
+        api_url = f"{base}/api/v1/manga/{hash_id}/chapters?limit={limit}&page={page}"
+        try:
+            resp = await engine.get_json(api_url)
+        except Exception as exc:
+            message = _describe_api_error(exc, action=f"Fetch chapter list page {page} for '{hash_id}'")
+            logger.error("%s", message)
+            raise RemoteApiError(message) from exc
 
-        # Fill missing image counts only for duplicate-number groups where
-        # image_count affects dedup choice. Unique chapters can stay lazy.
+        self._raise_for_chapter_listing_status(resp, hash_id=hash_id, page=page)
+        result_obj = resp.get("result", resp)
+        items = result_obj.get("items", []) if isinstance(result_obj, dict) else []
+        if not isinstance(items, list):
+            return []
+        return [item for item in items if isinstance(item, dict)]
+
+    @staticmethod
+    def _raise_for_chapter_listing_status(
+        resp: dict[str, object],
+        *,
+        hash_id: str,
+        page: int,
+    ) -> None:
+        """Raise a user-facing API error when the chapter-list status is bad."""
+        api_status = resp.get("status")
+        if api_status is None:
+            return
+        status_code = _coerce_api_status(api_status)
+        if status_code is None:
+            raise RemoteApiError(
+                f"Fetch chapter list page {page} for '{hash_id}' failed: "
+                f"invalid API status {api_status!r}.",
+            )
+        if status_code >= 400:
+            raise RemoteApiError(
+                f"Chapter listing returned API status {api_status} for '{hash_id}' "
+                f"(message: {resp.get('message', 'unknown')}). Request signing may have failed.",
+            )
+
+    async def _fill_duplicate_image_counts(
+        self,
+        engine: Engine,
+        chapters: list[ChapterInfo],
+    ) -> None:
+        """Fetch missing image counts only where dedup choice depends on them."""
         by_number: dict[str, list[ChapterInfo]] = defaultdict(list)
-        for ch in all_chapters:
+        for ch in chapters:
             by_number[ch.number].append(ch)
         missing = [
             ch
@@ -551,9 +518,10 @@ class ComixToAdapter:
 
             await asyncio.gather(*[_fetch_count(ch) for ch in missing])
 
-        deduped, decisions = self.deduplicate(all_chapters)
-        logger.info("Fetched %d chapters for '%s'", len(deduped), hash_id)
-        return deduped, decisions
+    @staticmethod
+    def _unwrap_object_result(response: dict[str, object]) -> dict[str, object]:
+        """Return the object stored in result, or the response itself when unwrapped."""
+        return _unwrap_object_result(response)
 
     @staticmethod
     def _parse_chapter_items(items: list[dict[str, object]]) -> list[ChapterInfo]:

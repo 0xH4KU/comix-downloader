@@ -91,6 +91,14 @@ class _PageDownloadResult:
     error: str | None = None
 
 
+@dataclass
+class _ChapterDownloadPlan:
+    """Prepared filesystem state for a chapter download."""
+
+    chapter_dir: Path
+    existing_files: dict[str, list[Path]]
+
+
 def ensure_complete_download(result: ChapterDownloadResult, *, chapter_title: str) -> None:
     """Raise a domain error when a chapter result is incomplete."""
     if result.status != "partial":
@@ -198,13 +206,10 @@ class Downloader:
             Final download result for the chapter.
         """
         progress_cb = on_progress if on_progress is not None else self._on_progress
-        chapter_dir = self._output_dir / sanitize_dirname(title) / sanitize_dirname(chapter)
-        _validate_within_base(chapter_dir, self._output_dir)
-        chapter_dir.mkdir(parents=True, exist_ok=True)
-        existing_files = self._index_existing_downloads(chapter_dir)
+        plan = self._prepare_chapter_download(title, chapter)
 
         # Already fully downloaded?
-        if (chapter_dir / _COMPLETE_MARKER).exists():
+        if (plan.chapter_dir / _COMPLETE_MARKER).exists():
             logger.info("%s - %s: already downloaded, skipping", title, chapter)
             if progress_cb:
                 progress_cb(DownloadProgress(
@@ -215,30 +220,70 @@ class Downloader:
                     current_file="(skipped)",
                 ))
             return ChapterDownloadResult(
-                chapter_dir=chapter_dir,
+                chapter_dir=plan.chapter_dir,
                 total=len(image_urls),
                 downloaded=0,
                 skipped=len(image_urls),
                 failed=0,
             )
 
+        results = await self._download_pages(
+            image_urls,
+            chapter_dir=plan.chapter_dir,
+            existing_files=plan.existing_files,
+            referer=referer,
+            on_progress=progress_cb,
+        )
+
+        result = self._build_chapter_result(plan.chapter_dir, image_urls, results)
+        self._finalize_chapter_download(plan.chapter_dir, title, chapter, result, results)
+        self._log_chapter_result(title, chapter, result)
+
+        return result
+
+    def _prepare_chapter_download(self, title: str, chapter: str) -> _ChapterDownloadPlan:
+        """Create and index the chapter directory before downloading."""
+        chapter_dir = self._output_dir / sanitize_dirname(title) / sanitize_dirname(chapter)
+        _validate_within_base(chapter_dir, self._output_dir)
+        chapter_dir.mkdir(parents=True, exist_ok=True)
+        return _ChapterDownloadPlan(
+            chapter_dir=chapter_dir,
+            existing_files=self._index_existing_downloads(chapter_dir),
+        )
+
+    async def _download_pages(
+        self,
+        image_urls: Sequence[ImageSource],
+        *,
+        chapter_dir: Path,
+        existing_files: dict[str, list[Path]],
+        referer: str | None,
+        on_progress: ProgressCallback | None,
+    ) -> list[_PageDownloadResult]:
+        """Download or skip every page and emit cumulative progress."""
         total = len(image_urls)
         semaphore = asyncio.Semaphore(self._config.download.max_concurrent_images)
         progress_lock = asyncio.Lock()
         progress_done = 0
+        progress_skipped = 0
+        progress_failed = 0
 
-        async def _advance_progress(filename: str) -> None:
+        async def _advance_progress(result: _PageDownloadResult) -> None:
             """Serialize progress updates so callbacks see monotonic counts."""
-            nonlocal progress_done
+            nonlocal progress_done, progress_skipped, progress_failed
             async with progress_lock:
                 progress_done += 1
-                if progress_cb:
-                    progress_cb(DownloadProgress(
+                if result.status == "skip":
+                    progress_skipped += 1
+                elif result.status == "fail":
+                    progress_failed += 1
+                if on_progress:
+                    on_progress(DownloadProgress(
                         completed=progress_done,
                         total=total,
-                        failed=0,
-                        skipped=0,
-                        current_file=filename,
+                        failed=progress_failed,
+                        skipped=progress_skipped,
+                        current_file=result.filename,
                         total_bytes=self.bytes_downloaded,
                     ))
 
@@ -255,30 +300,40 @@ class Downloader:
                 # Resume: only trust existing files that still look like valid images.
                 existing = existing_files.pop(filename, [])
                 if existing and any(self._is_valid_image_file(f) for f in existing):
-                    await _advance_progress(filename)
-                    return _PageDownloadResult(filename=filename, url=url, status="skip")
+                    result = _PageDownloadResult(filename=filename, url=url, status="skip")
+                    await _advance_progress(result)
+                    return result
                 if existing:
                     for stale in existing:
                         with contextlib.suppress(OSError):
                             stale.unlink()
 
                 success, error = await self._download_image(image, chapter_dir, filename, referer=referer)
-                await _advance_progress(filename)
-                return _PageDownloadResult(
+                result = _PageDownloadResult(
                     filename=filename,
                     url=url,
                     status="ok" if success else "fail",
                     error=error,
                 )
+                await _advance_progress(result)
+                return result
 
         tasks = [fetch_one(i, url) for i, url in enumerate(image_urls)]
-        results = await asyncio.gather(*tasks)
+        return list(await asyncio.gather(*tasks))
 
+    @staticmethod
+    def _build_chapter_result(
+        chapter_dir: Path,
+        image_urls: Sequence[ImageSource],
+        results: list[_PageDownloadResult],
+    ) -> ChapterDownloadResult:
+        """Aggregate per-page outcomes into the public chapter result."""
+        total = len(image_urls)
         completed = sum(1 for r in results if r.status == "ok")
         skipped = sum(1 for r in results if r.status == "skip")
         failed_results = [r for r in results if r.status == "fail"]
         failed = len(failed_results)
-        result = ChapterDownloadResult(
+        return ChapterDownloadResult(
             chapter_dir=chapter_dir,
             total=total,
             downloaded=completed,
@@ -287,13 +342,30 @@ class Downloader:
             failed_files=tuple(r.filename for r in failed_results),
         )
 
+    def _finalize_chapter_download(
+        self,
+        chapter_dir: Path,
+        title: str,
+        chapter: str,
+        result: ChapterDownloadResult,
+        page_results: list[_PageDownloadResult],
+    ) -> None:
+        """Write complete marker or recovery state for a chapter result."""
+        failed_results = [r for r in page_results if r.status == "fail"]
         # Mark as complete (only if no failures)
-        if failed == 0:
+        if result.failed == 0:
             (chapter_dir / _COMPLETE_MARKER).touch()
             self._remove_state_file(chapter_dir)
         else:
             self._write_state_file(chapter_dir, title, chapter, result, failed_results)
 
+    @staticmethod
+    def _log_chapter_result(title: str, chapter: str, result: ChapterDownloadResult) -> None:
+        """Emit the chapter completion log line."""
+        completed = result.downloaded
+        skipped = result.skipped
+        failed = result.failed
+        total = result.total
         if result.status == "failed":
             logger.warning("%s - %s: all %d images failed", title, chapter, total)
         elif result.status == "partial":
@@ -316,8 +388,6 @@ class Downloader:
                 "%s - %s: downloaded %d images",
                 title, chapter, total,
             )
-
-        return result
 
     async def _download_image(
         self,

@@ -227,6 +227,44 @@ async def _download_with_progress(
         _auto_cleanup_prompt(session.output_dir, series_title, auto_confirm=auto_cleanup)
 
 
+async def _confirm_and_download_series(
+    session: ApplicationSession,
+    info: SeriesInfo,
+    *,
+    quiet: bool,
+) -> int:
+    """Render a series, prompt for chapter/format choices, then download."""
+    if not info.chapters:
+        console.print("[yellow]No chapters found.[/yellow]")
+        return 0
+
+    print_series_header(info)
+    print_dedup_report(info.dedup_decisions)
+    print_chapters_table(info.chapters)
+
+    to_download = _prompt_chapter_selection(info.chapters)
+    if to_download is None:
+        return 0
+    if not to_download:
+        return 1
+
+    fmt = Prompt.ask(
+        "[bold]Output format[/bold]",
+        choices=["pdf", "cbz", "both"],
+        default=session.settings.default_format,
+    )
+
+    await _download_with_progress(
+        session,
+        series_title=info.title,
+        chapters=to_download,
+        fmt=fmt,
+        optimize=session.settings.optimize_images,
+        auto_cleanup=quiet,
+    )
+    return 0
+
+
 # -- Flow: Search & Download --------------------------------------------------
 
 
@@ -303,34 +341,7 @@ async def flow_search(query: str, *, quiet: bool = False, mirror: str | None = N
                 _render_remote_api_error(exc)
                 return 1
 
-        if not info.chapters:
-            console.print("[yellow]No chapters found.[/yellow]")
-            return 0
-
-        print_series_header(info)
-        print_dedup_report(info.dedup_decisions)
-        print_chapters_table(info.chapters)
-
-        to_download = _prompt_chapter_selection(info.chapters)
-        if to_download is None:
-            return 0
-        if not to_download:
-            return 1
-
-        fmt = Prompt.ask(
-            "[bold]Output format[/bold]",
-            choices=["pdf", "cbz", "both"],
-            default=session.settings.default_format,
-        )
-
-        await _download_with_progress(
-            session,
-            series_title=info.title,
-            chapters=to_download,
-            fmt=fmt,
-            optimize=session.settings.optimize_images,
-            auto_cleanup=quiet,
-        )
+        return await _confirm_and_download_series(session, info, quiet=quiet)
 
     return 0
 
@@ -372,30 +383,7 @@ async def flow_url_download(url: str, *, quiet: bool = False, mirror: str | None
             console.print("[yellow]Could not find manga. Try using search instead.[/yellow]")
             return 1
 
-        print_series_header(info)
-        print_dedup_report(info.dedup_decisions)
-        print_chapters_table(info.chapters)
-
-        to_download = _prompt_chapter_selection(info.chapters)
-        if to_download is None:
-            return 0
-        if not to_download:
-            return 1
-
-        fmt = Prompt.ask(
-            "[bold]Output format[/bold]",
-            choices=["pdf", "cbz", "both"],
-            default=session.settings.default_format,
-        )
-
-        await _download_with_progress(
-            session,
-            series_title=info.title,
-            chapters=to_download,
-            fmt=fmt,
-            optimize=session.settings.optimize_images,
-            auto_cleanup=quiet,
-        )
+        return await _confirm_and_download_series(session, info, quiet=quiet)
 
     return 0
 
