@@ -83,6 +83,10 @@ def _make_chapters(count: int = 3) -> list[ChapterInfo]:
     ]
 
 
+def _write_valid_pdf(path: Path) -> None:
+    path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+
 def _make_series(
     *,
     title: str = "Series A",
@@ -676,7 +680,7 @@ def test_flow_clean_auto_confirm_skips_prompt_and_removes_candidates(tmp_path: P
     chapter_dir = tmp_path / "Series A" / "Chapter 1"
     chapter_dir.mkdir(parents=True)
     (chapter_dir / ".complete").touch()
-    (chapter_dir.parent / "Chapter 1.pdf").write_bytes(b"pdf")
+    _write_valid_pdf(chapter_dir.parent / "Chapter 1.pdf")
     (chapter_dir / "001.jpg").write_bytes(b"image")
 
     with (

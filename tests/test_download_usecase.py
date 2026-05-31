@@ -259,3 +259,93 @@ async def test_download_chapters_counts_skipped_partial_and_missing_images(
             "Chapter 2: Chapter 2 is incomplete: 1/2 pages failed. | +1 more issue(s)",
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_download_chapters_reports_not_started_when_shutdown_skips_remaining(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    history = RecordingHistoryRepository()
+    notifications: list[tuple[str, str]] = []
+    shutdown_checks = iter([False, False, True])
+
+    class FakeDownloader:
+        def __init__(self, _browser: object, output_dir: Path, config: AppConfig) -> None:
+            self._output_dir = output_dir
+            self.bytes_downloaded = 0
+            self.retry_count = 0
+
+        def is_chapter_complete(self, _series_title: str, _chapter_title: str) -> bool:
+            return False
+
+        async def download_chapter(
+            self,
+            image_urls: list[str],
+            title: str,
+            chapter_label: str,
+            *,
+            on_progress: object = None,
+        ) -> ChapterDownloadResult:
+            chapter_dir = self._output_dir / title / chapter_label
+            chapter_dir.mkdir(parents=True, exist_ok=True)
+            return ChapterDownloadResult(
+                chapter_dir=chapter_dir,
+                total=len(image_urls),
+                downloaded=len(image_urls),
+                skipped=0,
+                failed=0,
+            )
+
+    async def fake_convert(chapter_dir: Path, fmt: str, *, optimize: bool, config: AppConfig) -> Path:
+        return chapter_dir.with_suffix(".pdf")
+
+    monkeypatch.setattr(download_usecase, "Downloader", FakeDownloader)
+    monkeypatch.setattr(download_usecase, "convert_async", fake_convert)
+
+    service = AsyncMock()
+    service.get_chapter_images.return_value = ChapterImages(
+        title="Chapter",
+        chapter_label="Chapter",
+        image_urls=["https://img/1"],
+    )
+
+    summary = await download_usecase.download_chapters(
+        browser=object(),
+        adapter=service,
+        series_title="Series C",
+        chapters=[
+            ChapterInfo(title="Chapter 1", chapter_id=1, number="1"),
+            ChapterInfo(title="Chapter 2", chapter_id=2, number="2"),
+        ],
+        output_dir=tmp_path,
+        fmt="pdf",
+        config=_config(),
+        optimize=False,
+        is_shutdown=lambda: next(shutdown_checks, True),
+        history_repository=history,
+        notifier=lambda title, body: notifications.append((title, body)),
+    )
+
+    assert summary.total_chapters == 2
+    assert summary.completed == 1
+    assert summary.skipped == 0
+    assert summary.partial == 0
+    assert summary.failed == 1
+    assert summary.issues == (
+        download_usecase.DownloadIssue(
+            chapter_title="Chapter 2",
+            kind="not_started",
+            message="not started because shutdown was requested",
+        ),
+    )
+    assert history.calls[0]["summary_text"] == "1 downloaded, 1 failed"
+    assert history.calls[0]["issues"] == [
+        "Chapter 2: not started because shutdown was requested",
+    ]
+    assert notifications == [
+        (
+            "comix-dl: Series C",
+            "1 downloaded, 1 failed (0.0 B) | Chapter 2: not started because shutdown was requested",
+        )
+    ]

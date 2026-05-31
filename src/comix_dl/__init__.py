@@ -8,4 +8,4 @@ try:
     __version__ = version("comix-downloader")
 except PackageNotFoundError:
     # Fallback for editable installs or running from source
-    __version__ = "0.4.0"
+    __version__ = "0.4.1"

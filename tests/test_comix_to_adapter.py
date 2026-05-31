@@ -165,6 +165,17 @@ class TestParseChapterItems:
         assert len(result) == 1
         assert result[0].image_count == 0
 
+    def test_invalid_chapter_id_is_skipped(self) -> None:
+        items = [
+            {"chapter_id": "not-an-int", "number": 1, "pages_count": 12},
+            {"chapter_id": 2, "number": 2, "pages_count": 10},
+        ]
+
+        result = ComixToAdapter._parse_chapter_items(items)
+
+        assert len(result) == 1
+        assert result[0].chapter_id == 2
+
 
 # ---------------------------------------------------------------------------
 # deduplicate (now sync)
@@ -436,6 +447,61 @@ class TestGetSeries:
         mock_browser.get_json.return_value = {"result": {"items": []}}
         with pytest.raises(RemoteApiError, match="Could not find manga"):
             await _adapter().get_series(mock_browser, "missing-slug")
+
+    async def test_chapter_listing_invalid_status_raises_remote_api_error(self, mock_browser: AsyncMock) -> None:
+        mock_browser.get_json.side_effect = [
+            {"result": {"title": "Series", "hash_id": "hash", "slug": "series"}},
+            {"status": "not-a-number", "result": {"items": []}},
+        ]
+
+        with pytest.raises(RemoteApiError, match="invalid API status"):
+            await _adapter().get_series(mock_browser, "hash")
+
+    async def test_chapter_listing_page_failure_raises_remote_api_error(self, mock_browser: AsyncMock) -> None:
+        mock_browser.get_json.side_effect = [
+            {"result": {"title": "Series", "hash_id": "hash", "slug": "series"}},
+            {
+                "result": {
+                    "items": [
+                        {"chapter_id": i, "number": i, "pages_count": 1}
+                        for i in range(1, 101)
+                    ],
+                },
+            },
+            TimeoutError("page 2 timed out"),
+        ]
+
+        with pytest.raises(RemoteApiError, match="Fetch chapter list page 2"):
+            await _adapter().get_series(mock_browser, "hash")
+
+    async def test_fetch_chapters_prefetches_counts_only_for_duplicate_groups(
+        self, mock_browser: AsyncMock,
+    ) -> None:
+        mock_browser.get_json.return_value = {
+            "result": {
+                "items": [
+                    {"chapter_id": 1, "number": 1, "pages_count": 0},
+                    {"chapter_id": 2, "number": 2, "pages_count": 0},
+                    {"chapter_id": 3, "number": 2, "pages_count": 0},
+                ],
+            },
+        }
+        adapter = _adapter()
+        requested_counts: list[int] = []
+
+        async def fake_count(_engine: object, chapter_id: int) -> int:
+            requested_counts.append(chapter_id)
+            return chapter_id
+
+        adapter._get_image_count = fake_count  # type: ignore[method-assign]
+
+        chapters, _ = await adapter._fetch_chapters(mock_browser, "hash")
+
+        assert requested_counts == [2, 3]
+        assert {chapter.chapter_id: chapter.image_count for chapter in chapters} == {
+            1: 0,
+            3: 3,
+        }
 
 
 # ---------------------------------------------------------------------------

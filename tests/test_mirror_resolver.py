@@ -129,6 +129,17 @@ class TestSelectInitialMirror:
         )
         assert chosen == "https://override.example"
 
+    def test_override_rejects_non_public_https_url(self, tmp_path: Path) -> None:
+        adapter = _StubAdapter(mirrors=["https://primary.example"])
+        repo = MirrorStateRepository(state_file=tmp_path / "state.json")
+
+        with pytest.raises(ConfigurationError, match="mirror override must use https"):
+            select_initial_mirror(
+                _typed(adapter),
+                override="http://localhost:8000",
+                repository=repo,
+            )
+
     def test_uses_cached_active_when_listed_in_mirrors(self, tmp_path: Path) -> None:
         adapter = _StubAdapter(mirrors=["https://primary.example", "https://backup.example"])
         repo = MirrorStateRepository(state_file=tmp_path / "state.json")

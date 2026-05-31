@@ -245,7 +245,11 @@ class SettingsRepository:
         if value is None:
             normalized = default
         elif isinstance(value, (int, float, str)):
-            normalized = int(value)
+            try:
+                normalized = int(value)
+            except (TypeError, ValueError):
+                logger.warning("Settings field %s=%r is invalid; using %d.", field_name, value, default)
+                return default
         else:
             logger.warning("Settings field %s=%r is invalid; using %d.", field_name, value, default)
             return default
