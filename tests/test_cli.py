@@ -13,6 +13,7 @@ from comix_dl.core import cli as cli_module
 from comix_dl.core.cli import _build_parser, _parse_chapter_selection
 from comix_dl.core.models import ChapterInfo
 from comix_dl.core.settings import Settings
+from comix_dl.core.update_check import UpdateInfo
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -24,6 +25,11 @@ def _make_chapters(n: int) -> list[ChapterInfo]:
         ChapterInfo(title=f"Chapter {i}", chapter_id=i * 100, number=str(i))
         for i in range(1, n + 1)
     ]
+
+
+@pytest.fixture(autouse=True)
+def _disable_update_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli_module, "check_for_update", lambda _version: None)
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +229,7 @@ class TestBuildParser:
 
 def test_main_treats_bare_positional_arg_as_search(monkeypatch: pytest.MonkeyPatch):
     recorded: dict[str, object] = {}
+    printed: list[str] = []
 
     def run_async(coro: object) -> int:
         recorded["coro"] = coro
@@ -232,11 +239,18 @@ def test_main_treats_bare_positional_arg_as_search(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(cli_module, "configure_logging", lambda level: recorded.setdefault("level", level))
     monkeypatch.setattr(cli_module, "flow_search", lambda query: ("search", query))
     monkeypatch.setattr(cli_module, "_run_async", run_async)
+    monkeypatch.setattr(
+        cli_module,
+        "check_for_update",
+        lambda _version: UpdateInfo(current_version="0.4.1", latest_version="v0.4.2", release_url="https://example.com"),
+    )
+    monkeypatch.setattr(cli_module.console, "print", lambda message: printed.append(str(message)))
     monkeypatch.setattr(cli_module.sys, "argv", ["comix-dl", "one-piece"])
 
     assert cli_module.main() == 17
     assert recorded["level"] == logging.INFO
     assert recorded["coro"] == ("search", "one-piece")
+    assert any("v0.4.2" in message for message in printed)
 
 
 def test_main_dispatches_subcommands_and_menu(monkeypatch: pytest.MonkeyPatch):
@@ -320,6 +334,79 @@ def test_main_dispatches_subcommands_and_menu(monkeypatch: pytest.MonkeyPatch):
     assert ("async", ("download", "series-a", "1-2", "pdf", "/tmp/out", False, True)) in recorded
     assert ("async", ("info", "series-a")) in recorded
     assert ("settings",) in recorded
+
+
+def test_main_prints_update_notice_for_non_quiet_command(monkeypatch: pytest.MonkeyPatch):
+    printed: list[str] = []
+
+    monkeypatch.setattr(
+        cli_module,
+        "_build_parser",
+        lambda: SimpleNamespace(
+            parse_args=lambda: SimpleNamespace(command="list", debug=False, quiet=False, mirror=None),
+        ),
+    )
+    monkeypatch.setattr(cli_module.sys, "argv", ["comix-dl", "list"])
+    monkeypatch.setattr(cli_module, "configure_logging", lambda _level: None)
+    monkeypatch.setattr(
+        cli_module,
+        "check_for_update",
+        lambda _version: UpdateInfo(
+            current_version="0.4.1",
+            latest_version="v0.4.2",
+            release_url="https://github.com/0xH4KU/comix-downloader/releases/tag/v0.4.2",
+        ),
+    )
+    monkeypatch.setattr(cli_module.console, "print", lambda message: printed.append(str(message)))
+    monkeypatch.setattr(cli_module, "flow_list", lambda: 0)
+
+    assert cli_module.main() == 0
+    assert any("v0.4.2" in message and "0.4.1" in message for message in printed)
+
+
+def test_main_skips_update_notice_in_quiet_mode(monkeypatch: pytest.MonkeyPatch):
+    called = False
+
+    def check_for_update(_version: str) -> UpdateInfo | None:
+        nonlocal called
+        called = True
+        return UpdateInfo(current_version="0.4.1", latest_version="v0.4.2", release_url="https://example.com")
+
+    monkeypatch.setattr(
+        cli_module,
+        "_build_parser",
+        lambda: SimpleNamespace(
+            parse_args=lambda: SimpleNamespace(command="list", debug=False, quiet=True, mirror=None),
+        ),
+    )
+    monkeypatch.setattr(cli_module.sys, "argv", ["comix-dl", "--quiet", "list"])
+    monkeypatch.setattr(cli_module, "configure_logging", lambda _level: None)
+    monkeypatch.setattr(cli_module, "check_for_update", check_for_update)
+    monkeypatch.setattr(cli_module.console, "quiet", False)
+    monkeypatch.setattr(cli_module, "flow_list", lambda: 0)
+
+    assert cli_module.main() == 0
+    assert called is False
+
+
+def test_main_ignores_update_check_errors(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        cli_module,
+        "_build_parser",
+        lambda: SimpleNamespace(
+            parse_args=lambda: SimpleNamespace(command="list", debug=False, quiet=False, mirror=None),
+        ),
+    )
+    monkeypatch.setattr(cli_module.sys, "argv", ["comix-dl", "list"])
+    monkeypatch.setattr(cli_module, "configure_logging", lambda _level: None)
+    monkeypatch.setattr(
+        cli_module,
+        "check_for_update",
+        lambda _version: (_ for _ in ()).throw(RuntimeError("update check exploded")),
+    )
+    monkeypatch.setattr(cli_module, "flow_list", lambda: 0)
+
+    assert cli_module.main() == 0
 
 
 def test_run_async_sets_shutdown_flag_on_sigint_and_restores_signal(monkeypatch: pytest.MonkeyPatch):

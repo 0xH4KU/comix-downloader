@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.4.1-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.4.2-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -22,7 +22,7 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **PDF / CBZ conversion** — supports optional image optimization plus safe large-PDF batching with a bundled merge backend
 - **Injected runtime config** — settings are normalized into an explicit `AppConfig` with `desktop`, `low_resource`, `ci`, and `custom` tuning profiles
 - **Thinner architecture** — CLI prompting, application use cases, repositories, and browser/session code are split into testable layers
-- **Stronger operational quality** — structured logs, shared reporting across CLI/history/notifications, docs checks, typing, and a 70% coverage gate
+- **Stronger operational quality** — structured logs, shared reporting across CLI/history/notifications, release update notices, docs checks, typing, and a 70% coverage gate
 
 ## Platform Support
 
@@ -147,6 +147,8 @@ comix-dl history clear    # Purge all history
 # Quiet mode (for scripting, errors only)
 comix-dl -q download "manga-slug"
 ```
+
+When a newer stable GitHub release is available, normal CLI runs print a short update notice at startup. The check is cached for 24 hours in `~/.config/comix-dl/update-check.json`, has a short network timeout, and is skipped in quiet mode.
 
 ### Search & Download Flow
 

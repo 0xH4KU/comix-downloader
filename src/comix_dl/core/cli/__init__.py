@@ -43,6 +43,7 @@ from comix_dl.core.cli.flows import (
 from comix_dl.core.cli.interactive import flow_history, flow_settings, parse_chapter_selection, run_doctor
 from comix_dl.core.logging_utils import configure_logging
 from comix_dl.core.settings import SettingsRepository
+from comix_dl.core.update_check import UpdateInfo, check_for_update
 
 _shutdown_event = threading.Event()
 
@@ -133,6 +134,7 @@ def _main_impl() -> int:
         and sys.argv[1] not in ("search", "download", "info", "list", "clean", "history", "doctor", "settings")
     ):
         configure_logging(logging.INFO)
+        _maybe_print_update_notice()
         return _run_async(flow_search(sys.argv[1]))
 
     args = parser.parse_args()
@@ -143,6 +145,8 @@ def _main_impl() -> int:
     # Quiet mode
     if getattr(args, "quiet", False):
         console.quiet = True
+    else:
+        _maybe_print_update_notice()
 
     if args.command == "search":
         return _run_async(flow_search(args.query, quiet=args.quiet, mirror=args.mirror))
@@ -181,6 +185,25 @@ def _main_impl() -> int:
 
     # No subcommand → interactive main menu
     return _main_menu()
+
+
+def _maybe_print_update_notice() -> None:
+    """Print a best-effort release update notice."""
+    try:
+        update = check_for_update(__version__)
+    except Exception:
+        return
+    if update is None:
+        return
+    console.print(_format_update_notice(update))
+
+
+def _format_update_notice(update: UpdateInfo) -> str:
+    return (
+        f"[yellow]Update available:[/yellow] comix-dl {update.latest_version} "
+        f"is available; you have {update.current_version}.\n"
+        f"[dim]{update.release_url}[/dim]"
+    )
 
 
 def _run_async(coro: object) -> int:
