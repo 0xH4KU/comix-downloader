@@ -122,12 +122,14 @@ The framework expects:
   the CLI / persistence / reporting layers consume these.
 - Adapter functions raise `RemoteApiError` for user-meaningful remote
   failures, never bare `Exception`. The CLI surfaces these directly.
+- `configure_engine` may register pre-clearance hooks via
+  `engine.register_service_access_probe(...)` and
+  `engine.register_scrambled_image_renderer(...)`.
 - `on_engine_ready` may register URL transformers via
   `engine.register_url_transformer(iife_js_string)`; each IIFE is
   replayed against every browser page (main + pool). This is how
-  the comix.to adapter installs `/chapters` request signing — see
-  `sites/comix_to.py:_SIGNING_TRANSFORMER_IIFE` for the full
-  reference implementation.
+  the comix.to adapter installs the packaged frontend API client hook
+  from `sites/assets/comix_api_client.js`.
 
 Suggested smoke test:
 
@@ -147,21 +149,19 @@ the wiring works.
 
 ## Things that bite forks
 
-**The signing IIFE extraction is brittle on purpose.** The comix.to
-adapter does not implement HMAC by hand — it `eval`s the site's own
-JS. That works because comix.to's bundle structure is stable enough
-to anchor on string literals (`baseUrl:"https://..."`,
-`class n extends Error{response`, `let i=`, `}();`). Your site's
-bundle is almost certainly different. Three options:
+**The API-client hook is site-specific.** The comix.to adapter does
+not implement request signing or encrypted-response decoding by hand.
+It loads the site's live frontend API client through the packaged
+`sites/assets/comix_api_client.js` hook. Your site's bundle is almost
+certainly different. Three options:
 
 1. If your site has no signing, delete the entire IIFE block and
    leave `on_engine_ready` empty.
 2. If your site signs simply (e.g. fixed header), implement signing
    in pure JS in your transformer — no extraction needed.
 3. If your site has obfuscated client-side signing like comix.to,
-   adapt `_SIGNING_TRANSFORMER_IIFE` by changing the anchor strings
-   and the eval prefix. Test on a fresh page first; the chunk URL
-   pattern (`_next/static/chunks`) is Next.js-specific.
+   write a site-specific packaged JS hook that discovers the site's
+   frontend client and registers `window.__comixJsonRequest`.
 
 Either way, see todo.md for the IIFE hardening backlog item that
 adds hash + disk cache + sanity whitelist around the eval call. If
@@ -170,11 +170,11 @@ shipping.
 
 **Cloudflare assumptions.** The engine assumes a real Chrome session
 can solve any CF challenge once, then ride the persisted cookie. If
+your site uses Cloudflare but has a different cheap API probe, install
+that in `configure_engine()` via `register_service_access_probe`. If
 your site uses a different anti-bot vendor (DataDome, PerimeterX,
-hCaptcha standalone) the CF code path will not help; you will need
-to extend `core/engines/cdp_browser.py` with the new vendor's
-detection and clearance flow. That work is not adapter-level — it
-goes into core, alongside the existing CF helpers.
+hCaptcha standalone), you may need framework-level changes in
+`core/engines/cdp_browser.py`.
 
 **Schema drift.** `core/models.py` has fields named for comix.to
 concepts (`hash_id`, `chapter_id` as `int`). They are intentionally
@@ -209,7 +209,7 @@ Quick map for fork audits:
 | `core/` | Keep verbatim |
 | `sites/base.py` | Keep verbatim (the contract) |
 | `sites/_template.py` | Keep as reference; do not register |
-| `sites/comix_to.py` | Delete; replace with your adapter |
+| `sites/comix_to*.py` | Delete; replace with your adapter and helpers |
 | `sites/__init__.py` | Edit one line (the side-effect import) |
 | `tests/test_comix_to_adapter.py` | Delete; replace with your adapter's tests |
 | `tests/test_*` (other) | Keep — they test the framework |
@@ -218,15 +218,13 @@ Quick map for fork audits:
 | `CONTRIBUTING.md` | Edit if your contribution flow differs |
 | `FORKING.md` (this file) | Keep as-is so the next fork is easier |
 
-If a `grep -r "comix" core/` ever shows anything other than docstring
+If a `grep -r "comix" src/comix_dl/core/` ever shows anything other than docstring
 examples, that is a framework leak — file an upstream issue or fix
 it locally before shipping. The comix.to-shaped strings in `core/`
-right now are intentionally constrained to:
+should be constrained to:
 
 - `core/models.py` docstring examples
 - `core/cli/__init__.py` argparse description
-- `core/engines/cdp_browser.py` probe-path comment (planned move
-  in F-5 follow-up)
 
 Everything else in `core/` is genuinely site-agnostic.
 

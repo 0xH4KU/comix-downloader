@@ -39,6 +39,9 @@ class _StubAdapter:
     def parse_identifier(self, url_or_slug: str) -> str | None:
         return url_or_slug or None
 
+    def configure_engine(self, engine: Engine) -> None:
+        return None
+
     async def on_engine_ready(self, engine: Engine) -> None:
         return None
 

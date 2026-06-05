@@ -2,16 +2,16 @@
 
 ## Overview
 
-comix-downloader is a desktop-first manga downloader for `comix.to`. It uses a real Chrome instance over CDP to survive Cloudflare, then fetches API metadata and image bytes through that browser session. The current codebase is split across four practical layers:
+comix-downloader is a desktop-first manga downloader for `comix.to`. It uses a real Chrome instance over CDP to survive Cloudflare, then fetches protected API metadata and image bytes through that browser session.
 
-1. Presentation: `cli/__init__.py`, `cli/interactive.py`, `cli/display.py`
-2. Application use cases: `application/query_usecase.py`, `application/download_usecase.py`, `application/cleanup_usecase.py`, `application/download_reporting.py`, `application/session.py`
-3. Workflow/presentation glue: `cli/flows.py`
-4. Domain/service logic and infrastructure: `comix_service.py`, `downloader.py`, `converters.py`, `browser_session.py`, `cdp_browser.py`, `settings.py`, `history.py`, `fileio.py`, `notify.py`, `errors.py`, `logging_utils.py`
+The codebase is split into four practical layers:
 
-This is the real structure today, not an aspirational diagram. The application layer now owns query/download/cleanup orchestration plus runtime/session wiring, while `cli/flows.py` has become a thinner presentation-oriented adapter. The remaining debt is that interactive control flow and Rich rendering are still coupled in that adapter.
+1. Presentation: `core/cli/__init__.py`, `core/cli/interactive.py`, `core/cli/display.py`
+2. CLI workflow glue: `core/cli/flows.py`
+3. Application use cases: `core/application/query_usecase.py`, `core/application/download_usecase.py`, `core/application/cleanup_usecase.py`, `core/application/download_reporting.py`, `core/application/session.py`
+4. Site and infrastructure: `sites/`, `core/downloader.py`, `core/converters.py`, `core/engines/`, `core/settings.py`, `core/history.py`, `core/fileio.py`, `core/notify.py`, `core/errors.py`, `core/logging_utils.py`
 
-At process start, the CLI loads persisted settings once, builds a per-run `AppConfig`, and passes that config explicitly into the browser, service, downloader, and converter stack. Runtime behavior no longer depends on mutating a process-global config singleton.
+The important boundary is that `core/` should stay site-agnostic. comix.to-specific API parsing, duplicate rules, Cloudflare probes, and scrambled image rendering live under `sites/`.
 
 ## Runtime Topology
 
@@ -19,271 +19,185 @@ At process start, the CLI loads persisted settings once, builds a per-run `AppCo
 User
   |
   v
-cli/__init__.py
+core/cli/__init__.py
   |
-  +--> cli/interactive.py
-  +--> cli/display.py
-  +--> cli/flows.py
+  +--> core/cli/interactive.py
+  +--> core/cli/display.py
+  +--> core/cli/flows.py
            |
-           +--> application/query_usecase.py
-           +--> application/download_usecase.py
-           +--> application/cleanup_usecase.py
-           +--> application/session.py
-            |
-            +--> comix_service.py
-            +--> downloader.py
-           +--> converters.py
-           +--> history.py
-           +--> notify.py
-           +--> cdp_browser.py
+           +--> core/application/query_usecase.py
+           +--> core/application/download_usecase.py
+           +--> core/application/cleanup_usecase.py
+           +--> core/application/session.py
                     |
-                    v
-             browser_session.py
+                    +--> sites registry
+                    +--> sites/comix_to.py facade
+                    |      +--> comix_to_api.py
+                    |      +--> comix_to_parsing.py
+                    |      +--> comix_to_dedup.py
+                    |      +--> comix_to_url.py
+                    |      +--> comix_to_browser.py
                     |
-                    v
-           Chrome subprocess + Playwright CDP
-                    |
-                    v
-                 comix.to
+                    +--> core/downloader.py
+                    +--> core/converters.py
+                    +--> core/history.py
+                    +--> core/notify.py
+                    +--> core/engines/cdp_browser.py
+                            |
+                            v
+                     core/engines/browser_session.py
+                            |
+                            v
+                   Chrome subprocess + Playwright CDP
+                            |
+                            v
+                         comix.to
 ```
 
 ## Browser Stack
 
-### `browser_session.py`
+### `core/engines/browser_session.py`
 
 `BrowserSessionManager` owns Chrome lifecycle and pooled browser resources:
 
-- Launches Chrome with `--remote-debugging-port`
-- Applies a single-instance lock file under the config directory
-- Connects Playwright over CDP
-- Owns the main page plus lazily-created pooled download pages
-- Applies timeout boundaries to connect, page creation, navigation, and `page.evaluate()`
-- Replaces dead pooled pages instead of re-queuing broken objects
-- Cleans up only the Chrome started by the current Python process
+- launches Chrome with `--remote-debugging-port`
+- applies a single-instance lock file under the config directory
+- connects Playwright over CDP
+- owns the main page plus lazily-created pooled download pages
+- applies timeout boundaries to connect, page creation, navigation, and `page.evaluate()`
+- replaces dead pooled pages instead of re-queuing broken objects
+- cleans up only the Chrome started by the current Python process
 
-This separation matters because lifecycle logic is stateful and failure-prone. Keeping it isolated reduces the blast radius when changing Cloudflare handling or request logic.
+### `core/engines/cdp_browser.py`
 
-### `cdp_browser.py`
+`CdpBrowser` layers Cloudflare-aware request flow on top of `BrowserSessionManager`:
 
-`CdpBrowser` now sits above `BrowserSessionManager` and focuses on Cloudflare-aware request flow:
+- ensures clearance before browser-backed API/image requests
+- detects renewed challenges and HTTP 403 responses
+- resets cached clearance once and retries once
+- fetches bytes/JSON via `page.evaluate(fetch())`
+- exposes hook registration for site-specific request transformers, service probes, and scrambled image renderers
 
-- Ensures clearance before browser-backed API/image requests
-- Detects renewed challenges and HTTP 403 responses
-- Resets cached clearance once and retries once
-- Prefers live challenge signals over stale `cf_clearance` cookies when deciding whether manual solve is needed
-- Fetches bytes/JSON via `page.evaluate(fetch())`
-- Keeps Cloudflare heuristics separate from Chrome startup and shutdown
-- Extracts and installs the site's API request-signing function at runtime (see below)
+`CdpBrowser` does not hardcode comix.to API paths or image-rendering JavaScript. Those are installed by the active site adapter during application-session setup.
 
-This layering makes the browser subsystem testable in two slices:
+## Site Adapter Stack
 
-- Session tests: locks, page pool, dead-page replacement, timeout wiring
-- Cloudflare/request tests: challenge detection, retry behavior, request orchestration
+### `sites/base.py`
 
-#### API Request Signing (v0.3.46+)
+`Engine` is the transport protocol consumed by adapters. `SiteAdapter` is the framework contract for search, series lookup, chapter images, lifecycle hooks, mirror probing, and deduplication.
 
-The `/manga/{hash_id}/chapters` endpoint now requires an HMAC-style `_=` signature query parameter alongside `time=`. Requests without it receive `HTTP 200` with `{"status": 403}` in the JSON body. The signing algorithm is obfuscated inside a Next.js chunk and generates path-specific signatures.
+Lifecycle has two phases:
 
-Instead of reverse-engineering the algorithm, `CdpBrowser` extracts the signing IIFE from the site's own JavaScript at runtime:
+- `configure_engine(engine)` runs before Cloudflare clearance and registers browser hooks such as service probes and scrambled-image renderers.
+- `on_engine_ready(engine)` runs after clearance and page-pool warm-up, before caller-visible requests. comix.to uses this to install the packaged JavaScript API client hook.
 
-1. After CF clearance, `_install_api_signing()` scans `<script>` tags for the chunk containing the API client definition.
-2. It extracts the signing IIFE by locating known boundary markers in the chunk source.
-3. The IIFE is `eval`'d on each browser page, exposing `window.__comixSign(method, path, options)`. To ensure lazy-loaded pool pages also receive the signing code, `CdpBrowser` overrides `_create_pooled_page()`.
-4. `get_json()` transparently detects `/chapters` requests and applies signing before executing `fetch()`.
+### `sites/comix_to.py`
 
-This approach is robust because it uses the site's actual signing implementation rather than a fragile reimplementation, and it adapts automatically when the signing algorithm is updated in new JS bundle deployments.
+`ComixToAdapter` is now a facade. It wires the framework contract to focused helper modules and registers a singleton with the site registry. Each application session calls `new_session()` so per-run caches stay isolated.
 
-## Service and Download Layer
+### `sites/comix_to_api.py`
 
-### `comix_service.py`
+`ComixToApiClient` owns comix.to request orchestration:
 
-The service client talks to the `comix.to` v2 REST API and normalizes chapter metadata:
+- search API calls
+- direct series lookup and slug fallback
+- chapter pagination
+- image-count prefetch for duplicate groups
+- chapter detail payload cache
+- user-facing `RemoteApiError` wrapping
 
-- Search and series detail lookup use `hash_id`, not slug
-- Chapter image lookup uses `chapter_id`
-- Chapter numbers are preserved as normalized strings and sorted via a dedicated natural-sort key instead of `float`
-- Deduplication keeps language variants distinct
-- Same-language duplicates compete on `image_count`
-- Deduplication now emits a `DedupDecision` report so the CLI can show which variants were dropped and why
+The cache is session-scoped through the adapter instance returned by `new_session()`.
 
-### `downloader.py`
+### `sites/comix_to_parsing.py`
 
-`Downloader` is responsible for safe image persistence and resumable chapter state:
+Pure parsing helpers normalize raw JSON into framework models:
 
-- Image bytes are fetched through `CdpBrowser.get_bytes()`
-- Per-image concurrency is limited by `download.max_concurrent_images`
-- Existing chapter files are indexed once up front for O(1) resume checks
-- Existing files are validated by magic bytes before reuse
-- Image writes are atomic via temp files and `os.replace()`
-- Partial/failed chapters write `chapter.state.json`
-- Only fully successful chapters get a `.complete` marker
+- search results
+- chapter list items
+- chapter image pages
+- taxonomy/person names
+- API status coercion and response unwrapping
 
-### `converters.py`
+### `sites/comix_to_dedup.py`
 
-`converters.py` packages only complete chapter directories into user-facing archives:
+Pure deduplication rules collapse duplicate chapter variants by number, language, subtitle, and page count. It also builds `DedupDecision` records so the CLI can show what was kept and dropped.
 
-- CBZ output is a direct stored archive of the validated image set
-- Large PDF output is rendered in batches to cap memory use
-- The batch size is explicitly bounded by `convert.pdf_batch_size`
-- Large-PDF temp artifacts live inside one isolated temporary workspace that is removed after merge or failure
-- Multi-batch PDF merge uses the bundled `pypdf` runtime dependency by default
-- `pikepdf` remains an optional faster backend when present
-- Missing merge support is treated as a hard failure instead of producing a truncated PDF
+### `sites/comix_to_browser.py`
 
-### `errors.py`
+comix.to-specific browser hooks live here:
 
-Core workflow failures now have explicit domain error types instead of relying on generic `RuntimeError`:
+- service-access probe for Cloudflare clearance validation
+- scrambled image canvas renderer
+- cache-bust retry for decode failures
 
-- `ConfigurationError`
-- `CloudflareChallengeError`
-- `RemoteApiError`
-- `PartialDownloadError`
-- `ConversionError`
-
-This keeps orchestration code readable and makes future application-layer extraction less dependent on fragile string matching.
+This keeps `CdpBrowser` reusable for future adapters.
 
 ## Download State Model
 
-The downloader now has an explicit result model instead of inferring success from scattered counters.
+`Downloader` is responsible for safe image persistence and resumable chapter state:
 
-### `ChapterDownloadResult`
+- image bytes are fetched through `Engine.get_bytes()` or `Engine.get_scrambled_image_bytes()`
+- per-image concurrency is limited by `download.max_concurrent_images`
+- existing chapter files are indexed once up front for resume checks
+- existing files are validated before reuse
+- image writes are atomic
+- partial/failed chapters write `chapter.state.json`
+- only fully successful chapters get a `.complete` marker
 
-Each chapter ends in exactly one of four states:
-
-- `complete`
-- `partial`
-- `failed`
-- `skipped`
-
-The result carries:
-
-- total pages
-- downloaded pages
-- skipped pages
-- failed pages
-- failed filenames
-
-That result is the contract used by the orchestration layer to decide what is safe to do next.
-
-### Recovery Artifacts
-
-`chapter.state.json` records the last known partial state:
-
-- timestamp
-- title / chapter label
-- final chapter status
-- counts for downloaded, skipped, and failed pages
-- failed page filename, source URL, and last error
-
-This file is the source of truth for interrupted or degraded runs. It prevents the old failure mode where a chapter looked successful simply because some files existed on disk.
+`ChapterDownloadResult` ends in exactly one of four states: `complete`, `partial`, `failed`, or `skipped`.
 
 ## Workflow Orchestration
 
-### `application/query_usecase.py`
+### `core/application/query_usecase.py`
 
-The query use case isolates series lookup rules that were previously duplicated in CLI flows:
+The query use case isolates lookup rules:
 
-- normalize URL or slug input into a canonical slug
+- normalize URL or slug input into an adapter identifier
 - run search queries
-- load a series by `hash_id`
+- load a series by canonical identifier
 - resolve slug input through direct lookup first, then search fallback
 
-This gives the CLI a single lookup contract instead of open-coded fallback logic.
+### `core/application/download_usecase.py`
 
-### `application/download_usecase.py`
-
-The download use case owns the batch chapter workflow:
+The download use case owns batch chapter orchestration:
 
 - bounded concurrent chapter scheduling
-- per-chapter progress event emission for the presentation layer
+- per-chapter progress event emission
 - conversion gating so partial chapters never package
 - final summary aggregation
 - history recording
 - completion notification
 
-The key boundary is the event callback. The use case no longer needs Rich progress objects, but the CLI can still render a detailed progress view.
+The presentation boundary is the event callback. The use case does not know about Rich progress objects.
 
-### `application/download_reporting.py`
+### `core/application/download_reporting.py`
 
-Download reporting now has a dedicated formatting layer built on top of the canonical `DownloadSummary` result:
+Download reporting centralizes count ordering, byte formatting, issue preview lines, and notification body construction so CLI panels, history, and desktop notifications do not drift.
 
-- stable count ordering for summary text
-- shared byte-size formatting
-- normalized issue lines
-- a notification body derived from the same summary data
+### `core/application/cleanup_usecase.py`
 
-This matters because CLI panels, persisted history, and desktop notifications no longer drift independently when result wording changes.
-
-### `application/cleanup_usecase.py`
-
-Cleanup planning is now separated from the CLI:
+Cleanup planning is separated from CLI rendering:
 
 - list downloaded series summaries
 - detect cleanup-safe raw image directories
-- compute aggregate reclaimable bytes
+- compute reclaimable bytes
 - apply deletion plans and report failures
 
-This keeps filesystem scanning and deletion rules out of presentation code.
+### `core/application/session.py`
 
-### `application/session.py`
-
-Runtime/session setup for CLI commands is now centralized here:
+Runtime/session setup is centralized:
 
 - load normalized settings and runtime config
-- resolve the effective output directory
-- open the browser/session boundary
-- build the `ComixService`
-- expose a small browser-backed session object to the CLI layer
-
-That removes browser/service/bootstrap code from command-dispatch paths and keeps `cli/__init__.py` focused on parsing and routing.
-
-### `cli/flows.py`
-
-`cli/flows.py` is no longer the core orchestration center, but it still owns interactive flow control and Rich rendering:
-
-- Rich progress rendering
-- prompt loops and selection parsing
-- search result / metadata / dedup presentation
-- cleanup confirmation prompts
-- CLI-boundary rendering for `RemoteApiError`, so API failures are surfaced directly instead of being flattened into empty-state UI
-
-That is materially better than before, but not the final end-state. The CLI adapter still mixes interaction policy with rendering.
+- select the active mirror
+- create a session-scoped adapter
+- open `CdpBrowser`
+- let the adapter configure pre-clearance hooks
+- register the post-clearance adapter setup/probe hook
+- expose a small `ApplicationSession` to CLI flows
 
 ## Persistence
 
-### `settings.py`
-
-Settings are stored in `~/.config/comix-dl/settings.json` and written atomically. `SettingsRepository` owns load/save/default fallback behavior, schema-version handling, and value normalization. It also builds a per-run `AppConfig` from persisted settings so runtime components can receive configuration by constructor injection instead of reading hidden global state.
-
-Only active user-facing controls remain wired here:
-
-- output directory
-- default format
-- concurrency profile (`desktop`, `low_resource`, `ci`, `custom`)
-- chapter concurrency (for `custom` profile)
-- image concurrency (for `custom` profile)
-- retry count
-- rate-limit delay toggle (for `custom` profile)
-- image optimization toggle
-
-The profile mechanism is important because it turns environment-sensitive tuning into data instead of ad hoc code changes. Legacy settings with non-default concurrency values are migrated to `custom` so existing behavior is preserved.
-
-### `history.py`
-
-Download history is stored in `~/.config/comix-dl/history.json` and written atomically. `HistoryRepository` owns load, sort, trim, append, and clear behavior. Entries record:
-
-- title
-- chapter count
-- output format
-- total bytes
-- counts for completed / partial / failed / skipped chapters
-
-History records only the final workflow summary, not raw per-image diagnostics.
-They now also persist normalized summary text and chapter-level issue lines derived from the shared download report.
-
-### `fileio.py`
-
-`fileio.py` provides the atomic write primitives used by settings, history, and partial chapter state files. That consolidation is important because corruption prevention is an infrastructure concern, not a per-feature detail.
+Settings are stored in `~/.config/comix-dl/settings.json`; history is stored in `~/.config/comix-dl/history.json`; mirror state is stored in `~/.config/comix-dl/mirror_state.json`. These stores use atomic writes through `core/fileio.py`.
 
 ## Data Flow
 
@@ -291,23 +205,23 @@ They now also persist normalized summary text and chapter-level issue lines deri
 Search
   settings.json
     -> SettingsRepository.load()
-    -> SettingsRepository.build_runtime_config()
-  user query
-    -> comix_service.search()
+    -> build_runtime_config()
+  query
+    -> ApplicationSession.search()
+    -> SiteAdapter.search()
+    -> ComixToApiClient.search()
     -> SearchResult list
-    -> user selection
 
 Download
-  settings.json
-    -> SettingsRepository.load()
-    -> SettingsRepository.build_runtime_config()
   selected series
-    -> comix_service.get_chapters()
-    -> cli/flows.py schedules chapter tasks
-    -> downloader.download_chapter()
-    -> ChapterDownloadResult
-    -> complete only: converters.convert()
-    -> workflow summary
+    -> ApplicationSession.resolve_series()
+    -> SiteAdapter.get_series()
+    -> ComixToApiClient.get_series()
+    -> selected chapters
+    -> download_usecase.download_chapters()
+    -> Downloader.download_chapter()
+    -> converters.convert()
+    -> DownloadSummary
     -> history.record_download()
     -> notify.send_notification()
 
@@ -315,53 +229,15 @@ Resume / Recovery
   chapter dir
     -> .complete present -> skip safely
     -> chapter.state.json present -> inspect partial state
-    -> existing files -> validate magic bytes
+    -> existing files -> validate image bytes
     -> missing/corrupt pages -> re-download
 ```
 
-## Availability Boundaries
-
-The current implementation has several explicit high-availability boundaries:
-
-- Single-instance Chrome profile lock prevents cross-process profile corruption
-- Page pool size is bounded and tied to configured image concurrency
-- Browser operations fail with explicit timeouts instead of hanging forever
-- Cloudflare expiry is retried once through a clearance reset path
-- Dead pooled pages are evicted and replaced
-- Atomic writes prevent half-written settings, history, and image files from being treated as valid state
-- High-risk failure modes now emit targeted diagnostics instead of generic transport errors
-
-These boundaries are the difference between a recoverable run and silent damage.
-
-## Observability
-
-`logging_utils.py` now installs a structured formatter at CLI startup. High-value download-path logs emit stable JSON context fields instead of burying identifiers inside free-form strings.
-
-Current structured fields include at least:
-
-- `series`
-- `chapter_id`
-- `chapter_title`
-- `retry_count`
-- `status`
-- `bytes`
-- `elapsed`
-
-This is intentionally lightweight: it keeps the standard library logging stack, but makes downstream filtering and debugging materially easier.
-
-## Release Docs
-
-Two repository-level documents now carry the operational context that does not belong inside module docs:
-
-- `MIGRATION.md` explains what changed for maintainers moving from the old global-config, partial-success, monolithic-CLI design to the current layered runtime
-- `RELEASE_CHECKLIST.md` is the source of truth for versioned slice release steps, validation order, and closeout checks
-
 ## Known Debt
 
-The following debts remain real and are intentionally documented here:
+- `core/application/download_usecase.py` still talks to history and notification infrastructure directly instead of using ports for both.
+- `core/cli/flows.py` still mixes prompt policy and Rich rendering.
+- `ComixToAdapter` keeps compatibility wrappers for old private helper methods; these can be removed in a future major cleanup once forks have moved to the focused helper modules.
+- Automatic mirror switching after a failed probe is still deferred; the current run continues with the selected mirror and records the outcome.
 
-- `application/download_usecase.py` still talks to history and notification infrastructure directly instead of going through abstract ports
-- CLI still renders several failures with generic text instead of a single centralized error presenter
-- `browser_session.py`, `cli/interactive.py`, and `notify.py` remain the main low-coverage areas after the 70% gate raise
-
-The point of this document is to describe the current system honestly so the next refactor slices have a stable reference point.
+The purpose of this document is to describe the current system honestly, not to preserve old plans.

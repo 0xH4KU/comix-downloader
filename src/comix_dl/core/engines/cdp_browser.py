@@ -10,7 +10,7 @@ Site-specific hooks
 -------------------
 
 Although the public surface (``get_json`` / ``get_bytes`` / ``post_json``
-/ ``fetch_page``) is intentionally site-agnostic, two extension points
+/ ``fetch_page``) is intentionally site-agnostic, extension points
 let a :class:`~comix_dl.sites.base.SiteAdapter` inject behaviour:
 
 * :meth:`CdpBrowser.register_url_transformer` accepts a JS IIFE that
@@ -23,6 +23,12 @@ let a :class:`~comix_dl.sites.base.SiteAdapter` inject behaviour:
   run exactly once after Cloudflare clearance has been confirmed and
   before any caller-visible request runs. Adapters use it to install
   signing functions, prime cookies, etc.
+* :meth:`CdpBrowser.register_service_access_probe` accepts a coroutine
+  used while waiting for Cloudflare clearance. Each site supplies its
+  own lightweight API probe.
+* :meth:`CdpBrowser.register_scrambled_image_renderer` accepts a
+  coroutine used by ``get_scrambled_image_bytes`` for site-specific
+  image unscrambling.
 
 Both registries are populated outside this module — typically by the
 application session bootstrap calling
@@ -37,7 +43,7 @@ import contextlib
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -74,6 +80,23 @@ _CF_CONTENT_MARKERS = (
 # work (install signing, prime caches, etc.) using the public engine
 # API.
 OnEngineReadyHook = Callable[["CdpBrowser"], Awaitable[None]]
+ServiceAccessProbe = Callable[["CdpBrowser", "Page"], Awaitable[bool]]
+
+
+class ScrambledImageRenderer(Protocol):
+    """Callable shape for site-specific scrambled image renderers."""
+
+    def __call__(
+        self,
+        engine: CdpBrowser,
+        page: Page,
+        url: str,
+        *,
+        width: int | None,
+        height: int | None,
+        referer: str | None,
+    ) -> Awaitable[bytes]:
+        ...
 
 # JS snippet appended to the start of every outbound fetch helper.
 # It runs registered URL transformers in order. Errors in any single
@@ -171,6 +194,8 @@ class CdpBrowser(BrowserSessionManager):
         self._main_page_lock = asyncio.Lock()
         self._url_transformer_iifes: list[str] = []
         self._on_ready_hooks: list[OnEngineReadyHook] = []
+        self._service_access_probe: ServiceAccessProbe | None = None
+        self._scrambled_image_renderer: ScrambledImageRenderer | None = None
         self._on_ready_hooks_done = False
 
     async def close(self) -> None:
@@ -218,6 +243,14 @@ class CdpBrowser(BrowserSessionManager):
         and propagates to the original ``ensure_cf_clearance`` caller.
         """
         self._on_ready_hooks.append(hook)
+
+    def register_service_access_probe(self, probe: ServiceAccessProbe) -> None:
+        """Register a site-specific probe used while waiting for Cloudflare clearance."""
+        self._service_access_probe = probe
+
+    def register_scrambled_image_renderer(self, renderer: ScrambledImageRenderer) -> None:
+        """Register a site-specific renderer for scrambled image URLs."""
+        self._scrambled_image_renderer = renderer
 
     async def _install_url_transformers_on_page(self, page: Page) -> None:
         """Replay every registered URL transformer IIFE on *page*."""
@@ -365,38 +398,9 @@ class CdpBrowser(BrowserSessionManager):
 
     async def _probe_service_access(self, page: Page) -> bool:
         """Verify that the current browser context can reach the service origin."""
-        if self._base_url is None:
-            return False
-        # The lightweight probe path is comix.to-specific; F-5 will move
-        # it onto the SiteAdapter so each site supplies its own probe.
-        probe_url = f"{self._base_url}/api/v1/manga?keyword=test&limit=1"
-        try:
-            result = await self._evaluate_with_timeout(
-                page,
-                """async (url) => {
-                    const resp = await fetch(url, { redirect: 'follow' });
-                    return {
-                        ok: resp.ok,
-                        url: resp.url,
-                        contentType: resp.headers.get('content-type') || '',
-                    };
-                }""",
-                probe_url,
-                timeout_ms=self._config.browser.timeout_ms,
-                action=f"Probing browser access to {probe_url}",
-            )
-        except Exception:
-            return False
-
-        if not isinstance(result, dict):
-            return False
-        if result.get("ok") is not True:
-            return False
-
-        final_url = str(result.get("url", "")).lower()
-        if "/cdn-cgi/challenge-platform/" in final_url or "__cf_chl_" in final_url:
-            return False
-        return "json" in str(result.get("contentType", "")).lower()
+        if self._service_access_probe is None:
+            return True
+        return await self._service_access_probe(self, page)
 
     async def ensure_cf_clearance(self) -> None:
         """Navigate to the configured base URL to pass any CF challenge."""
@@ -535,37 +539,26 @@ class CdpBrowser(BrowserSessionManager):
         height: int | None = None,
         referer: str | None = None,
     ) -> bytes:
-        """Render a comix.to scrambled image through the site's reader canvas."""
+        """Render a scrambled image through the registered site renderer."""
+        if self._scrambled_image_renderer is None:
+            raise NotImplementedError(
+                "No scrambled image renderer is registered for this browser session."
+            )
         if not self._started:
             await self.start()
         await self.ensure_cf_clearance()
 
         page = await self.acquire_page()
         try:
-            await self._render_scrambled_image_on_page(page, url=url, width=width, height=height, referer=referer)
-            screenshot = await self._screenshot_scrambled_canvas(page, url=url)
+            rendered = await self._scrambled_image_renderer(
+                self,
+                page,
+                url,
+                width=width,
+                height=height,
+                referer=referer,
+            )
         except Exception as exc:
-            retry_url = self._cache_busted_url(url)
-            if retry_url != url and self._page_is_healthy(page):
-                try:
-                    await self._render_scrambled_image_on_page(
-                        page,
-                        url=retry_url,
-                        width=width,
-                        height=height,
-                        referer=referer,
-                    )
-                    screenshot = await self._screenshot_scrambled_canvas(page, url=retry_url)
-                except Exception as retry_exc:
-                    typed = _translate_browser_error(retry_exc)
-                    await self._finish_with_pooled_page(page)
-                    if typed is retry_exc:
-                        raise
-                    raise typed from retry_exc
-                else:
-                    await self._finish_with_pooled_page(page)
-                    return screenshot
-
             typed = _translate_browser_error(exc)
             await self._finish_with_pooled_page(page)
             if typed is exc:
@@ -573,119 +566,7 @@ class CdpBrowser(BrowserSessionManager):
             raise typed from exc
         else:
             await self._finish_with_pooled_page(page)
-            return screenshot
-
-    async def _render_scrambled_image_on_page(
-        self,
-        page: Page,
-        *,
-        url: str,
-        width: int | None,
-        height: int | None,
-        referer: str | None,
-    ) -> dict[str, object]:
-        """Render a scrambled image URL into a reusable DOM canvas on *page*."""
-        result = await self._evaluate_with_timeout(
-            page,
-            """async ([url, width, height, headers]) => {
-                window.__comixRenderScrambledImage = window.__comixRenderScrambledImage || async function(
-                    imageUrl,
-                    imageWidth,
-                    imageHeight
-                ) {
-                    async function loadRenderer() {
-                        if (typeof globalThis.$r === 'function') return globalThis.$r;
-
-                        const scripts = Array.from(document.querySelectorAll('script[src]'));
-                        const mainScript = scripts.find((script) => {
-                            const src = script.getAttribute('src') || '';
-                            return src.includes('/assets/build/')
-                                && src.includes('/dist/main-')
-                                && src.endsWith('.js');
-                        });
-                        if (!mainScript) {
-                            throw new Error('Could not find comix.to main script.');
-                        }
-
-                        const mainUrl = new URL(mainScript.getAttribute('src'), window.location.href).href;
-                        const mainText = await fetch(mainUrl).then((resp) => resp.text());
-                        const secureMatch = mainText.match(/"([^"]*secure-[^"]+\\.js)"/)
-                            || mainText.match(/from"\\.\\/(secure-[^"]+\\.js)"/);
-                        if (!secureMatch) {
-                            throw new Error('Could not find comix.to secure image module.');
-                        }
-
-                        const securePath = secureMatch[1];
-                        const secureUrl = securePath.startsWith('./')
-                            ? new URL(securePath.slice(2), mainUrl).href
-                            : securePath.startsWith('/')
-                                ? new URL(securePath, window.location.origin).href
-                                : new URL(securePath, mainUrl).href;
-                        const secureModule = await import(secureUrl);
-                        const renderer = secureModule.t || globalThis.$r;
-                        if (typeof renderer !== 'function') {
-                            throw new Error('Could not find comix.to secure image renderer.');
-                        }
-                        return renderer;
-                    }
-
-                    const renderer = await loadRenderer();
-                    const old = document.getElementById('__comix_scrambled_wrap');
-                    if (old) old.remove();
-                    const wrap = document.createElement('div');
-                    wrap.id = '__comix_scrambled_wrap';
-                    wrap.style.cssText = [
-                        'position:absolute',
-                        'left:0',
-                        'top:0',
-                        'z-index:2147483647',
-                        'background:#fff',
-                    ].join(';');
-                    const canvas = document.createElement('canvas');
-                    canvas.id = '__comix_scrambled_canvas';
-                    canvas.className = 'rpage-page__img';
-                    if (Number.isFinite(imageWidth) && imageWidth > 0) canvas.width = imageWidth;
-                    if (Number.isFinite(imageHeight) && imageHeight > 0) canvas.height = imageHeight;
-                    wrap.appendChild(canvas);
-                    document.body.appendChild(wrap);
-                    await renderer(imageUrl, canvas);
-                    return {
-                        ok: true,
-                        selector: '#__comix_scrambled_canvas',
-                        width: canvas.width,
-                        height: canvas.height,
-                    };
-                };
-
-                return await window.__comixRenderScrambledImage(url, width, height);
-            }""",
-            [url, width, height, {"Referer": referer} if referer else {}],
-            timeout_ms=self._config.download.read_timeout_ms,
-            action=f"Rendering scrambled image from {url}",
-        )
-        if not isinstance(result, dict) or result.get("selector") != "#__comix_scrambled_canvas":
-            raise RuntimeError(f"Scrambled image renderer returned an invalid result for {url}.")
-        return cast("dict[str, object]", result)
-
-    async def _screenshot_scrambled_canvas(self, page: Page, *, url: str) -> bytes:
-        """Capture the rendered scrambled canvas as PNG bytes."""
-        element = await page.query_selector("#__comix_scrambled_canvas")
-        if element is None:
-            raise RuntimeError(f"Scrambled image canvas was not found after rendering {url}.")
-        return await self._run_with_timeout(
-            element.screenshot(
-                type="png",
-                timeout=self._config.download.read_timeout_ms,
-                style=None,
-            ),
-            timeout_ms=self._config.download.read_timeout_ms,
-            action=f"Capturing rendered scrambled image from {url}",
-        )
-
-    @staticmethod
-    def _cache_busted_url(url: str) -> str:
-        separator = "&" if "?" in url else "?"
-        return f"{url}{separator}r=1"
+            return rendered
 
     async def _get_bytes_direct(self, url: str, *, referer: str | None = None) -> bytes:
         """Fetch binary content with direct HTTP in a worker thread."""

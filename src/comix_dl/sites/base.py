@@ -40,6 +40,9 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from playwright.async_api import Page
+
+    from comix_dl.core.engines.cdp_browser import CdpBrowser, ScrambledImageRenderer
     from comix_dl.core.models import (
         ChapterImages,
         ChapterInfo,
@@ -53,6 +56,13 @@ if TYPE_CHECKING:
 # reference to ``Engine`` resolves correctly when this module is
 # imported from contexts where ``Engine`` is not yet defined.
 OnEngineReadyHook = "Callable[[Engine], Awaitable[None]]"
+
+
+class ServiceAccessProbe(Protocol):
+    """Callable shape for service probes installed by site adapters."""
+
+    def __call__(self, engine: CdpBrowser, page: Page) -> Awaitable[bool]:
+        ...
 
 
 @runtime_checkable
@@ -102,9 +112,9 @@ class Engine(Protocol):
     ) -> bytes:
         """Render a site-scrambled image URL into normal image bytes.
 
-        Engines without a browser-backed canvas may raise
-        ``NotImplementedError``. The current CDP engine implements this
-        for comix.to by importing the reader's own secure image module.
+        Engines without a registered renderer may raise
+        ``NotImplementedError``. Browser-backed sites install renderers
+        through :meth:`register_scrambled_image_renderer`.
         """
         ...
 
@@ -147,6 +157,29 @@ class Engine(Protocol):
         challenges and warmed the page pool, but before any
         adapter-level request runs. Each hook receives the engine and
         runs to completion in registration order.
+        """
+        ...
+
+    def register_service_access_probe(
+        self,
+        probe: ServiceAccessProbe,
+    ) -> None:
+        """Register a site-specific probe for Cloudflare-clearance waits.
+
+        Browser-backed engines call this after a clearance cookie is
+        present to verify that the site's actual API is reachable.
+        Engines without Cloudflare handling may no-op.
+        """
+        ...
+
+    def register_scrambled_image_renderer(
+        self,
+        renderer: ScrambledImageRenderer,
+    ) -> None:
+        """Register the site-specific renderer for scrambled image URLs.
+
+        ``get_scrambled_image_bytes`` delegates to this renderer. Sites
+        without scrambled pages do not need to register one.
         """
         ...
 
@@ -204,6 +237,15 @@ class SiteAdapter(Protocol):
         ...
 
     # -- Lifecycle hooks ----------------------------------------------
+
+    def configure_engine(self, engine: Engine) -> None:
+        """Install pre-clearance engine hooks.
+
+        Called during application-session setup before the browser
+        performs Cloudflare clearance. Typical uses: register a
+        service-access probe or a scrambled-image renderer.
+        """
+        ...
 
     async def on_engine_ready(self, engine: Engine) -> None:
         """Run any one-time setup against an engine that just came up.
