@@ -209,9 +209,11 @@ Built-in tuning profiles:
 
 ```bash
 comix-dl doctor
+comix-dl doctor --deep
 ```
 
-Checks Python version, dependencies, Chrome availability, and output directory.
+`doctor` checks Python version, dependencies, Chrome availability, output directory, and cached site-adapter state.
+`doctor --deep` also opens a browser-backed session and verifies the remote chain: Chrome/CDP startup, search API, series metadata, chapter image payload, and one sample image fetch. Use it when a download fails and you need to know which layer broke.
 
 ## How It Works
 

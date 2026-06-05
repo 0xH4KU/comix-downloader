@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -17,7 +16,6 @@ from rich.progress import (
 from rich.prompt import Prompt
 
 from comix_dl.core.application.cleanup_usecase import apply_cleanup_plan, build_cleanup_plan, list_downloaded_series
-from comix_dl.core.application.download_reporting import build_download_report
 from comix_dl.core.application.session import ApplicationSession, load_runtime, open_application_session
 from comix_dl.core.cli.display import (
     console,
@@ -27,7 +25,13 @@ from comix_dl.core.cli.display import (
     print_search_table,
     print_series_header,
 )
-from comix_dl.core.cli.interactive import filter_chapters_interactive, parse_chapter_selection
+from comix_dl.core.cli.download_progress import render_download_event, render_download_summary
+from comix_dl.core.cli.flow_prompts import (
+    prompt_chapter_selection,
+    render_remote_api_error,
+    render_series_info_panel,
+)
+from comix_dl.core.cli.interactive import parse_chapter_selection
 from comix_dl.core.errors import RemoteApiError
 
 if TYPE_CHECKING:
@@ -48,54 +52,17 @@ def _is_shutdown() -> bool:
 
 def _render_series_info_panel(info: SeriesInfo) -> None:
     """Render a manga metadata panel."""
-    meta_lines = [f"[bold]{info.title}[/bold]"]
-    if info.description:
-        desc = info.description[:300]
-        if len(info.description) > 300:
-            desc += "…"
-        meta_lines.append(f"[dim]{desc}[/dim]")
-    meta_lines.append("")
-    meta_lines.append(f"[cyan]URL:[/cyan]       {info.url}")
-    meta_lines.append(f"[cyan]Chapters:[/cyan]  {len(info.chapters)}")
-    if info.authors:
-        meta_lines.append(f"[cyan]Authors:[/cyan]   {', '.join(info.authors)}")
-    if info.genres:
-        meta_lines.append(f"[cyan]Genres:[/cyan]    {', '.join(info.genres)}")
-
-    console.print(Panel(
-        "\n".join(meta_lines),
-        title="[bold]Manga Info[/bold]",
-        border_style="cyan",
-    ))
+    render_series_info_panel(info)
 
 
 def _render_remote_api_error(exc: RemoteApiError) -> None:
     """Render one user-meaningful API failure at the CLI boundary."""
-    console.print(f"[red]{exc}[/red]")
+    render_remote_api_error(exc)
 
 
 def _prompt_chapter_selection(chapters: list[ChapterInfo]) -> list[ChapterInfo] | None:
     """Prompt the user for which chapters to download."""
-    filtered = filter_chapters_interactive(chapters)
-
-    console.print()
-    console.print("[dim]Examples: 1  ·  1-5  ·  1,3,5  ·  all  ·  q to quit[/dim]")
-    choice = Prompt.ask("[bold]Select chapters[/bold]", default="all")
-    if choice.lower() in ("q", "quit", "exit"):
-        return None
-
-    selected = parse_chapter_selection(choice, filtered)
-    if not selected:
-        console.print("[red]No valid chapters selected.[/red]")
-        return []
-
-    console.print(f"\n[bold]Selected {len(selected)} chapter(s):[/bold]")
-    for chapter in selected[:10]:
-        console.print(f"  • {chapter.title}")
-    if len(selected) > 10:
-        console.print(f"  [dim]… and {len(selected) - 10} more[/dim]")
-
-    return selected
+    return prompt_chapter_selection(chapters)
 
 
 def _render_download_event(
@@ -104,89 +71,12 @@ def _render_download_event(
     event: DownloadChapterEvent,
 ) -> None:
     """Render download progress events emitted by the application use case."""
-    task_id = task_ids.get(event.chapter_id)
-
-    if event.kind == "skipped":
-        if task_id is None:
-            task_id = progress.add_task(
-                f"  [dim]↳ {event.chapter_title} (skipped)[/dim]",
-                total=1,
-                completed=1,
-            )
-            task_ids[event.chapter_id] = task_id
-        else:
-            progress.update(
-                task_id,
-                description=f"  [dim]↳ {event.chapter_title} (skipped)[/dim]",
-                total=1,
-                completed=1,
-            )
-        return
-
-    if task_id is None:
-        task_id = progress.add_task(f"  {event.chapter_title}", total=None)
-        task_ids[event.chapter_id] = task_id
-
-    if event.kind == "started":
-        progress.update(task_id, description=f"  {event.chapter_title}", total=None)
-        return
-
-    if event.kind == "planned":
-        progress.update(task_id, total=event.total or 0, completed=0)
-        return
-
-    if event.kind == "progress":
-        if event.total is None:
-            progress.update(task_id, completed=event.completed)
-        else:
-            progress.update(task_id, completed=event.completed, total=event.total)
-        return
-
-    if event.kind == "missing_images":
-        progress.update(task_id, description=f"  [red]✗ {event.chapter_title} (no images)[/red]")
-        return
-
-    if event.kind == "failed":
-        progress.update(task_id, description=f"  [red]✗ {event.chapter_title}[/red]")
-        return
-
-    if event.kind == "partial":
-        message = event.message or f"{event.chapter_title} is incomplete"
-        progress.update(task_id, description=f"  [yellow]⚠ {message}[/yellow]")
-        return
-
-    if event.kind == "converted":
-        output_name = event.output_name or event.chapter_title
-        progress.update(task_id, description=f"  [green]✓ {output_name}[/green]")
-        return
-
-    if event.kind == "conversion_failed":
-        progress.update(
-            task_id,
-            description=f"  [yellow]⚠ {event.chapter_title} (convert failed)[/yellow]",
-        )
+    render_download_event(progress, task_ids, event)
 
 
 def _render_download_summary(summary: DownloadSummary, output_dir: Path) -> None:
     """Print the final download summary panel."""
-    console.print()
-
-    report = build_download_report(summary)
-    speed = summary.total_bytes / summary.elapsed_seconds if summary.elapsed_seconds > 0 else 0
-    speed_str = format_bytes(int(speed)) + "/s"
-    summary_line = (
-        f"{report.summary_text}  ·  {report.size_text}  ·  {speed_str}  ·  "
-        f"[dim]{summary.elapsed_seconds:.1f}s elapsed[/dim]  ·  {output_dir}"
-    )
-    if report.issue_lines:
-        issue_block = "\n".join(f"- {line}" for line in report.preview_issue_lines())
-        summary_line += f"\n\n[bold]Issues[/bold]\n{issue_block}"
-
-    console.print(Panel(
-        summary_line,
-        title="[bold]Download Summary[/bold]",
-        border_style="green" if summary.failed == 0 and summary.partial == 0 else "yellow",
-    ))
+    render_download_summary(summary, output_dir)
 
 
 async def _download_with_progress(

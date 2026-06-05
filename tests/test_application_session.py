@@ -10,6 +10,7 @@ import pytest
 
 from comix_dl import sites
 from comix_dl.core.application import session as app_session
+from comix_dl.core.models import ChapterInfo
 from comix_dl.core.settings import Settings
 
 if TYPE_CHECKING:
@@ -209,3 +210,51 @@ async def test_open_application_session_uses_session_scoped_adapter(
     finally:
         sites.clear()
         import comix_dl.sites.comix_to  # noqa: F401 — side-effect import re-registers
+
+
+@pytest.mark.asyncio
+async def test_application_session_download_injects_default_history_and_notifier(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeHistoryRepository:
+        pass
+
+    def fake_notifier(title: str, body: str) -> None:
+        captured["notification"] = (title, body)
+
+    sentinel = object()
+
+    async def fake_download_chapters(*args: object, **kwargs: object) -> object:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return sentinel
+
+    monkeypatch.setattr(app_session, "HistoryRepository", FakeHistoryRepository)
+    monkeypatch.setattr(app_session, "send_notification", fake_notifier)
+    monkeypatch.setattr(app_session, "download_chapters", fake_download_chapters)
+
+    browser = object()
+    adapter = object()
+    session = app_session.ApplicationSession(
+        settings=Settings(output_dir=str(tmp_path)),
+        config=app_session.build_runtime_config(Settings(output_dir=str(tmp_path))),
+        output_dir=tmp_path,
+        browser=browser,  # type: ignore[arg-type]
+        adapter=adapter,  # type: ignore[arg-type]
+    )
+    chapters = [ChapterInfo(title="Chapter 1", chapter_id=1, number="1")]
+
+    result = await session.download(
+        series_title="Series A",
+        chapters=chapters,
+        fmt="pdf",
+        optimize=True,
+    )
+
+    assert result is sentinel
+    assert isinstance(captured["kwargs"]["history_repository"], FakeHistoryRepository)
+    assert captured["kwargs"]["notifier"] is fake_notifier
+    assert captured["kwargs"]["chapters"] == chapters

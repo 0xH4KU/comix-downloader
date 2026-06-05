@@ -154,6 +154,37 @@ async def test_download_chapters_emits_events_records_history_and_formats_notifi
 
 
 @pytest.mark.asyncio
+async def test_download_chapters_requires_history_and_notifier_ports(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class FakeDownloader:
+        def __init__(self, _browser: object, output_dir: Path, config: AppConfig) -> None:
+            self._output_dir = output_dir
+            self.bytes_downloaded = 0
+            self.retry_count = 0
+
+        def is_chapter_complete(self, _series_title: str, _chapter_title: str) -> bool:
+            return True
+
+    monkeypatch.setattr(download_usecase, "Downloader", FakeDownloader)
+
+    service = AsyncMock()
+
+    with pytest.raises(TypeError, match="history_repository"):
+        await download_usecase.download_chapters(
+            browser=object(),
+            adapter=service,
+            series_title="Series A",
+            chapters=[ChapterInfo(title="Chapter 1", chapter_id=101, number="1")],
+            output_dir=tmp_path,
+            fmt="pdf",
+            config=_config(),
+            optimize=True,
+        )
+
+
+@pytest.mark.asyncio
 async def test_download_chapters_counts_skipped_partial_and_missing_images(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

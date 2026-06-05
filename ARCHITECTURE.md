@@ -6,7 +6,7 @@ comix-downloader is a desktop-first manga downloader for `comix.to`. It uses a r
 
 The codebase is split into four practical layers:
 
-1. Presentation: `core/cli/__init__.py`, `core/cli/interactive.py`, `core/cli/display.py`
+1. Presentation: `core/cli/__init__.py`, `core/cli/interactive.py`, `core/cli/display.py`, `core/cli/doctor.py`, `core/cli/flow_prompts.py`, `core/cli/download_progress.py`
 2. CLI workflow glue: `core/cli/flows.py`
 3. Application use cases: `core/application/query_usecase.py`, `core/application/download_usecase.py`, `core/application/cleanup_usecase.py`, `core/application/download_reporting.py`, `core/application/session.py`
 4. Site and infrastructure: `sites/`, `core/downloader.py`, `core/converters.py`, `core/engines/`, `core/settings.py`, `core/history.py`, `core/fileio.py`, `core/notify.py`, `core/errors.py`, `core/logging_utils.py`
@@ -23,6 +23,9 @@ core/cli/__init__.py
   |
   +--> core/cli/interactive.py
   +--> core/cli/display.py
+  +--> core/cli/doctor.py
+  +--> core/cli/flow_prompts.py
+  +--> core/cli/download_progress.py
   +--> core/cli/flows.py
            |
            +--> core/application/query_usecase.py
@@ -165,8 +168,8 @@ The download use case owns batch chapter orchestration:
 - per-chapter progress event emission
 - conversion gating so partial chapters never package
 - final summary aggregation
-- history recording
-- completion notification
+- history recording through `HistoryPort`
+- completion notification through an injected notifier
 
 The presentation boundary is the event callback. The use case does not know about Rich progress objects.
 
@@ -193,7 +196,15 @@ Runtime/session setup is centralized:
 - open `CdpBrowser`
 - let the adapter configure pre-clearance hooks
 - register the post-clearance adapter setup/probe hook
+- wire default history and notification infrastructure into download use cases
 - expose a small `ApplicationSession` to CLI flows
+
+### `core/cli/doctor.py`
+
+Diagnostics are separated from the interactive menu:
+
+- `doctor` checks local Python/dependency/Chrome/output and adapter state
+- `doctor --deep` opens a browser-backed session and verifies Chrome/CDP startup, search, series metadata, chapter image payloads, and one sample image fetch
 
 ## Persistence
 
@@ -235,8 +246,7 @@ Resume / Recovery
 
 ## Known Debt
 
-- `core/application/download_usecase.py` still talks to history and notification infrastructure directly instead of using ports for both.
-- `core/cli/flows.py` still mixes prompt policy and Rich rendering.
+- `core/cli/flows.py` still owns most high-level flow branching; prompt panels and download progress rendering are split out, but search/URL selection policy can be made thinner.
 - `ComixToAdapter` keeps compatibility wrappers for old private helper methods; these can be removed in a future major cleanup once forks have moved to the focused helper modules.
 - Automatic mirror switching after a failed probe is still deferred; the current run continues with the selected mirror and records the outcome.
 

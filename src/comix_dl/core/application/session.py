@@ -20,11 +20,13 @@ from comix_dl.core.application.query_usecase import (
     search_series,
 )
 from comix_dl.core.engines.cdp_browser import CdpBrowser
+from comix_dl.core.history import HistoryRepository
 from comix_dl.core.mirror_resolver import (
     MirrorStateRepository,
     record_probe_outcome,
     select_initial_mirror,
 )
+from comix_dl.core.notify import send_notification
 from comix_dl.core.settings import Settings, SettingsRepository, build_runtime_config
 
 if TYPE_CHECKING:
@@ -104,6 +106,8 @@ class ApplicationSession:
             optimize=optimize,
             on_event=on_event,
             is_shutdown=is_shutdown,
+            history_repository=HistoryRepository(),
+            notifier=send_notification,
         )
 
 

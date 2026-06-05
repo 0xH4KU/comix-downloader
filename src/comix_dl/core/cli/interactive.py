@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import re
-import sys
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.panel import Panel
@@ -299,86 +297,3 @@ def parse_chapter_selection(selection: str, chapters: list[ChapterInfo]) -> list
     return [chapters[i - 1] for i in sorted(indices) if 1 <= i <= len(chapters)]
 
 
-def run_doctor() -> int:
-    """Run environment diagnostics."""
-    import shutil
-
-    from comix_dl import sites
-    from comix_dl.core.mirror_resolver import MirrorStateRepository
-
-    console.print()
-    console.print(Panel("[bold]comix-downloader — Diagnostics[/bold]", border_style="cyan"))
-    all_ok = True
-
-    v = sys.version_info
-    ok = v >= (3, 11)
-    sym = "[green]✓[/green]" if ok else "[red]✗[/red]"
-    console.print(f"  {sym} Python {v.major}.{v.minor}.{v.micro}")
-    all_ok &= ok
-
-    for module, name in [
-        ("playwright", "playwright"),
-        ("PIL", "Pillow"),
-        ("rich", "rich"),
-    ]:
-        try:
-            __import__(module)
-            console.print(f"  [green]✓[/green] {name}")
-        except ImportError:
-            console.print(f"  [red]✗[/red] {name} — install with: pip install {name}")
-            all_ok = False
-
-    import platform
-    if platform.system() == "Darwin":
-        chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-    else:
-        chrome = (
-            shutil.which("google-chrome")
-            or shutil.which("google-chrome-stable")
-            or shutil.which("chromium-browser")
-            or shutil.which("chromium")
-            or ""
-        )
-    if chrome and Path(chrome).exists():
-        console.print(f"  [green]✓[/green] Chrome ({chrome})")
-    else:
-        console.print("  [red]✗[/red] Chrome not found — install Google Chrome")
-        all_ok = False
-
-    settings = SettingsRepository().load()
-    out = Path(settings.output_dir)
-    try:
-        out.mkdir(parents=True, exist_ok=True)
-        console.print(f"  [green]✓[/green] Output: {out}")
-    except OSError:
-        console.print(f"  [red]✗[/red] Output: {out} (cannot create)")
-        all_ok = False
-
-    # Site adapter + mirror diagnostics. Failures here do not flip
-    # all_ok because the framework still works without persisted state
-    # — but they help users debug "why did my last download stall".
-    try:
-        adapter = sites.get_active()
-    except Exception as exc:
-        console.print(f"  [red]✗[/red] Site adapter: not available ({exc})")
-        all_ok = False
-    else:
-        console.print(f"  [green]✓[/green] Site adapter: [bold]{adapter.name}[/bold]")
-        mirror_state = MirrorStateRepository().load(adapter.name)
-        if mirror_state.active:
-            console.print(f"      active mirror: [cyan]{mirror_state.active}[/cyan]")
-        else:
-            console.print(f"      active mirror: [dim]none cached, will use {adapter.mirrors[0]}[/dim]")
-        recent = list(reversed(mirror_state.history[-3:]))
-        if recent:
-            console.print("      recent probes:")
-            for record in recent:
-                marker = "[green]ok[/green]" if record.succeeded else "[red]fail[/red]"
-                console.print(f"        {marker}  {record.mirror}  ({record.checked_at})")
-
-    console.print()
-    if all_ok:
-        console.print("[bold green]✓ All OK — ready to download![/bold green]")
-    else:
-        console.print("[bold red]✗ Issues found — fix the above before continuing[/bold red]")
-    return 0 if all_ok else 1

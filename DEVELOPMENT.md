@@ -35,7 +35,10 @@ comix-downloader/
         cdp_browser.py      # Cloudflare-aware browser request client
       cli/
         __init__.py         # CLI entry, parser, signal handling
-        flows.py            # CLI prompts, progress rendering, and use-case wiring
+        doctor.py           # Local and browser-backed diagnostics
+        download_progress.py # Download progress and summary rendering
+        flow_prompts.py     # Series metadata panels and chapter selection prompts
+        flows.py            # Search/download/list/clean flow orchestration
         interactive.py      # Interactive settings/history/filter UI
         display.py          # Rich tables and formatting
       config.py             # AppConfig dataclasses used for runtime injection
@@ -74,6 +77,7 @@ comix-dl "manga name"
 
 # Diagnostics
 comix-dl doctor
+comix-dl doctor --deep
 
 # Debug logging
 comix-dl --debug
@@ -89,22 +93,26 @@ ruff check .
 mypy src/comix_dl/ --no-error-summary
 
 # Docs/version consistency
-python scripts/check_docs_consistency.py
+python3 scripts/check_docs_consistency.py
 
 # Test
 pytest
+
+# Optional browser-backed live contract smoke test
+COMIX_DL_LIVE=1 pytest tests/test_live_smoke.py -q
 
 # Coverage gate (matches CI)
 pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=70
 
 # Full local gate
-ruff check . && mypy src/comix_dl/ --no-error-summary && python scripts/check_docs_consistency.py && pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=70
+ruff check . && mypy src/comix_dl/ --no-error-summary && python3 scripts/check_docs_consistency.py && pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=70
 ```
 
 Notes:
 - Running `pytest` from the repository root now imports from `src/` directly, so an editable install is not required just to collect tests.
 - Low-level localhost socket tests auto-skip in restricted sandboxes that do not allow binding TCP ports.
-- Current high-risk module baselines are tracked in CI: `cli/__init__.py` 100%, `cli/flows.py` 89%, `cdp_browser.py` 78%, `converters.py` 70%.
+- Live remote smoke tests are skipped unless `COMIX_DL_LIVE=1` is set. They verify search, series metadata, chapter image payloads, and one sample image fetch against the real site.
+- Current high-risk module baselines are tracked in CI: `cli/__init__.py` 98%, `cli/flows.py` 82%, `cli/download_progress.py` 100%, `cli/flow_prompts.py` 100%, `cdp_browser.py` 84%, `converters.py` 73%.
 - `MIGRATION.md` captures maintainer-facing upgrade notes; `RELEASE_CHECKLIST.md` defines the slice release order and final verification sequence.
 - Search/info smoke tests should verify that API failures surface explicit `RemoteApiError` text rather than falling through to empty-result messaging.
 - Browser smoke tests should verify startup keeps a single visible tab until pooled download pages are actually needed.
