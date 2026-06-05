@@ -23,6 +23,7 @@ from comix_dl.core.errors import (
     ConfigurationError,
     Http403Error,
 )
+from comix_dl.sites.comix_to_browser import probe_service_access, render_scrambled_image
 
 
 def _make_config(
@@ -717,10 +718,57 @@ class TestBrowserHelpers:
 
         browser._get_bytes_direct.assert_not_awaited()
 
+    async def test_get_scrambled_image_bytes_delegates_to_registered_renderer(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+        page = MagicMock()
+        page.is_closed.return_value = False
+        browser.acquire_page = AsyncMock(return_value=page)
+        browser.release_page = MagicMock()
+
+        async def render(
+            engine: CdpBrowser,
+            render_page: object,
+            url: str,
+            *,
+            width: int | None,
+            height: int | None,
+            referer: str | None,
+        ) -> bytes:
+            assert engine is browser
+            assert render_page is page
+            assert url == "https://cdn.example.com/scrambled.webp"
+            assert width == 800
+            assert height == 1200
+            assert referer == "https://comix.to/title/lzdj-omori"
+            return b"rendered"
+
+        browser.register_scrambled_image_renderer(render)
+
+        result = await browser.get_scrambled_image_bytes(
+            "https://cdn.example.com/scrambled.webp",
+            width=800,
+            height=1200,
+            referer="https://comix.to/title/lzdj-omori",
+        )
+
+        assert result == b"rendered"
+        browser.release_page.assert_called_once_with(page)
+
+    async def test_get_scrambled_image_bytes_requires_registered_renderer(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+
+        with pytest.raises(NotImplementedError, match="No scrambled image renderer"):
+            await browser.get_scrambled_image_bytes("https://cdn.example.com/scrambled.webp")
+
     async def test_get_scrambled_image_bytes_renders_canvas_and_screenshots_element(self):
         browser = CdpBrowser(config=AppConfig())
         browser._started = True
         browser.ensure_cf_clearance = AsyncMock()
+        browser.register_scrambled_image_renderer(render_scrambled_image)
         page = MagicMock()
         page.is_closed.return_value = False
         element = MagicMock()
@@ -762,6 +810,7 @@ class TestBrowserHelpers:
         browser = CdpBrowser(config=AppConfig())
         browser._started = True
         browser.ensure_cf_clearance = AsyncMock()
+        browser.register_scrambled_image_renderer(render_scrambled_image)
         page = MagicMock()
         page.is_closed.return_value = False
         element = MagicMock()
@@ -880,6 +929,7 @@ class TestBrowserHelpers:
 
     async def test_probe_service_access_uses_current_v1_manga_endpoint(self):
         browser = CdpBrowser(config=AppConfig(), base_url="https://example.test")
+        browser.register_service_access_probe(probe_service_access)
         browser._evaluate_with_timeout = AsyncMock(
             return_value={
                 "ok": True,
@@ -893,6 +943,19 @@ class TestBrowserHelpers:
 
         probe_url = browser._evaluate_with_timeout.await_args.args[2]
         assert probe_url == "https://example.test/api/v1/manga?keyword=test&limit=1"
+
+    async def test_probe_service_access_delegates_to_registered_probe(self):
+        browser = CdpBrowser(config=AppConfig(), base_url="https://example.test")
+        page = MagicMock()
+
+        async def probe(engine: CdpBrowser, probe_page: object) -> bool:
+            assert engine is browser
+            assert probe_page is page
+            return True
+
+        browser.register_service_access_probe(probe)
+
+        assert await browser._probe_service_access(page) is True
 
     async def test_ensure_cf_clearance_brings_challenge_tab_to_front(self):
         browser = CdpBrowser(config=AppConfig(), base_url="https://example.test")

@@ -6,8 +6,8 @@ This document is for maintainers or local automation that still assumes the old 
 
 ## Runtime Behavior Changes
 
-- The `/manga/{hash_id}/chapters` API endpoint now requires an HMAC-style request signature (`_=` query parameter). `CdpBrowser` extracts the signing function from the site's JavaScript at runtime and applies it transparently to the main page and all pooled browser pages (including those created lazily). Unsigned chapter-list requests return `HTTP 200` with `{"status": 403}` in the JSON body.
-- `comix_service.py` now detects API-level error status codes inside JSON responses (e.g. `{"status": 403}`) and logs an explicit signing failure message instead of silently returning zero chapters.
+- The `/manga/{hash_id}/chapters` API endpoint requires the site's live frontend API client. `sites/comix_to.py` installs the packaged JavaScript hook from `sites/assets/comix_api_client.js`, and `CdpBrowser` runs that hook on main and pooled pages. Unsigned or broken chapter-list requests return `HTTP 200` with `{"status": 403}` in the JSON body.
+- `sites/comix_to_api.py` detects API-level error status codes inside JSON responses (e.g. `{"status": 403}`) and logs an explicit signing failure message instead of silently returning zero chapters.
 - Large multi-batch PDF output now depends on the bundled runtime `pypdf` package; normal installs no longer need a hidden extra merge dependency.
 - Partial chapter downloads no longer convert, no longer write success history, and no longer trigger success notifications.
 - Resume logic now trusts only validated image files and `chapter.state.json`; corrupt or stale artifacts are removed and re-downloaded.
@@ -17,8 +17,9 @@ This document is for maintainers or local automation that still assumes the old 
 ## Architecture Changes
 
 - The process-global mutable `CONFIG` singleton is gone. Runtime settings are normalized once into `AppConfig` and then injected explicitly.
-- CLI parsing/dispatch lives in `src/comix_dl/cli/__init__.py`; application orchestration lives in `src/comix_dl/application/`.
-- Browser responsibilities are split between `browser_session.py` and `cdp_browser.py`.
+- CLI parsing/dispatch lives in `src/comix_dl/core/cli/__init__.py`; application orchestration lives in `src/comix_dl/core/application/`.
+- Browser responsibilities are split between `core/engines/browser_session.py` and `core/engines/cdp_browser.py`.
+- comix.to logic is split across focused modules under `src/comix_dl/sites/`; `comix_to.py` is now a facade rather than a monolithic service/client.
 - Settings, history, and JSON-like state files now go through dedicated repositories or atomic-write helpers instead of open-coded file writes.
 - Shared download summary wording is centralized in `application/download_reporting.py` so CLI, history, and notifications do not drift.
 
