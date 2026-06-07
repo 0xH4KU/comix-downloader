@@ -23,29 +23,40 @@ comix-downloader/
   src/comix_dl/
     __init__.py           # Version fallback
     __main__.py           # python -m entry point
-    application/
-      query_usecase.py    # Slug/query resolution and lookup rules
-      download_usecase.py # Download orchestration + event emission
-      cleanup_usecase.py  # Listing and cleanup planning
-      download_reporting.py # Shared summary and issue formatting
-      session.py          # Runtime/session wiring for CLI adapters
-    browser_session.py    # Chrome lifecycle, locks, CDP, page pool
-    cdp_browser.py        # Cloudflare-aware browser request client
-    comix_service.py      # REST API client
-    config.py             # AppConfig dataclasses used for runtime injection
-    converters.py         # PDF / CBZ conversion with bounded PDF batching
-    downloader.py         # Image downloader
-    errors.py             # Domain error types
-    fileio.py             # Atomic file write helpers
-    history.py            # Download history persistence
-    logging_utils.py      # Structured logging formatter/helpers
-    notify.py             # Desktop notifications
-    settings.py           # Persistent settings
-    cli/
-      __init__.py         # CLI entry, parser, signal handling
-      flows.py            # CLI prompts, progress rendering, and use-case wiring
-      interactive.py      # Interactive settings/history/filter UI
-      display.py          # Rich tables and formatting
+    core/
+      application/
+        query_usecase.py    # Slug/query resolution and lookup rules
+        download_usecase.py # Download orchestration + event emission
+        cleanup_usecase.py  # Listing and cleanup planning
+        download_reporting.py # Shared summary and issue formatting
+        session.py          # Runtime/session wiring for CLI adapters
+      engines/
+        browser_session.py  # Chrome lifecycle, locks, CDP, page pool
+        cdp_browser.py      # Cloudflare-aware browser request client
+      cli/
+        __init__.py         # CLI entry, parser, signal handling
+        doctor.py           # Local and browser-backed diagnostics
+        download_progress.py # Download progress and summary rendering
+        flow_prompts.py     # Series metadata panels and chapter selection prompts
+        flows.py            # Search/download/list/clean flow orchestration
+        interactive.py      # Interactive settings/history/filter UI
+        display.py          # Rich tables and formatting
+      config.py             # AppConfig dataclasses used for runtime injection
+      converters.py         # PDF / CBZ conversion with bounded PDF batching
+      downloader.py         # Image downloader
+      errors.py             # Domain error types
+      fileio.py             # Atomic file write helpers
+      history.py            # Download history persistence
+      logging_utils.py      # Structured logging formatter/helpers
+      notify.py             # Desktop notifications
+      settings.py           # Persistent settings
+    sites/
+      base.py               # SiteAdapter / Engine protocols
+      comix_to.py           # comix.to adapter facade
+      comix_to_api.py       # API orchestration + session-scoped cache
+      comix_to_browser.py   # Service probe + scrambled image renderer
+      comix_to_parsing.py   # JSON parsing helpers
+      comix_to_dedup.py     # Chapter deduplication rules
   tests/                  # Test suite
   README.md
   ARCHITECTURE.md
@@ -66,6 +77,7 @@ comix-dl "manga name"
 
 # Diagnostics
 comix-dl doctor
+comix-dl doctor --deep
 
 # Debug logging
 comix-dl --debug
@@ -81,22 +93,26 @@ ruff check .
 mypy src/comix_dl/ --no-error-summary
 
 # Docs/version consistency
-python scripts/check_docs_consistency.py
+python3 scripts/check_docs_consistency.py
 
 # Test
 pytest
+
+# Optional browser-backed live contract smoke test
+COMIX_DL_LIVE=1 pytest tests/test_live_smoke.py -q
 
 # Coverage gate (matches CI)
 pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=70
 
 # Full local gate
-ruff check . && mypy src/comix_dl/ --no-error-summary && python scripts/check_docs_consistency.py && pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=70
+ruff check . && mypy src/comix_dl/ --no-error-summary && python3 scripts/check_docs_consistency.py && pytest --cov=comix_dl --cov-report=term-missing --cov-fail-under=70
 ```
 
 Notes:
 - Running `pytest` from the repository root now imports from `src/` directly, so an editable install is not required just to collect tests.
 - Low-level localhost socket tests auto-skip in restricted sandboxes that do not allow binding TCP ports.
-- Current high-risk module baselines are tracked in CI: `cli/__init__.py` 100%, `cli/flows.py` 89%, `cdp_browser.py` 78%, `converters.py` 70%.
+- Live remote smoke tests are skipped unless `COMIX_DL_LIVE=1` is set. They verify search, series metadata, chapter image payloads, and one sample image fetch against the real site.
+- Current high-risk module baselines are tracked in CI: `cli/__init__.py` 98%, `cli/flows.py` 82%, `cli/download_progress.py` 100%, `cli/flow_prompts.py` 100%, `cdp_browser.py` 84%, `converters.py` 73%.
 - `MIGRATION.md` captures maintainer-facing upgrade notes; `RELEASE_CHECKLIST.md` defines the slice release order and final verification sequence.
 - Search/info smoke tests should verify that API failures surface explicit `RemoteApiError` text rather than falling through to empty-result messaging.
 - Browser smoke tests should verify startup keeps a single visible tab until pooled download pages are actually needed.
@@ -129,15 +145,15 @@ comix.to uses several identifiers:
 
 ### Adding New Features
 
-1. **New API call** — add method to `ComixService` in `comix_service.py`
-2. **New CLI command** — add parser wiring in `src/comix_dl/cli/__init__.py`; keep orchestration/runtime setup in `src/comix_dl/application/` and leave `src/comix_dl/cli/flows.py` as a presentation adapter
+1. **New comix.to API call** — add method to `ComixToApiClient` in `sites/comix_to_api.py`
+2. **New CLI command** — add parser wiring in `src/comix_dl/core/cli/__init__.py`; keep orchestration/runtime setup in `src/comix_dl/core/application/` and leave `src/comix_dl/core/cli/flows.py` as a presentation adapter
 3. **New output format** — add converter in `converters.py`
    If it touches PDF batching, keep temp-workspace cleanup and batch-size tests green.
 4. **New setting** — add field to `Settings` in `settings.py`
    If it affects runtime tuning, either map it into an existing profile or update the profile-resolution tests.
 5. **New user-meaningful failure mode** — add or reuse a domain error in `errors.py`, then catch/render it at the CLI boundary
-6. **New dedup rule** — update `ComixService` to emit `DedupDecision` entries and keep the CLI dedup report aligned with the actual rule
-7. **New download summary wording** — update `application/download_reporting.py` and keep CLI/history/notification tests aligned with the shared report output
+6. **New dedup rule** — update `sites/comix_to_dedup.py` to emit `DedupDecision` entries and keep the CLI dedup report aligned with the actual rule
+7. **New download summary wording** — update `core/application/download_reporting.py` and keep CLI/history/notification tests aligned with the shared report output
 8. **New download-path log field** — update `logging_utils.py` and the download/use-case tests so structured logging stays stable
 
 ## Commit Conventions

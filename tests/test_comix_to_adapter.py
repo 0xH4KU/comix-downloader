@@ -16,6 +16,13 @@ from comix_dl.core.models import (
 )
 from comix_dl.sites.base import SiteAdapter
 from comix_dl.sites.comix_to import ComixToAdapter
+from comix_dl.sites.comix_to_dedup import deduplicate_chapters
+from comix_dl.sites.comix_to_parsing import (
+    extract_image_pages,
+    parse_chapter_items,
+    parse_search_results,
+)
+from comix_dl.sites.comix_to_url import matches_comix_url, parse_identifier
 
 if TYPE_CHECKING:
     from unittest.mock import AsyncMock
@@ -117,6 +124,13 @@ class TestOnEngineReady:
 # ---------------------------------------------------------------------------
 
 class TestUrlHandling:
+    def test_url_helpers_match_and_parse_without_adapter(self) -> None:
+        assert matches_comix_url("https://comix.to/title/lzdj-omori") is True
+        assert matches_comix_url("https://other.example/title/lzdj-omori") is False
+        assert parse_identifier("https://comix.to/title/lzdj-omori") == "lzdj"
+        assert parse_identifier("https://comix.to/manga/test-series") == "test-series"
+        assert parse_identifier("test-series") == "test-series"
+
     def test_matches_canonical_host(self) -> None:
         a = _adapter()
         assert a.matches_url("https://comix.to/title/x") is True
@@ -152,6 +166,16 @@ class TestUrlHandling:
 # ---------------------------------------------------------------------------
 
 class TestParseChapterItems:
+    def test_parsing_helper_basic_parsing(self) -> None:
+        items = [{"id": 100, "number": 1, "name": "Intro", "language": "en", "pagesCount": 20}]
+
+        result = parse_chapter_items(items)
+
+        assert len(result) == 1
+        assert result[0].chapter_id == 100
+        assert result[0].title == "Chapter 1 - Intro"
+        assert result[0].image_count == 20
+
     def test_basic_parsing(self) -> None:
         items = [
             {"id": 100, "number": 1, "name": "Intro", "language": "en", "pagesCount": 20},
@@ -208,6 +232,18 @@ class TestParseChapterItems:
 # ---------------------------------------------------------------------------
 
 class TestDeduplicate:
+    def test_dedup_helper_keeps_highest_page_count(self) -> None:
+        chapters = [
+            _make_chapter(5, 100, image_count=10),
+            _make_chapter(5, 200, image_count=25),
+        ]
+
+        result, decisions = deduplicate_chapters(chapters)
+
+        assert [chapter.chapter_id for chapter in result] == [200]
+        assert len(decisions) == 1
+        assert "highest page count" in decisions[0].reason
+
     def test_no_duplicates_unchanged(self) -> None:
         chapters = [_make_chapter(1, 100), _make_chapter(2, 200), _make_chapter(3, 300)]
         result, _ = _adapter().deduplicate(chapters)
@@ -309,6 +345,27 @@ class TestDeduplicate:
 # ---------------------------------------------------------------------------
 
 class TestSearch:
+    def test_parse_search_results_helper(self) -> None:
+        response = {
+            "result": {
+                "items": [
+                    {"title": "OMORI", "hid": "lzdj", "url": "/title/lzdj-omori"},
+                    {"title": "No Hash", "url": "/title/no-hash"},
+                ],
+            },
+        }
+
+        result = parse_search_results(response, base_url="https://comix.to")
+
+        assert result == [
+            SearchResult(
+                title="OMORI",
+                url="https://comix.to/title/lzdj-omori",
+                slug="omori",
+                hash_id="lzdj",
+            ),
+        ]
+
     async def test_parses_search_response(self, mock_browser: AsyncMock) -> None:
         mock_browser.get_json.return_value = {
             "result": {
@@ -391,6 +448,32 @@ class TestSearch:
 # ---------------------------------------------------------------------------
 
 class TestGetChapterImages:
+    def test_extract_image_pages_helper_preserves_scrambled_metadata(self) -> None:
+        pages = extract_image_pages({
+            "pages": {
+                "baseUrl": "https://static.comix.to/c0db/i/b/d4/",
+                "items": [
+                    {"url": "plain.webp", "width": 800, "height": 1200},
+                    {"url": "scrambled.webp", "width": 968, "height": 1378, "s": 1},
+                ],
+            },
+        })
+
+        assert pages == [
+            ChapterPage(
+                url="https://static.comix.to/c0db/i/b/d4/plain.webp",
+                width=800,
+                height=1200,
+                scrambled=False,
+            ),
+            ChapterPage(
+                url="https://static.comix.to/c0db/si/b/d4/scrambled.webp",
+                width=968,
+                height=1378,
+                scrambled=True,
+            ),
+        ]
+
     async def test_parses_image_urls(self, mock_browser: AsyncMock) -> None:
         mock_browser.get_json.return_value = {
             "result": {

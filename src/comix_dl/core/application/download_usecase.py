@@ -15,9 +15,7 @@ from comix_dl.core.application.download_reporting import build_download_report
 from comix_dl.core.converters import convert_async
 from comix_dl.core.downloader import Downloader, DownloadProgress, ensure_complete_download
 from comix_dl.core.errors import ConversionError, PartialDownloadError
-from comix_dl.core.history import HistoryRepository
 from comix_dl.core.logging_utils import log_context
-from comix_dl.core.notify import send_notification
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -239,8 +237,8 @@ async def download_chapters(
     optimize: bool,
     on_event: DownloadEventHandler | None = None,
     is_shutdown: ShutdownCheck | None = None,
-    history_repository: HistoryPort | None = None,
-    notifier: Notifier | None = None,
+    history_repository: HistoryPort,
+    notifier: Notifier,
 ) -> DownloadSummary:
     """Download, convert, record, and notify for a list of chapters."""
     start_time = time.monotonic()
@@ -257,9 +255,6 @@ async def download_chapters(
             fmt=fmt,
         ),
     )
-    history: HistoryPort = history_repository or HistoryRepository()
-    notify = notifier or send_notification
-
     def should_stop() -> bool:
         return is_shutdown() if is_shutdown is not None else False
 
@@ -343,7 +338,7 @@ async def download_chapters(
         ),
     )
 
-    history.record_download(
+    history_repository.record_download(
         title=series_title,
         chapters_count=summary.total_chapters,
         fmt=fmt,
@@ -357,6 +352,6 @@ async def download_chapters(
     )
 
     if summary.total_chapters > 0:
-        notify(f"comix-dl: {series_title}", report.notification_body)
+        notifier(f"comix-dl: {series_title}", report.notification_body)
 
     return summary

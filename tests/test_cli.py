@@ -143,6 +143,13 @@ class TestBuildParser:
         parser = _build_parser()
         args = parser.parse_args(["doctor"])
         assert args.command == "doctor"
+        assert args.deep is False
+
+    def test_doctor_deep_flag(self):
+        parser = _build_parser()
+        args = parser.parse_args(["doctor", "--deep"])
+        assert args.command == "doctor"
+        assert args.deep is True
 
     def test_settings_subcommand(self):
         parser = _build_parser()
@@ -272,7 +279,7 @@ def test_main_dispatches_subcommands_and_menu(monkeypatch: pytest.MonkeyPatch):
         SimpleNamespace(command="list", debug=False, quiet=False, mirror=None),
         SimpleNamespace(command="clean", force=True, debug=False, quiet=True, mirror=None),
         SimpleNamespace(command="history", action="clear", debug=False, quiet=False, mirror=None),
-        SimpleNamespace(command="doctor", debug=False, quiet=False, mirror=None),
+        SimpleNamespace(command="doctor", debug=False, quiet=False, mirror=None, deep=False),
         SimpleNamespace(command="settings", debug=False, quiet=False, mirror=None),
         SimpleNamespace(command=None, debug=False, quiet=False, mirror=None),
     ]
@@ -334,6 +341,31 @@ def test_main_dispatches_subcommands_and_menu(monkeypatch: pytest.MonkeyPatch):
     assert ("async", ("download", "series-a", "1-2", "pdf", "/tmp/out", False, True)) in recorded
     assert ("async", ("info", "series-a")) in recorded
     assert ("settings",) in recorded
+
+
+def test_main_dispatches_deep_doctor_via_async(monkeypatch: pytest.MonkeyPatch):
+    recorded: list[object] = []
+
+    monkeypatch.setattr(
+        cli_module,
+        "_build_parser",
+        lambda: SimpleNamespace(
+            parse_args=lambda: SimpleNamespace(
+                command="doctor",
+                debug=False,
+                quiet=False,
+                mirror="https://comix.to",
+                deep=True,
+            ),
+        ),
+    )
+    monkeypatch.setattr(cli_module.sys, "argv", ["comix-dl", "doctor", "--deep"])
+    monkeypatch.setattr(cli_module, "configure_logging", lambda _level: None)
+    monkeypatch.setattr(cli_module, "run_deep_doctor", lambda *, mirror=None: ("deep-doctor", mirror))
+    monkeypatch.setattr(cli_module, "_run_async", lambda coro: recorded.append(coro) or 42)
+
+    assert cli_module.main() == 42
+    assert recorded == [("deep-doctor", "https://comix.to")]
 
 
 def test_main_prints_update_notice_for_non_quiet_command(monkeypatch: pytest.MonkeyPatch):

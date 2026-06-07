@@ -32,6 +32,7 @@ from rich.text import Text
 
 from comix_dl import __version__
 from comix_dl.core.cli.display import console
+from comix_dl.core.cli.doctor import run_deep_doctor, run_doctor
 from comix_dl.core.cli.flows import (
     flow_clean,
     flow_info,
@@ -40,7 +41,7 @@ from comix_dl.core.cli.flows import (
     flow_search,
     flow_url_download,
 )
-from comix_dl.core.cli.interactive import flow_history, flow_settings, parse_chapter_selection, run_doctor
+from comix_dl.core.cli.interactive import flow_history, flow_settings, parse_chapter_selection
 from comix_dl.core.logging_utils import configure_logging
 from comix_dl.core.settings import SettingsRepository
 from comix_dl.core.update_check import UpdateInfo, check_for_update
@@ -106,7 +107,8 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("action", nargs="?", choices=["clear"], help="Optional action")
 
     # doctor
-    sub.add_parser("doctor", help="Run environment diagnostics")
+    sp = sub.add_parser("doctor", help="Run environment diagnostics")
+    sp.add_argument("--deep", action="store_true", help="Run browser-backed remote diagnostics")
 
     # settings
     sub.add_parser("settings", help="View / edit settings")
@@ -177,6 +179,8 @@ def _main_impl() -> int:
         return flow_history(action=args.action)
 
     if args.command == "doctor":
+        if args.deep:
+            return _run_async(run_deep_doctor(mirror=args.mirror))
         return run_doctor()
 
     if args.command == "settings":

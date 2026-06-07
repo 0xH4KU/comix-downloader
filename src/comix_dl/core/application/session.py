@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from comix_dl import sites
 from comix_dl.core.application.download_usecase import (
@@ -20,20 +20,37 @@ from comix_dl.core.application.query_usecase import (
     search_series,
 )
 from comix_dl.core.engines.cdp_browser import CdpBrowser
+from comix_dl.core.history import HistoryRepository
 from comix_dl.core.mirror_resolver import (
     MirrorStateRepository,
     record_probe_outcome,
     select_initial_mirror,
 )
+from comix_dl.core.notify import send_notification
 from comix_dl.core.settings import Settings, SettingsRepository, build_runtime_config
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
     from comix_dl.core.application.query_usecase import SeriesLookupResult
     from comix_dl.core.config import AppConfig
     from comix_dl.core.models import ChapterInfo, SearchResult, SeriesInfo
     from comix_dl.sites.base import SiteAdapter
+
+
+def _adapter_for_session(adapter: SiteAdapter) -> SiteAdapter:
+    """Return a per-session adapter when the registered adapter supports it."""
+    factory = getattr(adapter, "new_session", None)
+    if callable(factory):
+        return cast("Callable[[], SiteAdapter]", factory)()
+    return adapter
+
+
+def _configure_engine_for_adapter(adapter: SiteAdapter, engine: CdpBrowser) -> None:
+    """Let adapters install pre-clearance browser hooks when supported."""
+    configure = getattr(adapter, "configure_engine", None)
+    if callable(configure):
+        configure(engine)
 
 
 @dataclass(frozen=True)
@@ -89,6 +106,8 @@ class ApplicationSession:
             optimize=optimize,
             on_event=on_event,
             is_shutdown=is_shutdown,
+            history_repository=HistoryRepository(),
+            notifier=send_notification,
         )
 
 
@@ -127,12 +146,14 @@ async def open_application_session(
     converge quickly.
     """
     runtime = load_runtime(settings=settings, config=config, output=output)
-    adapter = sites.get_active()
+    adapter = _adapter_for_session(sites.get_active())
     repository = mirror_repository or MirrorStateRepository()
     base_url = select_initial_mirror(
         adapter, override=mirror_override, repository=repository,
     )
     async with CdpBrowser(config=runtime.config, base_url=base_url) as browser:
+        _configure_engine_for_adapter(adapter, browser)
+
         async def _on_ready_with_probe(engine: CdpBrowser) -> None:
             await adapter.on_engine_ready(engine)
             await record_probe_outcome(

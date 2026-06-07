@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.4.2-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.4.3-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -209,9 +209,11 @@ Built-in tuning profiles:
 
 ```bash
 comix-dl doctor
+comix-dl doctor --deep
 ```
 
-Checks Python version, dependencies, Chrome availability, and output directory.
+`doctor` checks Python version, dependencies, Chrome availability, output directory, and cached site-adapter state.
+`doctor --deep` also opens a browser-backed session and verifies the remote chain: Chrome/CDP startup, search API, series metadata, chapter image payload, and one sample image fetch. Use it when a download fails and you need to know which layer broke.
 
 ## How It Works
 
@@ -243,24 +245,21 @@ Checks Python version, dependencies, Chrome availability, and output directory.
 src/comix_dl/
   __init__.py         # Package version
   __main__.py         # python -m comix_dl entry point
-  application/        # Query, download, and cleanup use cases
-  application/download_reporting.py  # Shared summary and issue formatting
-  application/session.py  # Runtime/session wiring for CLI adapters
-  logging_utils.py    # Structured logging helpers and formatter
-  cli/__init__.py     # CLI entry, parser, signal handling
-  cli/flows.py        # CLI interaction flows delegating to application use cases
-  cli/interactive.py  # Settings, history, chapter selection UI
-  cli/display.py      # Rich display helpers
-  browser_session.py  # Chrome lifecycle, CDP connection, page pool
-  cdp_browser.py      # Cloudflare clearance + browser-side request orchestration
-  comix_service.py    # REST API client (search, chapters, dedup)
-  downloader.py       # Concurrent image downloader with resume
-  fileio.py           # Atomic file write helpers
-  converters.py       # PDF / CBZ conversion + image optimization
-  config.py           # Default configuration dataclasses
-  settings.py         # Persistent user settings (JSON)
-  history.py          # Download history tracking
-  notify.py           # Desktop notifications (macOS/Linux)
+  core/
+    application/      # Query, download, cleanup, reporting, session wiring
+    cli/              # CLI entry, flows, interactive UI, Rich display
+    engines/          # Chrome lifecycle and Cloudflare-aware CDP requests
+    downloader.py     # Concurrent image downloader with resume
+    converters.py     # PDF / CBZ conversion + image optimization
+    settings.py       # Persistent user settings (JSON)
+    history.py        # Download history tracking
+  sites/
+    base.py           # SiteAdapter / Engine protocols
+    comix_to.py       # comix.to adapter facade
+    comix_to_api.py   # API orchestration + session-scoped cache
+    comix_to_browser.py # Service probe + scrambled image renderer
+    comix_to_parsing.py # JSON parsing helpers
+    comix_to_dedup.py # Chapter deduplication rules
 ```
 
 ## License
