@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
 import pytest
 from textual.css.query import NoMatches
-from textual.widgets import DataTable
+from textual.widgets import Button, DataTable
 
+from comix_dl.core.application.download_usecase import DownloadChapterEvent
 from comix_dl.core.models import ChapterInfo, SearchResult, SeriesInfo
 from comix_dl.core.settings import Settings
 from comix_dl.core.tui.app import ComixTuiApp, StatusBar
-from comix_dl.core.tui.screens.download import DownloadTitle
+from comix_dl.core.tui.screens.download import DownloadStatus, DownloadTitle
 from comix_dl.core.tui.screens.manage import DownloadsPane
 from comix_dl.core.tui.screens.series import SeriesTitle
+from tests.flow_helpers import _make_summary
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -30,6 +33,10 @@ class FakeController:
         self.search = AsyncMock(return_value=[])
         self.load_series = AsyncMock()
         self.download = AsyncMock()
+        self.request_shutdown_called = False
+        self.cleanup_plan_result: Any = SimpleNamespace(candidates=[], total_size_bytes=0)
+        self.cleanup_result: Any = SimpleNamespace(removed_count=0, failed=[])
+        self.applied_cleanup_plan: object | None = None
 
     async def open(self) -> None:
         self.opened = True
@@ -45,6 +52,16 @@ class FakeController:
 
     def load_settings(self) -> Settings:
         return self.settings
+
+    def request_shutdown(self) -> None:
+        self.request_shutdown_called = True
+
+    def cleanup_plan(self, series_title: str | None = None) -> Any:
+        return self.cleanup_plan_result
+
+    def apply_cleanup(self, plan: object) -> Any:
+        self.applied_cleanup_plan = plan
+        return self.cleanup_result
 
 
 def _series() -> SeriesInfo:
@@ -176,3 +193,105 @@ async def test_series_pane_filters_selects_and_starts_download(tmp_path: Path) -
         await pilot.press("d")
         await pilot.pause()
         assert app.query_one("#download-title", DownloadTitle).renderable == "Downloading Series A"
+
+
+@pytest.mark.asyncio
+async def test_download_pane_runs_download_and_renders_summary(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    controller.search.return_value = [
+        SearchResult(title="Series A", url="https://comix.to/manga/series-a", slug="series-a", hash_id="a")
+    ]
+    controller.load_series.return_value = _series()
+
+    async def fake_download(request: object, *, on_event: Any = None) -> object:
+        assert on_event is not None
+        on_event(DownloadChapterEvent(chapter_id=2, chapter_title="Chapter 2 Extra", kind="started"))
+        on_event(DownloadChapterEvent(chapter_id=2, chapter_title="Chapter 2 Extra", kind="planned", total=12))
+        on_event(
+            DownloadChapterEvent(
+                chapter_id=2,
+                chapter_title="Chapter 2 Extra",
+                kind="progress",
+                completed=12,
+                total=12,
+            )
+        )
+        on_event(
+            DownloadChapterEvent(
+                chapter_id=2,
+                chapter_title="Chapter 2 Extra",
+                kind="converted",
+                output_name="Chapter 2 Extra.cbz",
+            )
+        )
+        return _make_summary(completed=1, total_bytes=4096, elapsed_seconds=4.0)
+
+    controller.download = AsyncMock(side_effect=fake_download)
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.click("#search-input")
+        await pilot.press(*"series")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("/")
+        await pilot.press(*"+extra")
+        await pilot.press("enter")
+        await pilot.press("space")
+        await pilot.press("d")
+        await pilot.pause()
+        assert "completed" in str(app.query_one("#download-status", DownloadStatus).renderable)
+
+    controller.download.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_download_cancel_requests_shutdown(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    from comix_dl.core.tui.screens.download import DownloadPane
+    from comix_dl.core.tui.state import DownloadRequest
+
+    series = _series()
+    request = DownloadRequest(series_title=series.title, chapters=tuple(series.chapters[:1]), fmt="pdf", optimize=True)
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        host = app.query_one("#screen-host")
+        await host.remove_children()
+        await host.mount(DownloadPane(controller, request))
+        await pilot.pause()
+        await pilot.press("c")
+        assert controller.request_shutdown_called is True
+
+
+@pytest.mark.asyncio
+async def test_download_cleanup_button_applies_plan_and_renders_result(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    controller.download.return_value = _make_summary(completed=1)
+    cleanup_plan = SimpleNamespace(candidates=[SimpleNamespace()], total_size_bytes=2048)
+    controller.cleanup_plan_result = cleanup_plan
+    controller.cleanup_result = SimpleNamespace(removed_count=1, failed=[])
+    from comix_dl.core.tui.screens.download import DownloadPane
+    from comix_dl.core.tui.state import DownloadRequest
+
+    series = _series()
+    request = DownloadRequest(series_title=series.title, chapters=tuple(series.chapters[:1]), fmt="pdf", optimize=True)
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(100, 32)) as pilot:
+        host = app.query_one("#screen-host")
+        await host.remove_children()
+        await host.mount(DownloadPane(controller, request))
+        await pilot.pause()
+
+        assert app.query_one("#cleanup-button", Button).disabled is False
+
+        await pilot.click("#cleanup-button")
+        await pilot.pause()
+
+        assert controller.applied_cleanup_plan is cleanup_plan
+        assert "Cleanup removed 1 raw folder(s)." in str(
+            app.query_one("#download-status", DownloadStatus).renderable
+        )
