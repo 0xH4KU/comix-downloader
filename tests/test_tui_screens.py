@@ -11,16 +11,19 @@ import pytest
 from textual.css.query import NoMatches
 from textual.widgets import Button, DataTable
 
+from comix_dl.core.application.cleanup_usecase import DownloadedSeries
 from comix_dl.core.application.download_usecase import DownloadChapterEvent
+from comix_dl.core.history import HistoryEntry
 from comix_dl.core.models import ChapterInfo, SearchResult, SeriesInfo
 from comix_dl.core.settings import Settings
 from comix_dl.core.tui.app import ComixTuiApp, StatusBar
 from comix_dl.core.tui.screens.download import DownloadStatus, DownloadTitle
-from comix_dl.core.tui.screens.manage import DownloadsPane
+from comix_dl.core.tui.screens.manage import DownloadsPane, SettingsOutput
 from comix_dl.core.tui.screens.series import SeriesTitle
 from tests.flow_helpers import _make_summary
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
 
@@ -44,10 +47,10 @@ class FakeController:
     async def close(self) -> None:
         self.closed = True
 
-    def list_downloads(self) -> list[object]:
+    def list_downloads(self) -> Sequence[object]:
         return []
 
-    def history_entries(self) -> list[object]:
+    def history_entries(self) -> Sequence[object]:
         return []
 
     def load_settings(self) -> Settings:
@@ -299,3 +302,44 @@ async def test_download_cleanup_button_applies_plan_and_renders_result(tmp_path:
         assert "Cleanup removed 1 raw folder(s)." in str(
             app.query_one("#download-status", DownloadStatus).renderable
         )
+
+
+@pytest.mark.asyncio
+async def test_downloads_history_and_settings_panes_render_controller_data(tmp_path: Path) -> None:
+    class ManagementController(FakeController):
+        def list_downloads(self) -> list[DownloadedSeries]:
+            return [
+                DownloadedSeries(
+                    name="Series A",
+                    path=tmp_path / "Series A",
+                    completed_chapters=2,
+                    total_size_bytes=2048,
+                )
+            ]
+
+        def history_entries(self) -> list[HistoryEntry]:
+            return [
+                HistoryEntry(
+                    timestamp="2026-06-11T00:00:00+00:00",
+                    title="Series A",
+                    chapters_count=2,
+                    format="cbz",
+                    total_size_bytes=2048,
+                    completed=2,
+                    summary_text="2 completed",
+                )
+            ]
+
+    controller = ManagementController(tmp_path)
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(110, 34)) as pilot:
+        await app.action_show_downloads()
+        await pilot.pause()
+        assert app.query_one("#downloads-table", DataTable).row_count == 1
+        await app.action_show_history()
+        await pilot.pause()
+        assert app.query_one("#history-table", DataTable).row_count == 1
+        await app.action_show_settings()
+        await pilot.pause()
+        assert str(app.query_one("#settings-output", SettingsOutput).renderable) == str(tmp_path)
