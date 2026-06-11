@@ -51,6 +51,7 @@ def test_tui_receives_mirror_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli_module, "configure_logging", lambda _level: None)
     monkeypatch.setattr(cli_module, "_maybe_print_update_notice", lambda: recorded.append("update"))
     monkeypatch.setattr(cli_module, "run_tui", lambda *, mirror=None: recorded.append(("tui", mirror)) or 0)
+    monkeypatch.setattr(cli_module.console, "quiet", False)
 
     assert cli_module.main() == 0
     assert recorded == [("tui", "https://comix.cc")]
