@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from textual.css.query import NoMatches
-from textual.widgets import Button, DataTable
+from textual.widgets import Button, DataTable, Input
 
 from comix_dl.core.application.cleanup_usecase import DownloadedSeries
 from comix_dl.core.application.download_usecase import DownloadChapterEvent
@@ -334,12 +334,26 @@ async def test_downloads_history_and_settings_panes_render_controller_data(tmp_p
     app = ComixTuiApp(controller=controller)
 
     async with app.run_test(size=(110, 34)) as pilot:
-        await app.action_show_downloads()
+        await pilot.press("d")
         await pilot.pause()
         assert app.query_one("#downloads-table", DataTable).row_count == 1
-        await app.action_show_history()
+        await pilot.press("h")
         await pilot.pause()
         assert app.query_one("#history-table", DataTable).row_count == 1
-        await app.action_show_settings()
+        await pilot.press("g")
         await pilot.pause()
         assert str(app.query_one("#settings-output", SettingsOutput).renderable) == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_search_input_keeps_normal_text_entry_after_first_character(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(110, 34)) as pilot:
+        await pilot.press("n")
+        await pilot.press("d")
+        await pilot.press("g")
+        await pilot.pause()
+
+        assert app.query_one("#search-input", Input).value == "ndg"
