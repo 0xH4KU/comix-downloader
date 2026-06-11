@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, cast
 
-from textual import on
+from textual import events, on
 from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
@@ -25,6 +25,18 @@ class SearchController(Protocol):
         """Load a selected series."""
 
 
+class SearchInput(Input):
+    """Search input that can release focus for global app shortcuts."""
+
+    async def _on_key(self, event: events.Key) -> None:
+        if event.key in {"escape", "tab"}:
+            self.blur()
+            event.stop()
+            event.prevent_default()
+            return
+        await super()._on_key(event)
+
+
 class SearchScreen(Widget):
     """Search and result selection pane."""
 
@@ -36,7 +48,7 @@ class SearchScreen(Widget):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static("Search manga", classes="pane-title")
-            yield Input(placeholder="Type a manga name and press Enter", id="search-input")
+            yield SearchInput(placeholder="Type a manga name and press Enter", id="search-input")
             yield Static("Ready.", id="search-status", classes="muted")
             table: DataTable[object] = DataTable(id="results")
             table.cursor_type = "row"
