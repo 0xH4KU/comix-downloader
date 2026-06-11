@@ -1,0 +1,47 @@
+Screen {
+    background: $surface;
+    color: $text;
+}
+
+#layout {
+    height: 1fr;
+}
+
+#sidebar {
+    width: 18;
+    padding: 1 2;
+    background: $panel;
+    color: $text-muted;
+    border-right: solid $primary;
+}
+
+#screen-host {
+    width: 1fr;
+    height: 1fr;
+    padding: 1 2;
+}
+
+#status {
+    dock: bottom;
+    height: 1;
+    padding: 0 1;
+    background: $panel;
+    color: $text-muted;
+}
+
+.pane-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.muted {
+    color: $text-muted;
+}
+
+.error {
+    color: $error;
+}
+
+.success {
+    color: $success;
+}
