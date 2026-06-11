@@ -287,6 +287,10 @@ async def test_download_cleanup_button_applies_plan_and_renders_result(tmp_path:
         await pilot.pause()
 
         assert app.query_one("#cleanup-button", Button).disabled is False
+        controller.cleanup_plan_result = SimpleNamespace(
+            candidates=[SimpleNamespace(), SimpleNamespace()],
+            total_size_bytes=4096,
+        )
 
         await pilot.click("#cleanup-button")
         await pilot.pause()

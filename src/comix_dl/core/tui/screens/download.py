@@ -169,7 +169,9 @@ class DownloadPane(Widget):
         await cast("DownloadApp", self.app).action_show_search()
 
     def action_cleanup(self) -> None:
-        plan = self.controller.cleanup_plan(series_title=self.request.series_title)
+        plan = self._cleanup_plan
+        if plan is None:
+            plan = self.controller.cleanup_plan(series_title=self.request.series_title)
         self._cleanup_plan = plan
         if not plan.candidates:
             self.query_one("#cleanup-button", Button).disabled = True
