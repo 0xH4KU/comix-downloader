@@ -13,6 +13,7 @@ from textual.widgets import DataTable
 from comix_dl.core.models import ChapterInfo, SearchResult, SeriesInfo
 from comix_dl.core.settings import Settings
 from comix_dl.core.tui.app import ComixTuiApp, StatusBar
+from comix_dl.core.tui.screens.download import DownloadTitle
 from comix_dl.core.tui.screens.manage import DownloadsPane
 from comix_dl.core.tui.screens.series import SeriesTitle
 
@@ -28,6 +29,7 @@ class FakeController:
         self.output_dir = tmp_path
         self.search = AsyncMock(return_value=[])
         self.load_series = AsyncMock()
+        self.download = AsyncMock()
 
     async def open(self) -> None:
         self.opened = True
@@ -148,3 +150,29 @@ async def test_pending_series_load_does_not_replace_navigation_target(tmp_path: 
             app.query_one("#series-title", SeriesTitle)
 
     controller.load_series.assert_awaited_once_with("a")
+
+
+@pytest.mark.asyncio
+async def test_series_pane_filters_selects_and_starts_download(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    controller.search.return_value = [
+        SearchResult(title="Series A", url="https://comix.to/manga/series-a", slug="series-a", hash_id="a")
+    ]
+    controller.load_series.return_value = _series()
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.click("#search-input")
+        await pilot.press(*"series")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("/")
+        await pilot.press(*"+extra")
+        await pilot.press("enter")
+        await pilot.press("space")
+        await pilot.press("f")
+        await pilot.press("d")
+        await pilot.pause()
+        assert app.query_one("#download-title", DownloadTitle).renderable == "Downloading Series A"
