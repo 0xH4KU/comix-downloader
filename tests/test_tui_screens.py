@@ -6,9 +6,12 @@ from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
+from textual.widgets import DataTable
 
+from comix_dl.core.models import ChapterInfo, SearchResult, SeriesInfo
 from comix_dl.core.settings import Settings
 from comix_dl.core.tui.app import ComixTuiApp, StatusBar
+from comix_dl.core.tui.screens.series import SeriesTitle
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -39,6 +42,21 @@ class FakeController:
         return self.settings
 
 
+def _series() -> SeriesInfo:
+    return SeriesInfo(
+        title="Series A",
+        authors=["Author A"],
+        genres=["Action"],
+        description="A short description",
+        chapters=[
+            ChapterInfo(title="Chapter 1", chapter_id=1, number="1", image_count=10),
+            ChapterInfo(title="Chapter 2 Extra", chapter_id=2, number="2", image_count=12),
+        ],
+        url="https://comix.to/manga/series-a",
+        hash_id="a",
+    )
+
+
 @pytest.mark.asyncio
 async def test_app_mounts_search_screen_and_opens_controller(tmp_path: Path) -> None:
     controller = FakeController(tmp_path)
@@ -50,3 +68,43 @@ async def test_app_mounts_search_screen_and_opens_controller(tmp_path: Path) -> 
         assert app.query_one("#status", StatusBar).renderable == "Ready"
 
     assert controller.closed is True
+
+
+@pytest.mark.asyncio
+async def test_search_screen_submits_query_and_renders_results(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    controller.search.return_value = [
+        SearchResult(title="Series A", url="https://comix.to/manga/series-a", slug="series-a", hash_id="a")
+    ]
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(110, 34)) as pilot:
+        await pilot.click("#search-input")
+        await pilot.press(*"series")
+        await pilot.press("enter")
+        await pilot.pause()
+        table = app.query_one("#results", DataTable)
+        assert table.row_count == 1
+
+    controller.search.assert_awaited_once_with("series")
+
+
+@pytest.mark.asyncio
+async def test_result_enter_opens_series_pane(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    controller.search.return_value = [
+        SearchResult(title="Series A", url="https://comix.to/manga/series-a", slug="series-a", hash_id="a")
+    ]
+    controller.load_series.return_value = _series()
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(110, 34)) as pilot:
+        await pilot.click("#search-input")
+        await pilot.press(*"series")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.query_one("#series-title", SeriesTitle).renderable == "Series A"
+
+    controller.load_series.assert_awaited_once_with("a")
