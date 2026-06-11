@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, cast
 
-from textual import events, on
+from textual import on
 from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
@@ -25,40 +25,6 @@ class SearchController(Protocol):
         """Load a selected series."""
 
 
-class SearchShortcutApp(Protocol):
-    """App actions used by empty search-field shortcuts."""
-
-    async def action_show_downloads(self) -> None:
-        """Show downloaded series."""
-
-    async def action_show_history(self) -> None:
-        """Show download history."""
-
-    async def action_show_settings(self) -> None:
-        """Show settings."""
-
-    def run_worker(self, work: object, **kwargs: object) -> object:
-        """Schedule async UI work."""
-
-
-class SearchInput(Input):
-    """Search field with empty-state pane shortcuts."""
-
-    async def _on_key(self, event: events.Key) -> None:
-        if self.value == "" and event.character in {"d", "h", "g"}:
-            event.stop()
-            event.prevent_default()
-            app = cast("SearchShortcutApp", self.app)
-            if event.character == "d":
-                app.run_worker(app.action_show_downloads(), name="show-downloads")
-            elif event.character == "h":
-                app.run_worker(app.action_show_history(), name="show-history")
-            else:
-                app.run_worker(app.action_show_settings(), name="show-settings")
-            return
-        await super()._on_key(event)
-
-
 class SearchScreen(Widget):
     """Search and result selection pane."""
 
@@ -70,7 +36,7 @@ class SearchScreen(Widget):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static("Search manga", classes="pane-title")
-            yield SearchInput(placeholder="Type a manga name and press Enter", id="search-input")
+            yield Input(placeholder="Type a manga name and press Enter", id="search-input")
             yield Static("Ready.", id="search-status", classes="muted")
             table: DataTable[object] = DataTable(id="results")
             table.cursor_type = "row"

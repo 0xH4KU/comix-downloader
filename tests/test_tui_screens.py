@@ -334,6 +334,7 @@ async def test_downloads_history_and_settings_panes_render_controller_data(tmp_p
     app = ComixTuiApp(controller=controller)
 
     async with app.run_test(size=(110, 34)) as pilot:
+        await pilot.press("tab")
         await pilot.press("d")
         await pilot.pause()
         assert app.query_one("#downloads-table", DataTable).row_count == 1
@@ -343,6 +344,20 @@ async def test_downloads_history_and_settings_panes_render_controller_data(tmp_p
         await pilot.press("g")
         await pilot.pause()
         assert str(app.query_one("#settings-output", SettingsOutput).renderable) == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_search_input_accepts_query_starting_with_navigation_letter(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(110, 34)) as pilot:
+        await pilot.press(*"dragon")
+        await pilot.pause()
+
+        assert app.query_one("#search-input", Input).value == "dragon"
+        with pytest.raises(NoMatches):
+            app.query_one("#downloads-table", DataTable)
 
 
 @pytest.mark.asyncio

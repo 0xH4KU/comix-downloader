@@ -227,6 +227,33 @@ async def test_controller_download_forwards_events_and_shutdown(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_controller_shutdown_request_does_not_leak_between_downloads(tmp_path: Path) -> None:
+    session = _session(tmp_path)
+    controller = TuiController(session_factory=_FakeSessionFactory(_TrackingSessionContext(session)))
+    shutdown_states: list[bool] = []
+
+    async def fake_download(**kwargs: Any) -> object:
+        is_shutdown = kwargs["is_shutdown"]
+        assert callable(is_shutdown)
+        shutdown_states.append(is_shutdown())
+        if len(shutdown_states) == 1:
+            controller.request_shutdown()
+            shutdown_states.append(is_shutdown())
+        return _make_summary(completed=1)
+
+    session.download_mock.side_effect = fake_download
+    await controller.open()
+
+    chapter = ChapterInfo(title="Chapter 1", chapter_id=1, number="1")
+    request = DownloadRequest(series_title="Series A", chapters=(chapter,), fmt="cbz", optimize=False)
+
+    await controller.download(request)
+    await controller.download(request)
+
+    assert shutdown_states == [False, True, False]
+
+
+@pytest.mark.asyncio
 async def test_controller_shutdown_flag_is_reset_on_open(tmp_path: Path) -> None:
     controller = TuiController(session_factory=_FakeSessionFactory(_TrackingSessionContext(_session(tmp_path))))
 

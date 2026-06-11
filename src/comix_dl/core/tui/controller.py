@@ -163,14 +163,18 @@ class TuiController:
         on_event: DownloadEventHandler | None = None,
     ) -> DownloadSummary:
         """Download the requested chapters via the open application session."""
-        return await self._require_session().download(
-            series_title=request.series_title,
-            chapters=list(request.chapters),
-            fmt=request.fmt,
-            optimize=request.optimize,
-            on_event=on_event,
-            is_shutdown=self.is_shutdown_requested,
-        )
+        self._shutdown_requested = False
+        try:
+            return await self._require_session().download(
+                series_title=request.series_title,
+                chapters=list(request.chapters),
+                fmt=request.fmt,
+                optimize=request.optimize,
+                on_event=on_event,
+                is_shutdown=self.is_shutdown_requested,
+            )
+        finally:
+            self._shutdown_requested = False
 
     def request_shutdown(self) -> None:
         """Request cancellation for work that polls the shutdown callable."""
