@@ -12,6 +12,7 @@ from comix_dl.core.tui.state import (
     ChapterSelectionState,
     DownloadRequest,
     DownloadRowsState,
+    DownloadStatus,
     format_summary_line,
 )
 
@@ -22,6 +23,14 @@ def _chapters() -> list[ChapterInfo]:
         ChapterInfo(title="Chapter 2 - Extra", chapter_id=2, number="2", image_count=12),
         ChapterInfo(title="Chapter 3 - Stage", chapter_id=3, number="3", image_count=8),
     ]
+
+
+def _status(rows: DownloadRowsState, chapter_id: int) -> DownloadStatus:
+    return rows.rows[chapter_id].status
+
+
+def _detail(rows: DownloadRowsState, chapter_id: int) -> str:
+    return rows.rows[chapter_id].detail
 
 
 def test_chapter_selection_starts_with_all_chapters_visible() -> None:
@@ -102,30 +111,30 @@ def test_download_rows_reduce_all_event_kinds() -> None:
     rows = DownloadRowsState.from_chapters(_chapters()[:2])
 
     rows.apply(DownloadChapterEvent(chapter_id=1, chapter_title="Chapter 1", kind="skipped"))
-    assert rows.rows[1].status == "skipped"
+    assert _status(rows, 1) == "skipped"
     assert rows.rows[1].completed == 1
     assert rows.rows[1].total == 1
 
     rows.apply(DownloadChapterEvent(chapter_id=1, chapter_title="Chapter 1", kind="started"))
-    assert rows.rows[1].status == "started"
+    assert _status(rows, 1) == "started"
 
     rows.apply(DownloadChapterEvent(chapter_id=1, chapter_title="Chapter 1", kind="planned", total=10))
-    assert rows.rows[1].status == "planned"
+    assert _status(rows, 1) == "planned"
     assert rows.rows[1].completed == 0
     assert rows.rows[1].total == 10
 
     rows.apply(DownloadChapterEvent(chapter_id=1, chapter_title="Chapter 1", kind="progress", completed=4, total=10))
-    assert rows.rows[1].status == "progress"
+    assert _status(rows, 1) == "progress"
     assert rows.rows[1].completed == 4
     assert rows.rows[1].total == 10
 
     rows.apply(DownloadChapterEvent(chapter_id=1, chapter_title="Chapter 1", kind="missing_images"))
-    assert rows.rows[1].status == "missing_images"
-    assert rows.rows[1].detail == "No images found."
+    assert _status(rows, 1) == "missing_images"
+    assert _detail(rows, 1) == "No images found."
 
     rows.apply(DownloadChapterEvent(chapter_id=1, chapter_title="Chapter 1", kind="failed", message="network error"))
-    assert rows.rows[1].status == "failed"
-    assert rows.rows[1].detail == "network error"
+    assert _status(rows, 1) == "failed"
+    assert _detail(rows, 1) == "network error"
 
     rows.apply(
         DownloadChapterEvent(
@@ -135,10 +144,10 @@ def test_download_rows_reduce_all_event_kinds() -> None:
             output_name="Chapter 1.cbz",
         )
     )
-    assert rows.rows[1].status == "converted"
+    assert _status(rows, 1) == "converted"
     assert rows.rows[1].completed == 10
     assert rows.rows[1].total == 10
-    assert rows.rows[1].detail == "Chapter 1.cbz"
+    assert _detail(rows, 1) == "Chapter 1.cbz"
 
     rows.apply(
         DownloadChapterEvent(
@@ -148,12 +157,12 @@ def test_download_rows_reduce_all_event_kinds() -> None:
             message="2 image(s) failed",
         )
     )
-    assert rows.rows[2].status == "partial"
-    assert rows.rows[2].detail == "2 image(s) failed"
+    assert _status(rows, 2) == "partial"
+    assert _detail(rows, 2) == "2 image(s) failed"
 
     rows.apply(DownloadChapterEvent(chapter_id=2, chapter_title="Chapter 2", kind="conversion_failed"))
-    assert rows.rows[2].status == "conversion_failed"
-    assert rows.rows[2].detail == "Conversion failed."
+    assert _status(rows, 2) == "conversion_failed"
+    assert _detail(rows, 2) == "Conversion failed."
 
 
 def test_download_row_progress_text() -> None:
