@@ -9,6 +9,7 @@ Screen {
 
 #sidebar {
     width: 18;
+    min-width: 14;
     padding: 1 2;
     background: $panel;
     color: $text-muted;
@@ -27,6 +28,31 @@ Screen {
     padding: 0 1;
     background: $panel;
     color: $text-muted;
+}
+
+#search-input,
+#chapter-filter {
+    margin-bottom: 1;
+}
+
+#chapter-tools,
+#download-actions {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#format-select {
+    width: 16;
+}
+
+#download-button,
+#cancel-button,
+#cleanup-button {
+    width: auto;
+}
+
+DataTable {
+    height: 1fr;
 }
 
 .pane-title {

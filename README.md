@@ -150,6 +150,14 @@ comix-dl -q download "manga-slug"
 
 When a newer stable GitHub release is available, normal CLI runs print a short update notice at startup. The check is cached for 24 hours in `~/.config/comix-dl/update-check.json`, has a short network timeout, and is skipped in quiet mode.
 
+### Optional Full-Screen TUI
+
+```bash
+comix-dl tui
+```
+
+The Textual TUI is optional and opens a full-screen interface. It supports search, chapter filtering and selection, format choice, live download progress, and separate downloads, history, and settings panes. The scriptable CLI commands above remain first-class for automation and terminal workflows.
+
 ### Search & Download Flow
 
 1. Enter a search query
