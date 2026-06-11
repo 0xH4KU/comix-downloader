@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
 import pytest
+from textual.css.query import NoMatches
 from textual.widgets import DataTable
 
 from comix_dl.core.models import ChapterInfo, SearchResult, SeriesInfo
 from comix_dl.core.settings import Settings
 from comix_dl.core.tui.app import ComixTuiApp, StatusBar
+from comix_dl.core.tui.screens.manage import DownloadsPane
 from comix_dl.core.tui.screens.series import SeriesTitle
 
 if TYPE_CHECKING:
@@ -106,5 +109,42 @@ async def test_result_enter_opens_series_pane(tmp_path: Path) -> None:
         await pilot.press("enter")
         await pilot.pause()
         assert app.query_one("#series-title", SeriesTitle).renderable == "Series A"
+
+    controller.load_series.assert_awaited_once_with("a")
+
+
+@pytest.mark.asyncio
+async def test_pending_series_load_does_not_replace_navigation_target(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    load_started = asyncio.Event()
+    load_finished = asyncio.Event()
+
+    async def _load_series(_identifier: str) -> SeriesInfo:
+        load_started.set()
+        await load_finished.wait()
+        return _series()
+
+    controller.search.return_value = [
+        SearchResult(title="Series A", url="https://comix.to/manga/series-a", slug="series-a", hash_id="a")
+    ]
+    controller.load_series.side_effect = _load_series
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(110, 34)) as pilot:
+        await pilot.click("#search-input")
+        await pilot.press(*"series")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("enter")
+        await asyncio.wait_for(load_started.wait(), timeout=1)
+        await app.action_show_downloads()
+        await pilot.pause()
+
+        load_finished.set()
+        await pilot.pause()
+
+        assert app.query_one(DownloadsPane)
+        with pytest.raises(NoMatches):
+            app.query_one("#series-title", SeriesTitle)
 
     controller.load_series.assert_awaited_once_with("a")

@@ -102,5 +102,7 @@ class SearchScreen(Widget):
         from comix_dl.core.tui.screens.series import SeriesPane
 
         host = self.app.query_one("#screen-host")
+        if self not in host.children:
+            return
         await host.remove_children()
         await host.mount(SeriesPane(self.controller, info))
