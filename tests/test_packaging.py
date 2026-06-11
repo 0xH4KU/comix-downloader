@@ -23,3 +23,11 @@ def test_package_includes_javascript_assets() -> None:
 
     package_data = config["tool"]["setuptools"]["package-data"]
     assert "*.js" in package_data["comix_dl.sites.assets"]
+
+
+def test_package_includes_tui_stylesheet() -> None:
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    config = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+
+    package_data = config["tool"]["setuptools"]["package-data"]
+    assert "*.tcss" in package_data["comix_dl.core.tui"]

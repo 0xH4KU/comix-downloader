@@ -60,6 +60,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "comix_dl.sites.assets" = ["*.js"]
+"comix_dl.core.tui" = ["*.tcss"]
 
 [tool.ruff]
 target-version = "py311"
