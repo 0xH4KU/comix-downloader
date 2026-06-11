@@ -44,6 +44,7 @@ from comix_dl.core.cli.flows import (
 from comix_dl.core.cli.interactive import flow_history, flow_settings, parse_chapter_selection
 from comix_dl.core.logging_utils import configure_logging
 from comix_dl.core.settings import SettingsRepository
+from comix_dl.core.tui import run_tui
 from comix_dl.core.update_check import UpdateInfo, check_for_update
 
 _shutdown_event = threading.Event()
@@ -113,6 +114,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # settings
     sub.add_parser("settings", help="View / edit settings")
 
+    # tui
+    sub.add_parser("tui", help="Launch full-screen TUI")
+
     return parser
 
 
@@ -133,7 +137,7 @@ def _main_impl() -> int:
     if (
         len(sys.argv) == 2
         and not sys.argv[1].startswith("-")
-        and sys.argv[1] not in ("search", "download", "info", "list", "clean", "history", "doctor", "settings")
+        and sys.argv[1] not in ("search", "download", "info", "list", "clean", "history", "doctor", "settings", "tui")
     ):
         configure_logging(logging.INFO)
         _maybe_print_update_notice()
@@ -186,6 +190,9 @@ def _main_impl() -> int:
     if args.command == "settings":
         flow_settings()
         return 0
+
+    if args.command == "tui":
+        return run_tui(mirror=args.mirror)
 
     # No subcommand → interactive main menu
     return _main_menu()

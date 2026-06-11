@@ -35,6 +35,7 @@ dependencies = [
     "Pillow>=10.0",
     "pypdf>=4.0",
     "rich>=13.0",
+    "textual>=8.2,<9",
 ]
 
 [project.urls]
