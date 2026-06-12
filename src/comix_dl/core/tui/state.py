@@ -29,6 +29,15 @@ DownloadStatus = Literal[
 DownloadPhase = Literal["ready", "running", "cancelling", "failed", "complete"]
 
 
+def normalize_output_format(value: str) -> OutputFormat:
+    """Return a supported output format, defaulting invalid settings to PDF."""
+    if value == "cbz":
+        return "cbz"
+    if value == "both":
+        return "both"
+    return "pdf"
+
+
 @dataclass(frozen=True)
 class DownloadRequest:
     """Immutable input for one TUI download batch."""
@@ -174,13 +183,10 @@ class SeriesNavigationState:
     @classmethod
     def from_series(cls, series: SeriesInfo, *, default_format: str) -> SeriesNavigationState:
         """Create restorable chapter-selection state for a loaded series."""
-        format_value: OutputFormat = "pdf"
-        if default_format in {"pdf", "cbz", "both"}:
-            format_value = default_format
         return cls(
             series=series,
             selection=ChapterSelectionState.from_chapters(series.chapters),
-            format_value=format_value,
+            format_value=normalize_output_format(default_format),
         )
 
 

@@ -241,7 +241,7 @@ class ComixTuiApp(App[int]):
         elif destination == "Settings":
             await self.action_show_settings()
 
-    async def _replace_screen(self, widget: object) -> None:
+    async def _replace_main_pane(self, widget: object) -> None:
         """Replace the main pane and clear stale focus from the previous pane."""
         self.set_focus(None)
         host = self.query_one("#screen-host", Container)
@@ -256,14 +256,14 @@ class ComixTuiApp(App[int]):
 
         self.set_active_view("Search")
         self.set_status("Ready to search")
-        await self._replace_screen(SearchScreen(self.controller))
+        await self._replace_main_pane(SearchScreen(self.controller))
 
     async def action_show_downloads(self) -> None:
         from comix_dl.core.tui.screens.manage import DownloadsPane
 
         self.set_active_view("Library")
         self.set_status("Viewing library")
-        await self._replace_screen(DownloadsPane(self.controller))
+        await self._replace_main_pane(DownloadsPane(self.controller))
 
     async def action_show_chapters(self) -> None:
         from comix_dl.core.tui.screens.series import SeriesPane
@@ -273,7 +273,7 @@ class ComixTuiApp(App[int]):
             return
         self.set_active_view("Chapters")
         self.set_status(f"Series loaded: {self._series_state.series.title}")
-        await self._replace_screen(SeriesPane(self.controller, self._series_state))
+        await self._replace_main_pane(SeriesPane(self.controller, self._series_state))
 
     async def action_show_download(self) -> None:
         from comix_dl.core.tui.screens.download import DownloadPane
@@ -282,18 +282,18 @@ class ComixTuiApp(App[int]):
             self.set_status("Start a download before opening Download.")
             return
         self.set_active_view("Download")
-        await self._replace_screen(DownloadPane(self.controller, self._download_state))
+        await self._replace_main_pane(DownloadPane(self.controller, self._download_state))
 
     async def action_show_history(self) -> None:
         from comix_dl.core.tui.screens.manage import HistoryPane
 
         self.set_active_view("History")
         self.set_status("Viewing history")
-        await self._replace_screen(HistoryPane(self.controller))
+        await self._replace_main_pane(HistoryPane(self.controller))
 
     async def action_show_settings(self) -> None:
         from comix_dl.core.tui.screens.manage import SettingsPane
 
         self.set_active_view("Settings")
         self.set_status("Viewing settings")
-        await self._replace_screen(SettingsPane(self.controller))
+        await self._replace_main_pane(SettingsPane(self.controller))

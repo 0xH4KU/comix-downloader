@@ -156,6 +156,14 @@ def test_series_navigation_state_preserves_selection_filter_and_format() -> None
     assert state.format_value == "cbz"
 
 
+def test_series_navigation_state_defaults_invalid_format_to_pdf() -> None:
+    series = _series_for_navigation()
+
+    state = SeriesNavigationState.from_series(series, default_format="zip")
+
+    assert state.format_value == "pdf"
+
+
 def test_download_navigation_state_starts_ready_with_rows() -> None:
     series = _series_for_navigation()
     request = DownloadRequest(

@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from textual.app import ComposeResult
 
     from comix_dl.core.models import SearchResult, SeriesInfo
+    from comix_dl.core.tui.state import SeriesNavigationState
 
 
 class SearchController(Protocol):
@@ -34,7 +35,7 @@ class SearchApp(Protocol):
     def set_status(self, message: str) -> None:
         """Set the shared shell status text."""
 
-    def set_loaded_series(self, series: SeriesInfo) -> object:
+    def set_loaded_series(self, series: SeriesInfo) -> SeriesNavigationState:
         """Store the current loaded series for navigation."""
 
 

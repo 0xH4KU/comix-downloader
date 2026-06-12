@@ -34,7 +34,7 @@ Adapters may provide `new_session()`. If present, `open_application_session()` u
 The comix.to adapter registers:
 
 - a service probe from `comix_to_browser.py`
-- a scrambled image renderer from `comix_to_browser.py`
+- a DOM-first scrambled image renderer from `comix_to_browser.py`, with a legacy renderer fallback
 - a packaged frontend API client hook from `sites/assets/comix_api_client.js`
 
 ## comix.to Module Map
@@ -44,7 +44,7 @@ The comix.to adapter registers:
 - `comix_to_parsing.py`: raw JSON to framework models
 - `comix_to_dedup.py`: duplicate chapter rules and reports
 - `comix_to_url.py`: URL matching and identifier parsing
-- `comix_to_browser.py`: Cloudflare API probe and scrambled image renderer
+- `comix_to_browser.py`: Cloudflare API probe, reader-DOM scrambled capture, and legacy renderer fallback
 
 ## Model Expectations
 
@@ -52,7 +52,7 @@ Use framework models from `core/models.py`:
 
 - `SearchResult.hash_id` stores the canonical site identifier even when the underlying site calls it something else.
 - `ChapterInfo.chapter_id` is currently `int` for compatibility with comix.to.
-- `ChapterImages.pages` carries `ChapterPage` metadata for scrambled images.
+- `ChapterImages.pages` carries `ChapterPage` metadata for scrambled images, including the reader URL and zero-based page index needed for DOM capture.
 - `DedupDecision` should explain why variants were dropped in terms a user can understand.
 
 ## Testing Expectations

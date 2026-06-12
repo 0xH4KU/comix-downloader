@@ -1,6 +1,6 @@
 # comix-downloader
 
-[![Version](https://img.shields.io/badge/version-0.4.3-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
+[![Version](https://img.shields.io/badge/version-0.4.4-blue?style=flat-square)](https://github.com/0xH4KU/comix-downloader)
 [![Python](https://img.shields.io/badge/python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/0xH4KU/comix-downloader?style=flat-square)](https://github.com/0xH4KU/comix-downloader/commits)
@@ -20,6 +20,8 @@ Built with **Python 3.11+**, **Playwright** (CDP connection), and **Rich** (CLI 
 - **Clear partial semantics** — incomplete chapters stay unconverted, surface as partial failures, and keep their failure details in history and notifications
 - **Smart chapter dedup** — language variants stay distinct while true duplicates are collapsed by page count, with dedup decisions shown before download
 - **PDF / CBZ conversion** — supports optional image optimization plus safe large-PDF batching with a bundled merge backend
+- **Optional full-screen TUI** — Textual interface with guided search, clickable navigation, chapter selection, live progress, status log, library, history, and settings panes
+- **DOM-first scrambled capture** — captures comix.to reader-rendered pages before falling back to the legacy renderer, improving resilience when private site renderer signatures change
 - **Injected runtime config** — settings are normalized into an explicit `AppConfig` with `desktop`, `low_resource`, `ci`, and `custom` tuning profiles
 - **Thinner architecture** — CLI prompting, application use cases, repositories, and browser/session code are split into testable layers
 - **Stronger operational quality** — structured logs, shared reporting across CLI/history/notifications, release update notices, docs checks, typing, and a 70% coverage gate
@@ -77,6 +79,7 @@ Normal installs now pull in `pypdf`, which is the default merge backend for larg
 
 For contributor workflow, local quality gates, and regression-test expectations, see `CONTRIBUTING.md`.
 For upgrade notes from the older monolithic runtime and for release-slice procedure, see `MIGRATION.md` and `RELEASE_CHECKLIST.md`.
+For release highlights, see `CHANGELOG.md`.
 
 ## Update / Uninstall
 
@@ -156,7 +159,7 @@ When a newer stable GitHub release is available, normal CLI runs print a short u
 comix-dl tui
 ```
 
-The Textual TUI is optional and opens a full-screen interface. It supports search, chapter filtering and selection, format choice, live download progress, and separate downloads, history, and settings panes. The scriptable CLI commands above remain first-class for automation and terminal workflows.
+The Textual TUI is optional and opens a full-screen interface. It supports search, chapter filtering and selection, format choice, clickable workflow navigation, live download progress, a toggleable status log, and separate library, history, and settings panes. The scriptable CLI commands above remain first-class for automation and terminal workflows.
 
 ### Search & Download Flow
 
@@ -239,7 +242,7 @@ comix-dl doctor --deep
 
 4. **Smart Dedup** — the API often returns duplicate entries for the same chapter (from different uploaders). comix-dl groups chapters by number, language, and subtitle, then keeps the same-language duplicate with the most images. Chapters with the same number but different subtitles (e.g. "Chapter 0 - Volume 11" vs "Chapter 0 - Volume 12") or different languages are correctly treated as distinct content.
 
-5. **Download** — image URLs are fetched via `page.evaluate(fetch())` inside Chrome's page context. A **page pool** sized from the `Concurrent images` setting enables parallel downloads while keeping the main browser page reserved for navigation and Cloudflare handling. If all pooled pages are busy, requests wait for a pooled page instead of racing on the shared main page. Closed or stale pooled pages are discarded and replaced instead of being silently returned to circulation. Binary data uses **base64 encoding** (3-4x less overhead than JSON arrays). CDP connect, navigation, and in-browser fetch calls all use explicit timeouts, so stalled browser operations fail fast instead of hanging forever. Random delays between requests avoid rate limiting.
+5. **Download** — image URLs are fetched via `page.evaluate(fetch())` inside Chrome's page context. A **page pool** sized from the `Concurrent images` setting enables parallel downloads while keeping the main browser page reserved for navigation and Cloudflare handling. If all pooled pages are busy, requests wait for a pooled page instead of racing on the shared main page. Closed or stale pooled pages are discarded and replaced instead of being silently returned to circulation. Binary data uses **base64 encoding** (3-4x less overhead than JSON arrays). Scrambled pages are captured from the hydrated reader DOM first, reusing the same reader page across pages in a chapter, with the legacy renderer retained as a fallback. CDP connect, navigation, and in-browser fetch calls all use explicit timeouts, so stalled browser operations fail fast instead of hanging forever. Random delays between requests avoid rate limiting.
 
 6. **Resume** — each chapter directory gets a `.complete` marker only after every page succeeds. Re-running the same download skips completed chapters and resumes partially-downloaded ones. Existing image files are validated before reuse, invalid files are re-downloaded, stale temp artifacts are cleaned up, and incomplete chapters keep `chapter.state.json` until a later successful rerun clears it.
 
@@ -257,6 +260,7 @@ src/comix_dl/
     application/      # Query, download, cleanup, reporting, session wiring
     cli/              # CLI entry, flows, interactive UI, Rich display
     engines/          # Chrome lifecycle and Cloudflare-aware CDP requests
+    tui/              # Optional Textual full-screen interface
     downloader.py     # Concurrent image downloader with resume
     converters.py     # PDF / CBZ conversion + image optimization
     settings.py       # Persistent user settings (JSON)
