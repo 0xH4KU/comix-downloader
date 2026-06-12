@@ -13,12 +13,13 @@ from textual.widgets import Footer, Header, Static
 
 from comix_dl import __version__
 from comix_dl.core.tui.controller import TuiController
-from comix_dl.core.tui.state import LogDrawerState
+from comix_dl.core.tui.state import DownloadNavigationState, LogDrawerState, SeriesNavigationState
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
+    from comix_dl.core.models import SeriesInfo
     from comix_dl.core.settings import Settings
 
 
@@ -158,6 +159,8 @@ class ComixTuiApp(App[int]):
     def __init__(self, *, controller: TuiControllerLike | None = None, mirror: str | None = None) -> None:
         super().__init__()
         self.controller = controller or cast("TuiControllerLike", TuiController(mirror=mirror))
+        self._series_state: SeriesNavigationState | None = None
+        self._download_state: DownloadNavigationState | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -181,7 +184,12 @@ class ComixTuiApp(App[int]):
 
     def available_destinations(self) -> set[str]:
         """Return destinations visible in the sidebar."""
-        return {"Search", "Library", "History", "Settings"}
+        destinations = {"Search", "Library", "History", "Settings"}
+        if self._series_state is not None:
+            destinations.add("Chapters")
+        if self._download_state is not None:
+            destinations.add("Download")
+        return destinations
 
     def refresh_navigation(self, active: str) -> None:
         self.query_one("#sidebar", NavigationRail).set_state(
@@ -198,6 +206,15 @@ class ComixTuiApp(App[int]):
     def append_log(self, message: str) -> None:
         self.set_status(message)
 
+    def set_loaded_series(self, series: SeriesInfo) -> SeriesNavigationState:
+        """Store a loaded series and reveal the Chapters destination."""
+        self._series_state = SeriesNavigationState.from_series(
+            series,
+            default_format=self.controller.settings.default_format,
+        )
+        self.refresh_navigation("Chapters")
+        return self._series_state
+
     def action_toggle_logs(self) -> None:
         self.query_one("#status-log", StatusLog).toggle()
 
@@ -206,6 +223,8 @@ class ComixTuiApp(App[int]):
         destination = event.destination
         if destination == "Search":
             await self.action_show_search()
+        elif destination == "Chapters":
+            await self.action_show_chapters()
         elif destination == "Library":
             await self.action_show_downloads()
         elif destination == "History":
@@ -238,6 +257,16 @@ class ComixTuiApp(App[int]):
         self.set_active_view("Library")
         self.set_status("Viewing library")
         await self._replace_screen(DownloadsPane(self.controller))
+
+    async def action_show_chapters(self) -> None:
+        from comix_dl.core.tui.screens.series import SeriesPane
+
+        if self._series_state is None:
+            self.set_status("Search and select a manga before opening Chapters.")
+            return
+        self.set_active_view("Chapters")
+        self.set_status(f"Series loaded: {self._series_state.series.title}")
+        await self._replace_screen(SeriesPane(self.controller, self._series_state))
 
     async def action_show_history(self) -> None:
         from comix_dl.core.tui.screens.manage import HistoryPane

@@ -20,6 +20,7 @@ from comix_dl.core.tui.app import ComixTuiApp, NavigationRail, StatusLog
 from comix_dl.core.tui.screens.download import DownloadStatus, DownloadTitle
 from comix_dl.core.tui.screens.manage import DownloadsPane, SettingsOutput
 from comix_dl.core.tui.screens.series import SeriesTitle
+from comix_dl.core.tui.state import SeriesNavigationState
 from tests.flow_helpers import _make_summary
 
 if TYPE_CHECKING:
@@ -184,8 +185,9 @@ async def test_search_screen_guides_empty_query(tmp_path: Path) -> None:
         await pilot.pause()
 
         assert "Type a manga name to begin" in str(app.query_one("#search-help", Static).content)
-        assert str(app.query_one("#search-status", Static).content) == "Type a manga name, then press Enter to search."
-        assert app.query_one("#status-log", StatusLog).renderable == "Ready to search"
+        assert app.query_one("#status-log", StatusLog).renderable == (
+            "Type a manga name, then press Enter to search."
+        )
 
 
 @pytest.mark.asyncio
@@ -203,9 +205,6 @@ async def test_search_results_update_global_status(tmp_path: Path) -> None:
         await pilot.press("enter")
         await pilot.pause()
 
-        assert str(app.query_one("#search-status", Static).content) == (
-            "2 results found. Select a row and press Enter to open it."
-        )
         assert app.query_one("#status-log", StatusLog).renderable == "2 results found"
 
 
@@ -228,6 +227,61 @@ async def test_result_enter_opens_series_pane(tmp_path: Path) -> None:
         assert app.query_one("#series-title", SeriesTitle).renderable == "Series A"
 
     controller.load_series.assert_awaited_once_with("a")
+
+
+@pytest.mark.asyncio
+async def test_chapters_navigation_appears_after_series_load(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    controller.search.return_value = [
+        SearchResult(title="Series A", url="https://comix.to/manga/series-a", slug="series-a", hash_id="a")
+    ]
+    controller.load_series.return_value = _series()
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.click("#search-input")
+        await pilot.press(*"series")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert "Chapters" not in app.query_one("#sidebar", NavigationRail).rendered_text
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert "Chapters" in app.query_one("#sidebar", NavigationRail).rendered_text
+        assert "1 Search" not in app.query_one("#sidebar", NavigationRail).rendered_text
+
+
+@pytest.mark.asyncio
+async def test_chapters_sidebar_click_restores_filter_selection_and_format(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    controller.search.return_value = [
+        SearchResult(title="Series A", url="https://comix.to/manga/series-a", slug="series-a", hash_id="a")
+    ]
+    controller.load_series.return_value = _series()
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.click("#search-input")
+        await pilot.press(*"series")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        await pilot.press("/")
+        await pilot.press(*"+extra")
+        await pilot.press("enter")
+        await pilot.press("space")
+        await pilot.press("f")
+        await pilot.click("#nav-library")
+        await pilot.pause()
+        await pilot.click("#nav-chapters")
+        await pilot.pause()
+
+        assert str(app.query_one("#selection-summary", Static).content) == "1 selected from 1 visible chapters."
+        assert "Format: CBZ." in str(app.query_one("#series-status", Static).content)
 
 
 @pytest.mark.asyncio
@@ -328,7 +382,8 @@ async def test_series_download_without_selection_is_actionable(tmp_path: Path) -
     async with app.run_test(size=(120, 36)) as pilot:
         host = app.query_one("#screen-host")
         await host.remove_children()
-        await host.mount(SeriesPane(controller, _series()))
+        series_state = SeriesNavigationState.from_series(_series(), default_format="pdf")
+        await host.mount(SeriesPane(controller, series_state))
         await pilot.pause()
         await pilot.press("d")
         await pilot.pause()

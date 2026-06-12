@@ -9,12 +9,11 @@ from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Select, Static
 
-from comix_dl.core.tui.state import ChapterSelectionState, DownloadRequest, OutputFormat
+from comix_dl.core.tui.state import DownloadRequest, OutputFormat, SeriesNavigationState
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
 
-    from comix_dl.core.models import SeriesInfo
     from comix_dl.core.settings import Settings
 
 
@@ -54,12 +53,13 @@ class SeriesPane(Widget):
         ("d", "start_download", "Download"),
     ]
 
-    def __init__(self, controller: object, series: SeriesInfo) -> None:
+    def __init__(self, controller: object, state: SeriesNavigationState) -> None:
         super().__init__()
         self.controller = cast("SeriesController", controller)
-        self.series = series
-        self.selection = ChapterSelectionState.from_chapters(series.chapters)
-        self.format_value: OutputFormat = self._initial_format(self.controller.settings.default_format)
+        self.state = state
+        self.series = state.series
+        self.selection = state.selection
+        self.format_value = state.format_value
 
     @property
     def shell(self) -> SeriesApp:
@@ -104,11 +104,6 @@ class SeriesPane(Widget):
     def _selection_summary_text(self) -> str:
         return f"{self.selection.selected_count} selected from {len(self.selection.visible_chapters)} visible chapters."
 
-    def _initial_format(self, raw_format: str) -> OutputFormat:
-        if raw_format in {"pdf", "cbz", "both"}:
-            return cast("OutputFormat", raw_format)
-        return "pdf"
-
     def _refresh_table(self) -> None:
         table = self.query_one("#chapters", DataTable)
         cursor_row = max(table.cursor_row, 0)
@@ -147,6 +142,7 @@ class SeriesPane(Widget):
     def _format_changed(self, event: Select.Changed) -> None:
         if event.value in {"pdf", "cbz", "both"}:
             self.format_value = cast("OutputFormat", event.value)
+            self.state.format_value = self.format_value
             self._refresh_status()
 
     @on(Button.Pressed, "#download-button")
@@ -177,6 +173,7 @@ class SeriesPane(Widget):
         formats: list[OutputFormat] = ["pdf", "cbz", "both"]
         current_index = formats.index(self.format_value)
         self.format_value = formats[(current_index + 1) % len(formats)]
+        self.state.format_value = self.format_value
         self.query_one("#format-select", Select).value = self.format_value
         self._refresh_status()
 
