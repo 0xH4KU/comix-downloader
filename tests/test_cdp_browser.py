@@ -805,6 +805,10 @@ class TestBrowserHelpers:
         assert "window.__comixRenderScrambledImage" in expression
         assert "secure-" in expression
         assert "document.body.appendChild" in expression
+        assert "const rendered = await renderer(imageUrl, controller.signal)" in expression
+        assert "await drawRenderedImage(rendered, canvas)" in expression
+        assert "shouldTryLegacyCanvasRenderer" in expression
+        assert "drawRenderedImage" in expression
 
     async def test_get_scrambled_image_bytes_retries_with_cache_bust_after_render_failure(self):
         browser = CdpBrowser(config=AppConfig())

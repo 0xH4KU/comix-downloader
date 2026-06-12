@@ -128,6 +128,106 @@ async def render_scrambled_image_on_page(
                 }
 
                 const renderer = await loadRenderer();
+                function isInstance(value, ctorName) {
+                    const ctor = globalThis[ctorName];
+                    return typeof ctor === 'function' && value instanceof ctor;
+                }
+
+                function loadImage(src) {
+                    return new Promise((resolve, reject) => {
+                        const image = new Image();
+                        image.onload = () => resolve(image);
+                        image.onerror = () => reject(new Error('Could not load rendered image source.'));
+                        image.src = src;
+                    });
+                }
+
+                async function toDrawableImage(source) {
+                    if (source == null) return source;
+                    if (isInstance(source, 'Response')) return await toDrawableImage(await source.blob());
+                    if (isInstance(source, 'Blob')) {
+                        if (typeof createImageBitmap === 'function') return await createImageBitmap(source);
+                        const objectUrl = URL.createObjectURL(source);
+                        try {
+                            return await loadImage(objectUrl);
+                        } finally {
+                            URL.revokeObjectURL(objectUrl);
+                        }
+                    }
+                    if (isInstance(source, 'ArrayBuffer') || ArrayBuffer.isView(source)) {
+                        return await toDrawableImage(new Blob([source]));
+                    }
+                    if (typeof source === 'string') return await loadImage(source);
+                    if (
+                        isInstance(source, 'HTMLCanvasElement')
+                        || isInstance(source, 'HTMLImageElement')
+                        || isInstance(source, 'SVGImageElement')
+                        || isInstance(source, 'ImageBitmap')
+                        || isInstance(source, 'ImageData')
+                        || isInstance(source, 'OffscreenCanvas')
+                    ) {
+                        if (isInstance(source, 'HTMLImageElement') && !source.complete) {
+                            await new Promise((resolve, reject) => {
+                                source.onload = () => resolve();
+                                source.onerror = () => reject(new Error('Rendered image did not finish loading.'));
+                            });
+                        }
+                        return source;
+                    }
+                    if (typeof source === 'object') {
+                        const nested = source.canvas
+                            || source.image
+                            || source.bitmap
+                            || source.blob
+                            || source.url
+                            || source.src
+                            || source.data;
+                        if (nested && nested !== source) return await toDrawableImage(nested);
+                    }
+                    throw new Error('Secure image renderer returned an unsupported result.');
+                }
+
+                function drawableSize(drawable) {
+                    return {
+                        width: drawable.naturalWidth || drawable.videoWidth || drawable.width || 0,
+                        height: drawable.naturalHeight || drawable.videoHeight || drawable.height || 0,
+                    };
+                }
+
+                async function drawRenderedImage(source, targetCanvas) {
+                    if (source == null || source === targetCanvas) return;
+                    const drawable = await toDrawableImage(source);
+                    if (drawable == null || drawable === targetCanvas) return;
+                    const context = targetCanvas.getContext('2d');
+                    if (!context) throw new Error('Could not create scrambled image canvas context.');
+
+                    if (isInstance(drawable, 'ImageData')) {
+                        if (!targetCanvas.width) targetCanvas.width = drawable.width;
+                        if (!targetCanvas.height) targetCanvas.height = drawable.height;
+                        context.putImageData(drawable, 0, 0);
+                        return;
+                    }
+
+                    const size = drawableSize(drawable);
+                    if ((!Number.isFinite(imageWidth) || imageWidth <= 0) && size.width > 0) {
+                        targetCanvas.width = size.width;
+                    }
+                    if ((!Number.isFinite(imageHeight) || imageHeight <= 0) && size.height > 0) {
+                        targetCanvas.height = size.height;
+                    }
+                    if (targetCanvas.width <= 0 || targetCanvas.height <= 0) {
+                        throw new Error('Secure image renderer returned a drawable without dimensions.');
+                    }
+                    context.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+                    context.drawImage(drawable, 0, 0, targetCanvas.width, targetCanvas.height);
+                    if (drawable && typeof drawable.close === 'function') drawable.close();
+                }
+
+                function shouldTryLegacyCanvasRenderer(error) {
+                    const message = String((error && (error.stack || error.message)) || error || '');
+                    return /canvas|HTMLCanvasElement|getContext|drawImage|putImageData/i.test(message);
+                }
+
                 const old = document.getElementById('__comix_scrambled_wrap');
                 if (old) old.remove();
                 const wrap = document.createElement('div');
@@ -146,7 +246,18 @@ async def render_scrambled_image_on_page(
                 if (Number.isFinite(imageHeight) && imageHeight > 0) canvas.height = imageHeight;
                 wrap.appendChild(canvas);
                 document.body.appendChild(wrap);
-                await renderer(imageUrl, canvas);
+                try {
+                    const controller = new AbortController();
+                    const rendered = await renderer(imageUrl, controller.signal);
+                    await drawRenderedImage(rendered, canvas);
+                } catch (error) {
+                    if (!shouldTryLegacyCanvasRenderer(error)) throw error;
+                    try {
+                        await renderer(imageUrl, canvas);
+                    } catch (_legacyError) {
+                        throw error;
+                    }
+                }
                 return {
                     ok: true,
                     selector: '#__comix_scrambled_canvas',
