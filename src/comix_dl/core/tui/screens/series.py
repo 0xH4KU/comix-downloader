@@ -9,7 +9,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Select, Static
 
-from comix_dl.core.tui.state import DownloadRequest, OutputFormat, SeriesNavigationState
+from comix_dl.core.tui.state import DownloadNavigationState, DownloadRequest, OutputFormat, SeriesNavigationState
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
@@ -31,6 +31,9 @@ class SeriesApp(Protocol):
 
     def set_status(self, message: str) -> None:
         """Set the shared shell status text."""
+
+    def set_current_download(self, state: DownloadNavigationState) -> None:
+        """Store the current download state for navigation."""
 
 
 class SeriesTitle(Static):
@@ -192,10 +195,12 @@ class SeriesPane(Widget):
             fmt=self.format_value,
             optimize=self.controller.settings.optimize_images,
         )
+        download_state = DownloadNavigationState.from_request(request)
+        self.shell.set_current_download(download_state)
         from comix_dl.core.tui.screens.download import DownloadPane
 
         host = self.app.query_one("#screen-host")
         self.shell.set_active_view("Download")
         self.shell.set_status(f"Downloading {len(selected)} chapter(s)")
         await host.remove_children()
-        await host.mount(DownloadPane(self.controller, request))
+        await host.mount(DownloadPane(self.controller, download_state))

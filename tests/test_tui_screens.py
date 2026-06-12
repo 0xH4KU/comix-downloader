@@ -20,7 +20,7 @@ from comix_dl.core.tui.app import ComixTuiApp, NavigationRail, StatusLog
 from comix_dl.core.tui.screens.download import DownloadStatus, DownloadTitle
 from comix_dl.core.tui.screens.manage import DownloadsPane, SettingsOutput
 from comix_dl.core.tui.screens.series import SeriesTitle
-from comix_dl.core.tui.state import SeriesNavigationState
+from comix_dl.core.tui.state import DownloadNavigationState, SeriesNavigationState
 from tests.flow_helpers import _make_summary
 
 if TYPE_CHECKING:
@@ -447,6 +447,57 @@ async def test_download_pane_runs_download_and_renders_summary(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_download_navigation_appears_after_starting_download(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    controller.search.return_value = [
+        SearchResult(title="Series A", url="https://comix.to/manga/series-a", slug="series-a", hash_id="a")
+    ]
+    controller.load_series.return_value = _series()
+    controller.download.return_value = _make_summary(completed=1)
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        await pilot.click("#search-input")
+        await pilot.press(*"series")
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.press("d")
+        await pilot.pause()
+
+        assert "Download" in app.query_one("#sidebar", NavigationRail).rendered_text
+        assert app.query_one("#status-log", StatusLog).renderable == "Download complete"
+
+
+@pytest.mark.asyncio
+async def test_download_sidebar_click_restores_completed_download_without_restart(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    controller.download.return_value = _make_summary(completed=1)
+    from comix_dl.core.tui.state import DownloadRequest
+
+    series = _series()
+    request = DownloadRequest(series_title=series.title, chapters=tuple(series.chapters[:1]), fmt="pdf", optimize=True)
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        app.set_current_download(DownloadNavigationState.from_request(request))
+        await app.action_show_download()
+        await pilot.pause()
+
+        assert controller.download.await_count == 1
+
+        await pilot.click("#nav-library")
+        await pilot.pause()
+        await pilot.click("#nav-download")
+        await pilot.pause()
+
+        assert controller.download.await_count == 1
+        assert "Complete" in str(app.query_one("#download-summary", Static).content)
+
+
+@pytest.mark.asyncio
 async def test_download_screen_shows_batch_summary(tmp_path: Path) -> None:
     controller = FakeController(tmp_path)
     controller.download.return_value = _make_summary(completed=1, total_bytes=2048, elapsed_seconds=2.0)
@@ -460,7 +511,8 @@ async def test_download_screen_shows_batch_summary(tmp_path: Path) -> None:
     async with app.run_test(size=(120, 36)) as pilot:
         host = app.query_one("#screen-host")
         await host.remove_children()
-        await host.mount(DownloadPane(controller, request))
+        download_state = DownloadNavigationState.from_request(request)
+        await host.mount(DownloadPane(controller, download_state))
         await pilot.pause()
 
         assert str(app.query_one("#download-title", DownloadTitle).renderable) == "Download"
@@ -484,7 +536,8 @@ async def test_download_cancel_requests_shutdown(tmp_path: Path) -> None:
     async with app.run_test(size=(100, 32)) as pilot:
         host = app.query_one("#screen-host")
         await host.remove_children()
-        await host.mount(DownloadPane(controller, request))
+        download_state = DownloadNavigationState.from_request(request)
+        await host.mount(DownloadPane(controller, download_state))
         await pilot.pause()
         await pilot.press("c")
         assert controller.request_shutdown_called is True
@@ -507,7 +560,8 @@ async def test_download_cleanup_button_applies_plan_and_renders_result(tmp_path:
     async with app.run_test(size=(100, 32)) as pilot:
         host = app.query_one("#screen-host")
         await host.remove_children()
-        await host.mount(DownloadPane(controller, request))
+        download_state = DownloadNavigationState.from_request(request)
+        await host.mount(DownloadPane(controller, download_state))
         await pilot.pause()
 
         assert app.query_one("#cleanup-button", Button).disabled is False

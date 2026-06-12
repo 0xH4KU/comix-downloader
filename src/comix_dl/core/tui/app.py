@@ -215,6 +215,11 @@ class ComixTuiApp(App[int]):
         self.refresh_navigation("Chapters")
         return self._series_state
 
+    def set_current_download(self, state: DownloadNavigationState) -> None:
+        """Store the current download state and reveal Download navigation."""
+        self._download_state = state
+        self.refresh_navigation("Download")
+
     def action_toggle_logs(self) -> None:
         self.query_one("#status-log", StatusLog).toggle()
 
@@ -225,6 +230,8 @@ class ComixTuiApp(App[int]):
             await self.action_show_search()
         elif destination == "Chapters":
             await self.action_show_chapters()
+        elif destination == "Download":
+            await self.action_show_download()
         elif destination == "Library":
             await self.action_show_downloads()
         elif destination == "History":
@@ -267,6 +274,15 @@ class ComixTuiApp(App[int]):
         self.set_active_view("Chapters")
         self.set_status(f"Series loaded: {self._series_state.series.title}")
         await self._replace_screen(SeriesPane(self.controller, self._series_state))
+
+    async def action_show_download(self) -> None:
+        from comix_dl.core.tui.screens.download import DownloadPane
+
+        if self._download_state is None:
+            self.set_status("Start a download before opening Download.")
+            return
+        self.set_active_view("Download")
+        await self._replace_screen(DownloadPane(self.controller, self._download_state))
 
     async def action_show_history(self) -> None:
         from comix_dl.core.tui.screens.manage import HistoryPane
