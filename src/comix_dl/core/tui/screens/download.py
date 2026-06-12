@@ -41,10 +41,16 @@ class DownloadController(Protocol):
 
 
 class DownloadApp(Protocol):
-    """App surface used by the back binding."""
+    """App shell surface used by the download pane."""
 
     async def action_show_search(self) -> None:
         """Return to the search pane."""
+
+    def set_active_view(self, active: str) -> None:
+        """Set the active shell navigation destination."""
+
+    def set_status(self, message: str) -> None:
+        """Set the shared shell status text."""
 
 
 class DownloadTitle(Static):
@@ -78,13 +84,18 @@ class DownloadPane(Widget):
         self.rows = DownloadRowsState.from_chapters(list(request.chapters))
         self._cleanup_plan: CleanupPlan | None = None
 
+    @property
+    def shell(self) -> DownloadApp:
+        return cast("DownloadApp", self.app)
+
     def compose(self) -> ComposeResult:
         with Vertical():
             yield DownloadTitle(
-                f"Downloading {self.request.series_title}",
+                "Download",
                 id="download-title",
                 classes="pane-title",
             )
+            yield Static(self._batch_summary("Preparing"), id="download-summary", classes="muted")
             yield DownloadStatus("Preparing download...", id="download-status", classes="muted")
             with Horizontal(id="download-actions"):
                 yield Button("Cancel", id="cancel-button", variant="warning")
@@ -98,6 +109,8 @@ class DownloadPane(Widget):
         table.add_columns("Chapter", "Status", "Progress", "Detail")
         self._refresh_table()
         table.focus()
+        self.shell.set_active_view("Download")
+        self.shell.set_status(f"Downloading {len(self.request.chapters)} chapter(s)")
         self.run_worker(
             self._run_download(),
             name="download",
@@ -115,22 +128,38 @@ class DownloadPane(Widget):
     def _set_status(self, message: str) -> None:
         self.query_one("#download-status", Static).update(message)
 
+    def _batch_summary(self, state: str) -> str:
+        chapter_count = len(self.request.chapters)
+        return f"{self.request.series_title} · {chapter_count} chapter(s) · {self.request.fmt.upper()} · {state}"
+
+    def _set_summary(self, state: str) -> None:
+        self.query_one("#download-summary", Static).update(self._batch_summary(state))
+
     def _handle_event(self, event: DownloadChapterEvent) -> None:
         self.rows.apply(event)
         self._refresh_table()
 
     async def _run_download(self) -> None:
+        self._set_summary("Running")
         self._set_status(f"Downloading {len(self.request.chapters)} chapter(s)...")
+        self.shell.set_status(f"Downloading {len(self.request.chapters)} chapter(s)")
         try:
             summary = await self.controller.download(self.request, on_event=self._handle_event)
         except Exception as exc:
+            self._set_summary("Failed")
             self._set_status(f"Download failed: {exc}")
+            self.shell.set_status("Download failed")
             self.query_one("#cancel-button", Button).disabled = True
             return
 
         self.query_one("#cancel-button", Button).disabled = True
+        self._set_summary("Complete")
+        self.shell.set_status("Download complete")
         summary_line = format_summary_line(summary)
-        status = f"Download complete: {summary_line}"
+        status = (
+            f"Download complete: {summary_line}. "
+            "Next: cleanup raw folders, return to Search, or inspect Library."
+        )
         try:
             self._cleanup_plan = self.controller.cleanup_plan(series_title=self.request.series_title)
         except Exception as exc:
@@ -162,11 +191,13 @@ class DownloadPane(Widget):
 
     def action_cancel(self) -> None:
         self.controller.request_shutdown()
+        self._set_summary("Cancelling")
         self._set_status("Cancellation requested. Waiting for active chapter work to stop...")
+        self.shell.set_status("Cancelling download")
         self.query_one("#cancel-button", Button).disabled = True
 
     async def action_back_to_search(self) -> None:
-        await cast("DownloadApp", self.app).action_show_search()
+        await self.shell.action_show_search()
 
     def action_cleanup(self) -> None:
         plan = self._cleanup_plan

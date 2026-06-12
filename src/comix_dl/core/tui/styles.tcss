@@ -8,12 +8,22 @@ Screen {
 }
 
 #sidebar {
-    width: 18;
-    min-width: 14;
-    padding: 1 2;
+    width: 20;
+    min-width: 18;
+    height: 1fr;
+    padding: 1 1;
     background: $panel;
     color: $text-muted;
     border-right: solid $primary;
+}
+
+#sidebar.Search,
+#sidebar.Chapters,
+#sidebar.Download,
+#sidebar.Library,
+#sidebar.History,
+#sidebar.Settings {
+    text-style: bold;
 }
 
 #screen-host {
@@ -32,6 +42,17 @@ Screen {
 
 #search-input,
 #chapter-filter {
+    margin-bottom: 1;
+}
+
+.helper-text,
+.empty-state {
+    margin-bottom: 1;
+}
+
+#selection-summary,
+#download-summary,
+#series-meta {
     margin-bottom: 1;
 }
 

@@ -26,6 +26,43 @@ class StatusBar(Static):
         return self.content
 
 
+class NavigationRail(Static):
+    """Sidebar navigation with active destination rendering."""
+
+    _ITEMS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("Search", "1 Search"),
+        ("Chapters", "2 Chapters"),
+        ("Download", "3 Download"),
+        ("Library", "Library"),
+        ("History", "History"),
+        ("Settings", "Settings"),
+    )
+
+    active: str = "Search"
+
+    def __init__(self, *, widget_id: str | None = None) -> None:
+        super().__init__("", id=widget_id)
+
+    @property
+    def rendered_text(self) -> str:
+        return str(self.content)
+
+    def on_mount(self) -> None:
+        self.set_active(self.active)
+
+    def set_active(self, active: str) -> None:
+        self.active = active
+        self.set_classes(" ".join(name for name, _label in self._ITEMS if name == active))
+        self.update(self._render_text())
+
+    def _render_text(self) -> str:
+        lines: list[str] = []
+        for name, label in self._ITEMS:
+            marker = ">" if name == self.active else " "
+            lines.append(f"{marker} {label}")
+        return "\n".join(lines)
+
+
 class TuiControllerLike(Protocol):
     """Controller surface required by the Textual shell and stub panes."""
 
@@ -70,7 +107,7 @@ class ComixTuiApp(App[int]):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="layout"):
-            yield Static("Search\nDownloads\nHistory\nSettings", id="sidebar")
+            yield NavigationRail(widget_id="sidebar")
             yield Container(id="screen-host")
         yield StatusBar("Opening session...", id="status")
         yield Footer()
@@ -86,7 +123,13 @@ class ComixTuiApp(App[int]):
         except Exception as exc:
             status.update(f"Session failed: {exc}")
             return
-        status.update("Ready")
+        status.update("Ready to search")
+
+    def set_active_view(self, active: str) -> None:
+        self.query_one("#sidebar", NavigationRail).set_active(active)
+
+    def set_status(self, message: str) -> None:
+        self.query_one("#status", StatusBar).update(message)
 
     async def on_unmount(self) -> None:
         await self.controller.close()
@@ -94,6 +137,8 @@ class ComixTuiApp(App[int]):
     async def action_show_search(self) -> None:
         from comix_dl.core.tui.screens.search import SearchScreen
 
+        self.set_active_view("Search")
+        self.set_status("Ready to search")
         host = self.query_one("#screen-host", Container)
         await host.remove_children()
         await host.mount(SearchScreen(self.controller))
@@ -101,6 +146,8 @@ class ComixTuiApp(App[int]):
     async def action_show_downloads(self) -> None:
         from comix_dl.core.tui.screens.manage import DownloadsPane
 
+        self.set_active_view("Library")
+        self.set_status("Viewing library")
         host = self.query_one("#screen-host", Container)
         await host.remove_children()
         await host.mount(DownloadsPane(self.controller))
@@ -108,6 +155,8 @@ class ComixTuiApp(App[int]):
     async def action_show_history(self) -> None:
         from comix_dl.core.tui.screens.manage import HistoryPane
 
+        self.set_active_view("History")
+        self.set_status("Viewing history")
         host = self.query_one("#screen-host", Container)
         await host.remove_children()
         await host.mount(HistoryPane(self.controller))
@@ -115,6 +164,8 @@ class ComixTuiApp(App[int]):
     async def action_show_settings(self) -> None:
         from comix_dl.core.tui.screens.manage import SettingsPane
 
+        self.set_active_view("Settings")
+        self.set_status("Viewing settings")
         host = self.query_one("#screen-host", Container)
         await host.remove_children()
         await host.mount(SettingsPane(self.controller))

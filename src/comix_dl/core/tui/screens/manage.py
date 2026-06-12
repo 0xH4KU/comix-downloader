@@ -57,13 +57,18 @@ class DownloadsPane(Widget):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static("Downloads", classes="pane-title")
+            yield Static("Library", classes="pane-title")
+            yield Static("", id="library-empty", classes="muted empty-state")
             yield DataTable(id="downloads-table")
 
     def on_mount(self) -> None:
         table = self.query_one("#downloads-table", DataTable)
         table.add_columns("Series", "Chapters", "Size", "Path")
         downloads = cast("Sequence[DownloadedSeriesLike]", self.controller.list_downloads())
+        if not downloads:
+            self.query_one("#library-empty", Static).update("No downloads yet. Completed manga will appear here.")
+            return
+        self.query_one("#library-empty", Static).update("")
         for series in downloads:
             table.add_row(
                 str(series.name),
@@ -83,12 +88,17 @@ class HistoryPane(Widget):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static("History", classes="pane-title")
+            yield Static("", id="history-empty", classes="muted empty-state")
             yield DataTable(id="history-table")
 
     def on_mount(self) -> None:
         table = self.query_one("#history-table", DataTable)
         table.add_columns("Date", "Series", "Chapters", "Format", "Status", "Size")
         entries = cast("Sequence[HistoryEntryLike]", self.controller.history_entries())
+        if not entries:
+            self.query_one("#history-empty", Static).update("No history yet. Finished downloads will be listed here.")
+            return
+        self.query_one("#history-empty", Static).update("")
         for entry in entries[:50]:
             table.add_row(
                 str(entry.timestamp),
@@ -111,7 +121,8 @@ class SettingsPane(Widget):
         settings = self.controller.load_settings()
         with Vertical():
             yield Static("Settings", classes="pane-title")
-            yield SettingsOutput(str(settings.output_dir), id="settings-output")
-            yield Static(f"Default format: {settings.default_format}")
-            yield Static(f"Concurrency profile: {settings.concurrency_profile}")
-            yield Static(f"Optimize images: {settings.optimize_images}")
+            yield SettingsOutput(f"Output folder: {settings.output_dir}", id="settings-output")
+            yield Static(f"Default format: {settings.default_format}", id="settings-format")
+            yield Static(f"Concurrency profile: {settings.concurrency_profile}", id="settings-concurrency")
+            yield Static(f"Optimize images: {settings.optimize_images}", id="settings-optimize")
+            yield Static("Changes apply to the next app session.", id="settings-note", classes="muted helper-text")

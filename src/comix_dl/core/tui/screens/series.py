@@ -24,6 +24,16 @@ class SeriesController(Protocol):
     settings: Settings
 
 
+class SeriesApp(Protocol):
+    """App shell surface used by the series pane."""
+
+    def set_active_view(self, active: str) -> None:
+        """Set the active shell navigation destination."""
+
+    def set_status(self, message: str) -> None:
+        """Set the shared shell status text."""
+
+
 class SeriesTitle(Static):
     """Static title with a stable renderable test surface."""
 
@@ -51,10 +61,20 @@ class SeriesPane(Widget):
         self.selection = ChapterSelectionState.from_chapters(series.chapters)
         self.format_value: OutputFormat = self._initial_format(self.controller.settings.default_format)
 
+    @property
+    def shell(self) -> SeriesApp:
+        return cast("SeriesApp", self.app)
+
     def compose(self) -> ComposeResult:
         with Vertical():
             yield SeriesTitle(self.series.title, id="series-title", classes="pane-title")
             yield Static(self._metadata_text(), id="series-meta", classes="muted")
+            yield Static(self._selection_summary_text(), id="selection-summary", classes="muted")
+            yield Static(
+                "Use +extra to keep matches or -extra to exclude them.",
+                id="filter-help",
+                classes="muted helper-text",
+            )
             with Horizontal(id="chapter-tools"):
                 yield Input(placeholder="+stage -extra", id="chapter-filter")
                 yield Select[OutputFormat](
@@ -73,11 +93,16 @@ class SeriesPane(Widget):
         table.add_columns("Sel", "#", "Title", "Lang", "Pages")
         self._refresh_table()
         table.focus()
+        self.shell.set_active_view("Chapters")
+        self.shell.set_status(f"Series loaded: {self.series.title}")
 
     def _metadata_text(self) -> str:
         authors = ", ".join(self.series.authors) if self.series.authors else "Unknown author"
         genres = ", ".join(self.series.genres[:5]) if self.series.genres else "No genres"
         return f"{authors} · {genres} · {len(self.series.chapters)} chapter(s)"
+
+    def _selection_summary_text(self) -> str:
+        return f"{self.selection.selected_count} selected from {len(self.selection.visible_chapters)} visible chapters."
 
     def _initial_format(self, raw_format: str) -> OutputFormat:
         if raw_format in {"pdf", "cbz", "both"}:
@@ -103,9 +128,13 @@ class SeriesPane(Widget):
         self._refresh_status()
 
     def _refresh_status(self) -> None:
-        message = self.selection.status or f"{len(self.selection.visible_chapters)} chapter(s) visible."
+        self.query_one("#selection-summary", Static).update(self._selection_summary_text())
+        message = (
+            self.selection.status
+            or "Space selects a row. A selects visible rows. X clears visible rows. D starts download."
+        )
         self.query_one("#series-status", Static).update(
-            f"{message} {self.selection.selected_count} selected. Format: {self.format_value.upper()}."
+            f"{message} Format: {self.format_value.upper()}."
         )
 
     @on(Input.Submitted, "#chapter-filter")
@@ -154,7 +183,10 @@ class SeriesPane(Widget):
     async def action_start_download(self) -> None:
         selected = self.selection.selected_chapters
         if not selected:
-            self.query_one("#series-status", Static).update("Select at least one chapter before downloading.")
+            self.query_one("#series-status", Static).update(
+                "Select at least one chapter with Space, then press D to download."
+            )
+            self.shell.set_status("Select chapters before downloading")
             return
 
         request = DownloadRequest(
@@ -166,5 +198,7 @@ class SeriesPane(Widget):
         from comix_dl.core.tui.screens.download import DownloadPane
 
         host = self.app.query_one("#screen-host")
+        self.shell.set_active_view("Download")
+        self.shell.set_status(f"Downloading {len(selected)} chapter(s)")
         await host.remove_children()
         await host.mount(DownloadPane(self.controller, request))

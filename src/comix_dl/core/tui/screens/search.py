@@ -25,6 +25,16 @@ class SearchController(Protocol):
         """Load a selected series."""
 
 
+class SearchApp(Protocol):
+    """App shell surface used by the search pane."""
+
+    def set_active_view(self, active: str) -> None:
+        """Set the active shell navigation destination."""
+
+    def set_status(self, message: str) -> None:
+        """Set the shared shell status text."""
+
+
 class SearchInput(Input):
     """Search input that can release focus for global app shortcuts."""
 
@@ -45,11 +55,20 @@ class SearchScreen(Widget):
         self.controller = cast("SearchController", controller)
         self.results: list[SearchResult] = []
 
+    @property
+    def shell(self) -> SearchApp:
+        return cast("SearchApp", self.app)
+
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static("Search manga", classes="pane-title")
-            yield SearchInput(placeholder="Type a manga name and press Enter", id="search-input")
-            yield Static("Ready.", id="search-status", classes="muted")
+            yield Static("Search", classes="pane-title")
+            yield Static(
+                "Type a manga name to begin. Results will appear below.",
+                id="search-help",
+                classes="muted helper-text",
+            )
+            yield SearchInput(placeholder="Manga title", id="search-input")
+            yield Static("Type a manga name, then press Enter to search.", id="search-status", classes="muted")
             table: DataTable[object] = DataTable(id="results")
             table.cursor_type = "row"
             yield table
@@ -63,27 +82,32 @@ class SearchScreen(Widget):
     async def _submit_search(self, event: Input.Submitted) -> None:
         query = event.value.strip()
         if not query:
-            self.query_one("#search-status", Static).update("Enter a search query.")
+            self.query_one("#search-status", Static).update("Type a manga name, then press Enter to search.")
+            self.shell.set_status("Ready to search")
             return
         self.run_worker(self._search(query), name="search", group="search", exclusive=True, exit_on_error=False)
 
     async def _search(self, query: str) -> None:
         status = self.query_one("#search-status", Static)
         table = self.query_one("#results", DataTable)
-        status.update(f"Searching '{query}'...")
+        status.update(f"Searching for '{query}'...")
+        self.shell.set_status(f"Searching for '{query}'")
         table.clear()
         self.results = []
         try:
             self.results = await self.controller.search(query)
         except Exception as exc:
             status.update(f"Search failed: {exc}")
+            self.shell.set_status("Search failed")
             return
         if not self.results:
-            status.update("No results found.")
+            status.update("No results found. Try a different title.")
+            self.shell.set_status("No results found")
             return
         for index, result in enumerate(self.results, 1):
             table.add_row(str(index), result.title, result.slug, key=str(index - 1))
-        status.update(f"{len(self.results)} result(s). Press Enter to open the selected row.")
+        status.update(f"{len(self.results)} results found. Select a row and press Enter to open it.")
+        self.shell.set_status(f"{len(self.results)} results found")
         table.focus()
 
     @on(DataTable.RowSelected, "#results")
@@ -116,5 +140,7 @@ class SearchScreen(Widget):
         host = self.app.query_one("#screen-host")
         if self not in host.children:
             return
+        self.shell.set_active_view("Chapters")
+        self.shell.set_status(f"Series loaded: {info.title}")
         await host.remove_children()
         await host.mount(SeriesPane(self.controller, info))
