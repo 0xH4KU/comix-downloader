@@ -456,6 +456,8 @@ class TestDownloadChapter:
             width=968,
             height=1378,
             scrambled=True,
+            reader_url="https://comix.to/title/lzdj-omori/123-chapter-9",
+            page_index=8,
         )
 
         result = await dl.download_chapter(
@@ -472,6 +474,8 @@ class TestDownloadChapter:
             width=968,
             height=1378,
             referer="https://comix.to/title/lzdj-omori",
+            reader_url="https://comix.to/title/lzdj-omori/123-chapter-9",
+            page_index=8,
         )
         assert (result.chapter_dir / "001.png").exists()
 

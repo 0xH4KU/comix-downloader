@@ -95,6 +95,8 @@ class ScrambledImageRenderer(Protocol):
         width: int | None,
         height: int | None,
         referer: str | None,
+        reader_url: str | None,
+        page_index: int | None,
     ) -> Awaitable[bytes]:
         ...
 
@@ -538,6 +540,8 @@ class CdpBrowser(BrowserSessionManager):
         width: int | None = None,
         height: int | None = None,
         referer: str | None = None,
+        reader_url: str | None = None,
+        page_index: int | None = None,
     ) -> bytes:
         """Render a scrambled image through the registered site renderer."""
         if self._scrambled_image_renderer is None:
@@ -557,6 +561,8 @@ class CdpBrowser(BrowserSessionManager):
                 width=width,
                 height=height,
                 referer=referer,
+                reader_url=reader_url,
+                page_index=page_index,
             )
         except Exception as exc:
             typed = _translate_browser_error(exc)

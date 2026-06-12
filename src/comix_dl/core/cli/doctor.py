@@ -31,6 +31,8 @@ class _ImageSampleBrowser(Protocol):
         width: int | None = None,
         height: int | None = None,
         referer: str | None = None,
+        reader_url: str | None = None,
+        page_index: int | None = None,
     ) -> bytes:
         ...
 
@@ -250,6 +252,8 @@ async def _fetch_image_samples(
                     width=page.width,
                     height=page.height,
                     referer=referer,
+                    reader_url=page.reader_url,
+                    page_index=page.page_index,
                 )
             else:
                 payload = await browser.get_bytes(page.url, referer=referer)

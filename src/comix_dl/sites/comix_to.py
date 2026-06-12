@@ -326,13 +326,11 @@ class ComixToAdapter:
     def _names_from_people(raw_items: object) -> list[str]:
         return names_from_people(raw_items)
 
-    @classmethod
-    def _extract_image_urls(cls, data: dict[str, object]) -> list[str] | None:
-        return extract_image_urls(data)
+    def _extract_image_urls(self, data: dict[str, object]) -> list[str] | None:
+        return extract_image_urls(data, base_url=self._api.base_url)
 
-    @staticmethod
-    def _extract_image_pages(data: dict[str, object]) -> list[ChapterPage] | None:
-        return extract_image_pages(data)
+    def _extract_image_pages(self, data: dict[str, object]) -> list[ChapterPage] | None:
+        return extract_image_pages(data, base_url=self._api.base_url)
 
 # Module-level singleton registered with the framework.
 adapter = ComixToAdapter()

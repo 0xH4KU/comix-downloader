@@ -102,19 +102,28 @@ def format_chapter_label(data: dict[str, object]) -> str:
     return label
 
 
-def extract_image_urls(data: dict[str, object]) -> list[str] | None:
+def extract_image_urls(
+    data: dict[str, object],
+    *,
+    base_url: str | None = None,
+) -> list[str] | None:
     """Extract page image URLs from v1 and legacy chapter payloads."""
-    pages = extract_image_pages(data)
+    pages = extract_image_pages(data, base_url=base_url)
     if pages is None:
         return None
     return [page.url for page in pages]
 
 
-def extract_image_pages(data: dict[str, object]) -> list[ChapterPage] | None:
+def extract_image_pages(
+    data: dict[str, object],
+    *,
+    base_url: str | None = None,
+) -> list[ChapterPage] | None:
     """Extract page image metadata from v1 and legacy chapter payloads."""
+    chapter_url = absolute_site_url(base_url or "", str(data.get("url", "") or "")) if base_url else ""
     pages = data.get("pages")
     if isinstance(pages, dict):
-        return _extract_v1_page_items(pages)
+        return _extract_v1_page_items(pages, chapter_url=chapter_url or None)
     if isinstance(pages, list):
         image_pages = []
         for item in pages:
@@ -138,13 +147,17 @@ def extract_image_pages(data: dict[str, object]) -> list[ChapterPage] | None:
     return image_pages
 
 
-def _extract_v1_page_items(pages: dict[str, object]) -> list[ChapterPage] | None:
+def _extract_v1_page_items(
+    pages: dict[str, object],
+    *,
+    chapter_url: str | None,
+) -> list[ChapterPage] | None:
     base_url = str(pages.get("baseUrl", "") or "")
     items = pages.get("items", [])
     if not isinstance(items, list):
         return None
     image_pages: list[ChapterPage] = []
-    for item in items:
+    for index, item in enumerate(items):
         if not isinstance(item, dict):
             continue
         raw_url = item.get("url")
@@ -158,6 +171,8 @@ def _extract_v1_page_items(pages: dict[str, object]) -> list[ChapterPage] | None
                 width=coerce_positive_int(item.get("width")),
                 height=coerce_positive_int(item.get("height")),
                 scrambled=scrambled,
+                reader_url=chapter_url if scrambled else None,
+                page_index=index if scrambled else None,
             ))
     return image_pages
 

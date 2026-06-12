@@ -53,8 +53,129 @@ async def render_scrambled_image(
     width: int | None = None,
     height: int | None = None,
     referer: str | None = None,
+    reader_url: str | None = None,
+    page_index: int | None = None,
 ) -> bytes:
-    """Render a comix.to scrambled image through the site's reader canvas."""
+    """Render a comix.to scrambled image through the reader DOM when possible."""
+    if not reader_url or page_index is None:
+        raise RuntimeError(f"Scrambled image {url} is missing reader context.")
+
+    try:
+        return await capture_reader_dom_image(
+            page,
+            engine=engine,
+            url=url,
+            reader_url=reader_url,
+            page_index=page_index,
+        )
+    except Exception:
+        return await render_scrambled_image_via_legacy_renderer(
+            engine,
+            page,
+            url,
+            width=width,
+            height=height,
+            referer=referer,
+        )
+
+
+async def capture_reader_dom_image(
+    page: Page,
+    *,
+    engine: CdpBrowser,
+    url: str,
+    reader_url: str,
+    page_index: int,
+) -> bytes:
+    """Capture the hydrated reader DOM element for one scrambled page."""
+    del page
+
+    async with engine._main_page_lock:
+        reader_page = await _navigate_reader_page(engine, reader_url)
+        result = await engine._evaluate_with_timeout(
+            reader_page,
+            """async ([pageIndex, timeoutMs]) => {
+                const deadline = Date.now() + timeoutMs;
+                const selector = `.rpage-page:nth-of-type(${pageIndex + 1}) .rpage-page__img`;
+
+                while (Date.now() < deadline) {
+                    if (document.body.classList.contains('rpage-body')) {
+                        const pages = Array.from(document.querySelectorAll('.rpage-page'));
+                        const target = pages[pageIndex];
+                        if (target) {
+                            target.scrollIntoView({ block: 'center' });
+                            const image = target.querySelector('.rpage-page__img');
+                            if (image instanceof HTMLImageElement) {
+                                if (image.complete && image.naturalWidth > 0 && image.naturalHeight > 0) {
+                                    return { ok: true, selector };
+                                }
+                            } else if (image instanceof HTMLCanvasElement) {
+                                if (image.width > 0 && image.height > 0) {
+                                    return { ok: true, selector };
+                                }
+                            } else if (image) {
+                                return { ok: true, selector };
+                            }
+                        }
+                    }
+                    await new Promise((resolve) => setTimeout(resolve, 100));
+                }
+
+                throw new Error(`Reader DOM target was not found for page index ${pageIndex}.`);
+            }""",
+            [page_index, engine._config.download.read_timeout_ms],
+            timeout_ms=engine._config.download.read_timeout_ms,
+            action=f"Selecting reader DOM target for {reader_url}",
+        )
+        if not isinstance(result, dict) or result.get("ok") is not True:
+            raise RuntimeError(
+                f"Reader DOM target selection returned an invalid result for {reader_url}.",
+            )
+
+        selector = str(result.get("selector", "") or "")
+        target = await reader_page.query_selector(selector)
+        if target is None:
+            raise RuntimeError(f"Reader DOM target was not found for {reader_url} page {page_index + 1}.")
+
+        return await engine._run_with_timeout(
+            target.screenshot(
+                type="png",
+                timeout=engine._config.download.read_timeout_ms,
+                style=None,
+            ),
+            timeout_ms=engine._config.download.read_timeout_ms,
+            action=f"Capturing reader DOM image for {url}",
+        )
+
+
+async def _navigate_reader_page(engine: CdpBrowser, reader_url: str) -> Page:
+    """Navigate the shared main page to the hydrated reader view."""
+    for attempt in range(2):
+        reader_page = await engine._ensure_page()
+        await engine._goto_with_timeout(reader_page, reader_url, action="Navigating reader page")
+        if await engine._is_cf_challenge(reader_page):
+            if attempt == 0:
+                await engine._refresh_cf_clearance(
+                    reason=f"Cloudflare challenge detected while loading reader page {reader_url}.",
+                )
+                continue
+            raise RuntimeError(
+                f"Cloudflare challenge persisted after clearance refresh for reader page {reader_url}.",
+            )
+        return reader_page
+    raise AssertionError("Reader page navigation retry loop exited unexpectedly")
+
+
+async def render_scrambled_image_via_legacy_renderer(
+    engine: CdpBrowser,
+    page: Page,
+    url: str,
+    *,
+    width: int | None = None,
+    height: int | None = None,
+    referer: str | None = None,
+) -> bytes:
+    """Render a comix.to scrambled image through the legacy imported renderer."""
     try:
         await render_scrambled_image_on_page(page, engine=engine, url=url, width=width, height=height, referer=referer)
         return await screenshot_scrambled_canvas(page, engine=engine, url=url)
@@ -301,8 +422,10 @@ def cache_busted_url(url: str) -> str:
 
 __all__ = [
     "cache_busted_url",
+    "capture_reader_dom_image",
     "probe_service_access",
     "render_scrambled_image",
     "render_scrambled_image_on_page",
+    "render_scrambled_image_via_legacy_renderer",
     "screenshot_scrambled_canvas",
 ]

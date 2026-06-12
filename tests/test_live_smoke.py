@@ -46,6 +46,8 @@ async def test_live_remote_contract_search_series_chapter_and_image() -> None:
                 width=first_page.width,
                 height=first_page.height,
                 referer=series.url,
+                reader_url=first_page.reader_url,
+                page_index=first_page.page_index,
             )
         else:
             payload = await session.browser.get_bytes(first_page.url, referer=series.url)
