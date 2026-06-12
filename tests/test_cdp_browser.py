@@ -952,6 +952,97 @@ class TestBrowserHelpers:
         )
         page.query_selector.assert_awaited_once_with(".rpage-page:nth-of-type(2) .rpage-page__img")
 
+    async def test_get_scrambled_image_bytes_reuses_hydrated_reader_dom_for_same_reader_url(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+        browser.register_scrambled_image_renderer(render_scrambled_image)
+        page = MagicMock()
+        page.is_closed.return_value = False
+        page.url = "about:blank"
+        browser.acquire_page = AsyncMock(return_value=page)
+        browser.release_page = MagicMock()
+        browser._ensure_page = AsyncMock(return_value=page)
+
+        async def goto(render_page: object, url: str, **_kwargs: object) -> None:
+            cast("MagicMock", render_page).url = url
+
+        browser._goto_with_timeout = AsyncMock(side_effect=goto)
+        browser._is_cf_challenge = AsyncMock(return_value=False)
+        first_target = MagicMock()
+        first_target.screenshot = AsyncMock(return_value=b"page-1")
+        second_target = MagicMock()
+        second_target.screenshot = AsyncMock(return_value=b"page-2")
+        page.query_selector = AsyncMock(side_effect=[first_target, second_target])
+        browser._evaluate_with_timeout = AsyncMock(
+            side_effect=[
+                {"ok": True, "selector": ".rpage-page:nth-of-type(4) .rpage-page__img"},
+                {"ok": True, "selector": ".rpage-page:nth-of-type(8) .rpage-page__img"},
+            ],
+        )
+        browser._run_with_timeout = AsyncMock(side_effect=_await_passthrough)
+
+        first = await browser.get_scrambled_image_bytes(
+            "https://cdn.example.com/page-004.webp",
+            reader_url="https://comix.to/title/example/123-chapter-2",
+            page_index=3,
+        )
+        second = await browser.get_scrambled_image_bytes(
+            "https://cdn.example.com/page-008.webp",
+            reader_url="https://comix.to/title/example/123-chapter-2",
+            page_index=7,
+        )
+
+        assert first == b"page-1"
+        assert second == b"page-2"
+        browser._goto_with_timeout.assert_awaited_once_with(
+            page,
+            "https://comix.to/title/example/123-chapter-2",
+            action="Navigating reader page",
+        )
+        assert browser._evaluate_with_timeout.await_count == 2
+        assert page.query_selector.await_count == 2
+
+    async def test_get_scrambled_image_bytes_renavigates_when_cached_reader_page_was_replaced(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+        browser.register_scrambled_image_renderer(render_scrambled_image)
+        page = MagicMock()
+        page.is_closed.return_value = False
+        page.url = "https://comix.to/title/example/123-chapter-2"
+        browser.acquire_page = AsyncMock(return_value=page)
+        browser.release_page = MagicMock()
+        browser._ensure_page = AsyncMock(return_value=page)
+
+        async def goto(render_page: object, url: str, **_kwargs: object) -> None:
+            cast("MagicMock", render_page).url = url
+
+        browser._goto_with_timeout = AsyncMock(side_effect=goto)
+        browser._is_cf_challenge = AsyncMock(return_value=False)
+        target = MagicMock()
+        target.screenshot = AsyncMock(return_value=b"page-1")
+        page.query_selector = AsyncMock(return_value=target)
+        browser._evaluate_with_timeout = AsyncMock(return_value={
+            "ok": True,
+            "selector": ".rpage-page:nth-of-type(4) .rpage-page__img",
+        })
+        browser._run_with_timeout = AsyncMock(side_effect=_await_passthrough)
+
+        page.url = "https://comix.to/"
+        result = await browser.get_scrambled_image_bytes(
+            "https://cdn.example.com/page-004.webp",
+            reader_url="https://comix.to/title/example/123-chapter-2",
+            page_index=3,
+        )
+
+        assert result == b"page-1"
+        browser._goto_with_timeout.assert_awaited_once_with(
+            page,
+            "https://comix.to/title/example/123-chapter-2",
+            action="Navigating reader page",
+        )
+
     async def test_get_scrambled_image_bytes_falls_back_to_legacy_renderer_when_dom_capture_fails(self):
         browser = CdpBrowser(config=AppConfig())
         browser._started = True

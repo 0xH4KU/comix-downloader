@@ -150,6 +150,10 @@ async def capture_reader_dom_image(
 
 async def _navigate_reader_page(engine: CdpBrowser, reader_url: str) -> Page:
     """Navigate the shared main page to the hydrated reader view."""
+    reader_page = await engine._ensure_page()
+    if await _reader_page_matches(engine, reader_page, reader_url):
+        return reader_page
+
     for attempt in range(2):
         reader_page = await engine._ensure_page()
         await engine._goto_with_timeout(reader_page, reader_url, action="Navigating reader page")
@@ -164,6 +168,15 @@ async def _navigate_reader_page(engine: CdpBrowser, reader_url: str) -> Page:
             )
         return reader_page
     raise AssertionError("Reader page navigation retry loop exited unexpectedly")
+
+
+async def _reader_page_matches(engine: CdpBrowser, page: Page, reader_url: str) -> bool:
+    """Return whether the shared page is already on the requested reader URL."""
+    if not engine._page_is_healthy(page):
+        return False
+    if getattr(page, "url", None) != reader_url:
+        return False
+    return not await engine._is_cf_challenge(page)
 
 
 async def render_scrambled_image_via_legacy_renderer(
