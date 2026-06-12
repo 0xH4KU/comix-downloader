@@ -9,7 +9,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Static
 
-from comix_dl.core.tui.state import DownloadRowsState, format_summary_line
+from comix_dl.core.tui.state import DownloadNavigationState, format_summary_line
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
@@ -77,11 +77,12 @@ class DownloadPane(Widget):
         ("b", "back_to_search", "Back"),
     ]
 
-    def __init__(self, controller: object, request: DownloadRequest) -> None:
+    def __init__(self, controller: object, state: DownloadNavigationState) -> None:
         super().__init__()
         self.controller = cast("DownloadController", controller)
-        self.request = request
-        self.rows = DownloadRowsState.from_chapters(list(request.chapters))
+        self.state = state
+        self.request = state.request
+        self.rows = state.rows
         self._cleanup_plan: CleanupPlan | None = None
 
     @property
@@ -96,7 +97,7 @@ class DownloadPane(Widget):
                 classes="pane-title",
             )
             yield Static(self._batch_summary("Preparing"), id="download-summary", classes="muted")
-            yield DownloadStatus("Preparing download...", id="download-status", classes="muted")
+            yield DownloadStatus(self.state.status_text, id="download-status", classes="muted")
             with Horizontal(id="download-actions"):
                 yield Button("Cancel", id="cancel-button", variant="warning")
                 yield Button("Cleanup", id="cleanup-button", disabled=True)
@@ -110,6 +111,14 @@ class DownloadPane(Widget):
         self._refresh_table()
         table.focus()
         self.shell.set_active_view("Download")
+        if self.state.phase != "ready":
+            self._set_summary(self.state.phase.capitalize())
+            self._set_status(self.state.status_text)
+            self.query_one("#cancel-button", Button).disabled = self.state.phase != "running"
+            self.query_one("#cleanup-button", Button).disabled = not self.state.cleanup_available
+            return
+
+        self.state.phase = "running"
         self.shell.set_status(f"Downloading {len(self.request.chapters)} chapter(s)")
         self.run_worker(
             self._run_download(),
@@ -125,8 +134,11 @@ class DownloadPane(Widget):
         for row in self.rows.rows.values():
             table.add_row(row.title, row.status, row.progress_text, row.detail, key=str(row.chapter_id))
 
-    def _set_status(self, message: str) -> None:
+    def _set_status(self, message: str, *, log: bool = True) -> None:
+        self.state.status_text = message
         self.query_one("#download-status", Static).update(message)
+        if log:
+            self.shell.set_status(message)
 
     def _batch_summary(self, state: str) -> str:
         chapter_count = len(self.request.chapters)
@@ -142,17 +154,17 @@ class DownloadPane(Widget):
     async def _run_download(self) -> None:
         self._set_summary("Running")
         self._set_status(f"Downloading {len(self.request.chapters)} chapter(s)...")
-        self.shell.set_status(f"Downloading {len(self.request.chapters)} chapter(s)")
         try:
             summary = await self.controller.download(self.request, on_event=self._handle_event)
         except Exception as exc:
+            self.state.phase = "failed"
             self._set_summary("Failed")
             self._set_status(f"Download failed: {exc}")
-            self.shell.set_status("Download failed")
             self.query_one("#cancel-button", Button).disabled = True
             return
 
         self.query_one("#cancel-button", Button).disabled = True
+        self.state.phase = "complete"
         self._set_summary("Complete")
         self.shell.set_status("Download complete")
         summary_line = format_summary_line(summary)
@@ -164,20 +176,24 @@ class DownloadPane(Widget):
             self._cleanup_plan = self.controller.cleanup_plan(series_title=self.request.series_title)
         except Exception as exc:
             self._cleanup_plan = None
+            self.state.cleanup_available = False
             self.query_one("#cleanup-button", Button).disabled = True
-            self._set_status(f"{status}. Cleanup check failed: {exc}")
+            self._set_status(f"{status}. Cleanup check failed: {exc}", log=False)
             return
 
         cleanup_button = self.query_one("#cleanup-button", Button)
         if self._cleanup_plan.candidates:
+            self.state.cleanup_available = True
             cleanup_button.disabled = False
             self._set_status(
-                f"{status}. Cleanup available for {len(self._cleanup_plan.candidates)} raw folder(s)."
+                f"{status}. Cleanup available for {len(self._cleanup_plan.candidates)} raw folder(s).",
+                log=False,
             )
             return
 
+        self.state.cleanup_available = False
         cleanup_button.disabled = True
-        self._set_status(status)
+        self._set_status(status, log=False)
 
     @on(Button.Pressed, "#cancel-button")
     def _button_cancel(self, event: Button.Pressed) -> None:
@@ -191,9 +207,9 @@ class DownloadPane(Widget):
 
     def action_cancel(self) -> None:
         self.controller.request_shutdown()
+        self.state.phase = "cancelling"
         self._set_summary("Cancelling")
         self._set_status("Cancellation requested. Waiting for active chapter work to stop...")
-        self.shell.set_status("Cancelling download")
         self.query_one("#cancel-button", Button).disabled = True
 
     async def action_back_to_search(self) -> None:
@@ -211,6 +227,7 @@ class DownloadPane(Widget):
 
         result = self.controller.apply_cleanup(plan)
         self.query_one("#cleanup-button", Button).disabled = True
+        self.state.cleanup_available = False
         if result.failed:
             self._set_status(
                 f"Cleanup removed {result.removed_count} raw folder(s); {len(result.failed)} failed."

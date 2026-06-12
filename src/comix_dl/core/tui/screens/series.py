@@ -9,12 +9,11 @@ from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from textual.widgets import Button, DataTable, Input, Select, Static
 
-from comix_dl.core.tui.state import ChapterSelectionState, DownloadRequest, OutputFormat
+from comix_dl.core.tui.state import DownloadNavigationState, DownloadRequest, OutputFormat, SeriesNavigationState
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
 
-    from comix_dl.core.models import SeriesInfo
     from comix_dl.core.settings import Settings
 
 
@@ -32,6 +31,9 @@ class SeriesApp(Protocol):
 
     def set_status(self, message: str) -> None:
         """Set the shared shell status text."""
+
+    def set_current_download(self, state: DownloadNavigationState) -> None:
+        """Store the current download state for navigation."""
 
 
 class SeriesTitle(Static):
@@ -54,12 +56,13 @@ class SeriesPane(Widget):
         ("d", "start_download", "Download"),
     ]
 
-    def __init__(self, controller: object, series: SeriesInfo) -> None:
+    def __init__(self, controller: object, state: SeriesNavigationState) -> None:
         super().__init__()
         self.controller = cast("SeriesController", controller)
-        self.series = series
-        self.selection = ChapterSelectionState.from_chapters(series.chapters)
-        self.format_value: OutputFormat = self._initial_format(self.controller.settings.default_format)
+        self.state = state
+        self.series = state.series
+        self.selection = state.selection
+        self.format_value = state.format_value
 
     @property
     def shell(self) -> SeriesApp:
@@ -104,11 +107,6 @@ class SeriesPane(Widget):
     def _selection_summary_text(self) -> str:
         return f"{self.selection.selected_count} selected from {len(self.selection.visible_chapters)} visible chapters."
 
-    def _initial_format(self, raw_format: str) -> OutputFormat:
-        if raw_format in {"pdf", "cbz", "both"}:
-            return cast("OutputFormat", raw_format)
-        return "pdf"
-
     def _refresh_table(self) -> None:
         table = self.query_one("#chapters", DataTable)
         cursor_row = max(table.cursor_row, 0)
@@ -147,6 +145,7 @@ class SeriesPane(Widget):
     def _format_changed(self, event: Select.Changed) -> None:
         if event.value in {"pdf", "cbz", "both"}:
             self.format_value = cast("OutputFormat", event.value)
+            self.state.format_value = self.format_value
             self._refresh_status()
 
     @on(Button.Pressed, "#download-button")
@@ -177,16 +176,16 @@ class SeriesPane(Widget):
         formats: list[OutputFormat] = ["pdf", "cbz", "both"]
         current_index = formats.index(self.format_value)
         self.format_value = formats[(current_index + 1) % len(formats)]
+        self.state.format_value = self.format_value
         self.query_one("#format-select", Select).value = self.format_value
         self._refresh_status()
 
     async def action_start_download(self) -> None:
         selected = self.selection.selected_chapters
         if not selected:
-            self.query_one("#series-status", Static).update(
-                "Select at least one chapter with Space, then press D to download."
-            )
-            self.shell.set_status("Select chapters before downloading")
+            message = "Select at least one chapter before downloading."
+            self.query_one("#series-status", Static).update(message)
+            self.shell.set_status(message)
             return
 
         request = DownloadRequest(
@@ -195,10 +194,12 @@ class SeriesPane(Widget):
             fmt=self.format_value,
             optimize=self.controller.settings.optimize_images,
         )
+        download_state = DownloadNavigationState.from_request(request)
+        self.shell.set_current_download(download_state)
         from comix_dl.core.tui.screens.download import DownloadPane
 
         host = self.app.query_one("#screen-host")
         self.shell.set_active_view("Download")
         self.shell.set_status(f"Downloading {len(selected)} chapter(s)")
         await host.remove_children()
-        await host.mount(DownloadPane(self.controller, request))
+        await host.mount(DownloadPane(self.controller, download_state))

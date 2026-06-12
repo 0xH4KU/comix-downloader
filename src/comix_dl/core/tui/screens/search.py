@@ -34,6 +34,9 @@ class SearchApp(Protocol):
     def set_status(self, message: str) -> None:
         """Set the shared shell status text."""
 
+    def set_loaded_series(self, series: SeriesInfo) -> object:
+        """Store the current loaded series for navigation."""
+
 
 class SearchInput(Input):
     """Search input that can release focus for global app shortcuts."""
@@ -68,7 +71,6 @@ class SearchScreen(Widget):
                 classes="muted helper-text",
             )
             yield SearchInput(placeholder="Manga title", id="search-input")
-            yield Static("Type a manga name, then press Enter to search.", id="search-status", classes="muted")
             table: DataTable[object] = DataTable(id="results")
             table.cursor_type = "row"
             yield table
@@ -82,31 +84,25 @@ class SearchScreen(Widget):
     async def _submit_search(self, event: Input.Submitted) -> None:
         query = event.value.strip()
         if not query:
-            self.query_one("#search-status", Static).update("Type a manga name, then press Enter to search.")
-            self.shell.set_status("Ready to search")
+            self.shell.set_status("Type a manga name, then press Enter to search.")
             return
         self.run_worker(self._search(query), name="search", group="search", exclusive=True, exit_on_error=False)
 
     async def _search(self, query: str) -> None:
-        status = self.query_one("#search-status", Static)
         table = self.query_one("#results", DataTable)
-        status.update(f"Searching for '{query}'...")
         self.shell.set_status(f"Searching for '{query}'")
         table.clear()
         self.results = []
         try:
             self.results = await self.controller.search(query)
         except Exception as exc:
-            status.update(f"Search failed: {exc}")
-            self.shell.set_status("Search failed")
+            self.shell.set_status(f"Search failed: {exc}")
             return
         if not self.results:
-            status.update("No results found. Try a different title.")
-            self.shell.set_status("No results found")
+            self.shell.set_status("No results found. Try a different title.")
             return
         for index, result in enumerate(self.results, 1):
             table.add_row(str(index), result.title, result.slug, key=str(index - 1))
-        status.update(f"{len(self.results)} results found. Select a row and press Enter to open it.")
         self.shell.set_status(f"{len(self.results)} results found")
         table.focus()
 
@@ -116,7 +112,7 @@ class SearchScreen(Widget):
             index = int(str(event.row_key.value))
             result = self.results[index]
         except (ValueError, IndexError):
-            self.query_one("#search-status", Static).update("Invalid result selection.")
+            self.shell.set_status("Invalid result selection.")
             return
         self.app.run_worker(
             self._load_series(result),
@@ -127,12 +123,11 @@ class SearchScreen(Widget):
         )
 
     async def _load_series(self, result: SearchResult) -> None:
-        status = self.query_one("#search-status", Static)
-        status.update(f"Loading {result.title}...")
+        self.shell.set_status(f"Loading {result.title}")
         try:
             info = await self.controller.load_series(result.hash_id)
         except Exception as exc:
-            status.update(f"Could not load series: {exc}")
+            self.shell.set_status(f"Could not load series: {exc}")
             return
 
         from comix_dl.core.tui.screens.series import SeriesPane
@@ -140,7 +135,8 @@ class SearchScreen(Widget):
         host = self.app.query_one("#screen-host")
         if self not in host.children:
             return
+        series_state = self.shell.set_loaded_series(info)
         self.shell.set_active_view("Chapters")
         self.shell.set_status(f"Series loaded: {info.title}")
         await host.remove_children()
-        await host.mount(SeriesPane(self.controller, info))
+        await host.mount(SeriesPane(self.controller, series_state))
