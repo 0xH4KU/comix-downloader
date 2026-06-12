@@ -43,6 +43,14 @@ For focused work, prefer the smallest relevant test file first, then run the ful
 5. Update docs when architecture, CLI behavior, settings, or adapter contracts change.
 6. Run the full local quality gate before opening a PR.
 
+## CLI And TUI Boundaries
+
+- CLI owns prompt/Rich output and scriptable commands.
+- TUI owns Textual screens and presentation state in `core/tui`.
+- Application layer owns search, load, download, cleanup, and session use cases.
+- TUI must not call prompt-based CLI flows: `core.cli.flows`, `flow_prompts`, `interactive`, or `download_progress`.
+- TUI tests should use fake controllers and Textual `run_test()` without opening Chrome.
+
 ## Common Tasks
 
 Add a comix.to API parsing rule:

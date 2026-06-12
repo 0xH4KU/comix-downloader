@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "comix-downloader"
-version = "0.4.3"
+version = "0.4.4"
 description = "A focused comix.to manga downloader with Cloudflare bypass"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -35,6 +35,7 @@ dependencies = [
     "Pillow>=10.0",
     "pypdf>=4.0",
     "rich>=13.0",
+    "textual>=8.2,<9",
 ]
 
 [project.urls]
@@ -59,6 +60,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "comix_dl.sites.assets" = ["*.js"]
+"comix_dl.core.tui" = ["*.tcss"]
 
 [tool.ruff]
 target-version = "py311"

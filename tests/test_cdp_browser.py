@@ -23,7 +23,11 @@ from comix_dl.core.errors import (
     ConfigurationError,
     Http403Error,
 )
-from comix_dl.sites.comix_to_browser import probe_service_access, render_scrambled_image
+from comix_dl.sites.comix_to_browser import (
+    probe_service_access,
+    render_scrambled_image,
+    render_scrambled_image_via_legacy_renderer,
+)
 
 
 def _make_config(
@@ -56,6 +60,10 @@ LOCALHOST_SKIP = pytest.mark.skipif(
 async def _hang(*_args: object, **_kwargs: object) -> object:
     await asyncio.Event().wait()
     raise AssertionError("unreachable")
+
+
+async def _await_passthrough(awaitable: object, **_kwargs: object) -> object:
+    return await cast("object", awaitable)
 
 
 @LOCALHOST_SKIP
@@ -735,6 +743,8 @@ class TestBrowserHelpers:
             width: int | None,
             height: int | None,
             referer: str | None,
+            reader_url: str | None,
+            page_index: int | None,
         ) -> bytes:
             assert engine is browser
             assert render_page is page
@@ -742,6 +752,8 @@ class TestBrowserHelpers:
             assert width == 800
             assert height == 1200
             assert referer == "https://comix.to/title/lzdj-omori"
+            assert reader_url == "https://comix.to/title/lzdj-omori/123-chapter-9"
+            assert page_index == 8
             return b"rendered"
 
         browser.register_scrambled_image_renderer(render)
@@ -751,6 +763,8 @@ class TestBrowserHelpers:
             width=800,
             height=1200,
             referer="https://comix.to/title/lzdj-omori",
+            reader_url="https://comix.to/title/lzdj-omori/123-chapter-9",
+            page_index=8,
         )
 
         assert result == b"rendered"
@@ -764,11 +778,10 @@ class TestBrowserHelpers:
         with pytest.raises(NotImplementedError, match="No scrambled image renderer"):
             await browser.get_scrambled_image_bytes("https://cdn.example.com/scrambled.webp")
 
-    async def test_get_scrambled_image_bytes_renders_canvas_and_screenshots_element(self):
+    async def test_get_scrambled_image_bytes_legacy_renderer_renders_canvas_and_screenshots_element(self):
         browser = CdpBrowser(config=AppConfig())
         browser._started = True
         browser.ensure_cf_clearance = AsyncMock()
-        browser.register_scrambled_image_renderer(render_scrambled_image)
         page = MagicMock()
         page.is_closed.return_value = False
         element = MagicMock()
@@ -777,6 +790,30 @@ class TestBrowserHelpers:
         browser.acquire_page = AsyncMock(return_value=page)
         browser.release_page = MagicMock()
         browser._evaluate_with_timeout = AsyncMock(return_value={"ok": True, "selector": "#__comix_scrambled_canvas"})
+
+        async def legacy_render(
+            engine: CdpBrowser,
+            render_page: object,
+            url: str,
+            *,
+            width: int | None,
+            height: int | None,
+            referer: str | None,
+            reader_url: str | None,
+            page_index: int | None,
+        ) -> bytes:
+            assert reader_url is None
+            assert page_index is None
+            return await render_scrambled_image_via_legacy_renderer(
+                engine,
+                cast("MagicMock", render_page),
+                url,
+                width=width,
+                height=height,
+                referer=referer,
+            )
+
+        browser.register_scrambled_image_renderer(legacy_render)
 
         result = await browser.get_scrambled_image_bytes(
             "https://static.comix.to/c0db/si/b/page-009.webp",
@@ -805,12 +842,15 @@ class TestBrowserHelpers:
         assert "window.__comixRenderScrambledImage" in expression
         assert "secure-" in expression
         assert "document.body.appendChild" in expression
+        assert "const rendered = await renderer(imageUrl, controller.signal)" in expression
+        assert "await drawRenderedImage(rendered, canvas)" in expression
+        assert "shouldTryLegacyCanvasRenderer" in expression
+        assert "drawRenderedImage" in expression
 
-    async def test_get_scrambled_image_bytes_retries_with_cache_bust_after_render_failure(self):
+    async def test_get_scrambled_image_bytes_legacy_renderer_retries_with_cache_bust_after_render_failure(self):
         browser = CdpBrowser(config=AppConfig())
         browser._started = True
         browser.ensure_cf_clearance = AsyncMock()
-        browser.register_scrambled_image_renderer(render_scrambled_image)
         page = MagicMock()
         page.is_closed.return_value = False
         element = MagicMock()
@@ -825,6 +865,30 @@ class TestBrowserHelpers:
             ],
         )
 
+        async def legacy_render(
+            engine: CdpBrowser,
+            render_page: object,
+            url: str,
+            *,
+            width: int | None,
+            height: int | None,
+            referer: str | None,
+            reader_url: str | None,
+            page_index: int | None,
+        ) -> bytes:
+            assert reader_url is None
+            assert page_index is None
+            return await render_scrambled_image_via_legacy_renderer(
+                engine,
+                cast("MagicMock", render_page),
+                url,
+                width=width,
+                height=height,
+                referer=referer,
+            )
+
+        browser.register_scrambled_image_renderer(legacy_render)
+
         result = await browser.get_scrambled_image_bytes("https://cdn.example.com/img.webp")
 
         assert result == b"retry-png"
@@ -834,6 +898,185 @@ class TestBrowserHelpers:
         assert first_arg[0] == "https://cdn.example.com/img.webp"
         assert second_arg[0] == "https://cdn.example.com/img.webp?r=1"
         browser.release_page.assert_called_once_with(page)
+
+    async def test_get_scrambled_image_bytes_requires_reader_context_for_dom_first_capture(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+        browser.register_scrambled_image_renderer(render_scrambled_image)
+        page = MagicMock()
+        page.is_closed.return_value = False
+        browser.acquire_page = AsyncMock(return_value=page)
+        browser.release_page = MagicMock()
+
+        with pytest.raises(RuntimeError, match="missing reader context"):
+            await browser.get_scrambled_image_bytes("https://cdn.example.com/img.webp")
+
+    async def test_get_scrambled_image_bytes_uses_reader_dom_before_legacy_fallback(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+        browser.register_scrambled_image_renderer(render_scrambled_image)
+        page = MagicMock()
+        page.is_closed.return_value = False
+        browser.acquire_page = AsyncMock(return_value=page)
+        browser.release_page = MagicMock()
+        browser.fetch_page = AsyncMock(return_value="<html></html>")
+        browser._ensure_page = AsyncMock(return_value=page)
+        browser._goto_with_timeout = AsyncMock()
+        browser._is_cf_challenge = AsyncMock(return_value=False)
+        target = MagicMock()
+        target.screenshot = AsyncMock(return_value=b"reader-dom-png")
+        page.query_selector = AsyncMock(return_value=target)
+        browser._evaluate_with_timeout = AsyncMock(return_value={
+            "ok": True,
+            "selector": ".rpage-page:nth-of-type(2) .rpage-page__img",
+        })
+        browser._run_with_timeout = AsyncMock(side_effect=_await_passthrough)
+
+        result = await browser.get_scrambled_image_bytes(
+            "https://cdn.example.com/img.webp",
+            width=968,
+            height=1378,
+            reader_url="https://comix.to/title/example/123-chapter-2",
+            page_index=1,
+        )
+
+        assert result == b"reader-dom-png"
+        browser.fetch_page.assert_not_awaited()
+        browser._ensure_page.assert_awaited()
+        browser._goto_with_timeout.assert_awaited_once_with(
+            page,
+            "https://comix.to/title/example/123-chapter-2",
+            action="Navigating reader page",
+        )
+        page.query_selector.assert_awaited_once_with(".rpage-page:nth-of-type(2) .rpage-page__img")
+
+    async def test_get_scrambled_image_bytes_reuses_hydrated_reader_dom_for_same_reader_url(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+        browser.register_scrambled_image_renderer(render_scrambled_image)
+        page = MagicMock()
+        page.is_closed.return_value = False
+        page.url = "about:blank"
+        browser.acquire_page = AsyncMock(return_value=page)
+        browser.release_page = MagicMock()
+        browser._ensure_page = AsyncMock(return_value=page)
+
+        async def goto(render_page: object, url: str, **_kwargs: object) -> None:
+            cast("MagicMock", render_page).url = url
+
+        browser._goto_with_timeout = AsyncMock(side_effect=goto)
+        browser._is_cf_challenge = AsyncMock(return_value=False)
+        first_target = MagicMock()
+        first_target.screenshot = AsyncMock(return_value=b"page-1")
+        second_target = MagicMock()
+        second_target.screenshot = AsyncMock(return_value=b"page-2")
+        page.query_selector = AsyncMock(side_effect=[first_target, second_target])
+        browser._evaluate_with_timeout = AsyncMock(
+            side_effect=[
+                {"ok": True, "selector": ".rpage-page:nth-of-type(4) .rpage-page__img"},
+                {"ok": True, "selector": ".rpage-page:nth-of-type(8) .rpage-page__img"},
+            ],
+        )
+        browser._run_with_timeout = AsyncMock(side_effect=_await_passthrough)
+
+        first = await browser.get_scrambled_image_bytes(
+            "https://cdn.example.com/page-004.webp",
+            reader_url="https://comix.to/title/example/123-chapter-2",
+            page_index=3,
+        )
+        second = await browser.get_scrambled_image_bytes(
+            "https://cdn.example.com/page-008.webp",
+            reader_url="https://comix.to/title/example/123-chapter-2",
+            page_index=7,
+        )
+
+        assert first == b"page-1"
+        assert second == b"page-2"
+        browser._goto_with_timeout.assert_awaited_once_with(
+            page,
+            "https://comix.to/title/example/123-chapter-2",
+            action="Navigating reader page",
+        )
+        assert browser._evaluate_with_timeout.await_count == 2
+        assert page.query_selector.await_count == 2
+
+    async def test_get_scrambled_image_bytes_renavigates_when_cached_reader_page_was_replaced(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+        browser.register_scrambled_image_renderer(render_scrambled_image)
+        page = MagicMock()
+        page.is_closed.return_value = False
+        page.url = "https://comix.to/title/example/123-chapter-2"
+        browser.acquire_page = AsyncMock(return_value=page)
+        browser.release_page = MagicMock()
+        browser._ensure_page = AsyncMock(return_value=page)
+
+        async def goto(render_page: object, url: str, **_kwargs: object) -> None:
+            cast("MagicMock", render_page).url = url
+
+        browser._goto_with_timeout = AsyncMock(side_effect=goto)
+        browser._is_cf_challenge = AsyncMock(return_value=False)
+        target = MagicMock()
+        target.screenshot = AsyncMock(return_value=b"page-1")
+        page.query_selector = AsyncMock(return_value=target)
+        browser._evaluate_with_timeout = AsyncMock(return_value={
+            "ok": True,
+            "selector": ".rpage-page:nth-of-type(4) .rpage-page__img",
+        })
+        browser._run_with_timeout = AsyncMock(side_effect=_await_passthrough)
+
+        page.url = "https://comix.to/"
+        result = await browser.get_scrambled_image_bytes(
+            "https://cdn.example.com/page-004.webp",
+            reader_url="https://comix.to/title/example/123-chapter-2",
+            page_index=3,
+        )
+
+        assert result == b"page-1"
+        browser._goto_with_timeout.assert_awaited_once_with(
+            page,
+            "https://comix.to/title/example/123-chapter-2",
+            action="Navigating reader page",
+        )
+
+    async def test_get_scrambled_image_bytes_falls_back_to_legacy_renderer_when_dom_capture_fails(self):
+        browser = CdpBrowser(config=AppConfig())
+        browser._started = True
+        browser.ensure_cf_clearance = AsyncMock()
+        browser.register_scrambled_image_renderer(render_scrambled_image)
+        page = MagicMock()
+        page.is_closed.return_value = False
+        element = MagicMock()
+        element.screenshot = AsyncMock(return_value=b"legacy-png")
+        page.query_selector = AsyncMock(return_value=element)
+        browser.acquire_page = AsyncMock(return_value=page)
+        browser.release_page = MagicMock()
+        browser.fetch_page = AsyncMock(return_value="<html></html>")
+        browser._ensure_page = AsyncMock(return_value=page)
+        browser._goto_with_timeout = AsyncMock()
+        browser._is_cf_challenge = AsyncMock(return_value=False)
+        browser._run_with_timeout = AsyncMock(side_effect=_await_passthrough)
+        browser._evaluate_with_timeout = AsyncMock(
+            side_effect=[
+                RuntimeError("Reader DOM target was not found."),
+                {"ok": True, "selector": "#__comix_scrambled_canvas"},
+            ],
+        )
+
+        result = await browser.get_scrambled_image_bytes(
+            "https://cdn.example.com/img.webp",
+            width=968,
+            height=1378,
+            reader_url="https://comix.to/title/example/123-chapter-2",
+            page_index=1,
+        )
+
+        assert result == b"legacy-png"
+        browser.fetch_page.assert_not_awaited()
 
     def test_get_bytes_direct_sync_sends_browser_like_headers_and_timeout(self):
         config = _make_config(download=DownloadConfig(read_timeout_ms=1234))

@@ -2,7 +2,7 @@
 
 ## Scope
 
-This document is for maintainers or local automation that still assumes the old monolithic CLI/runtime design. It summarizes the behavioral and structural shifts introduced across the refactor slices up to `v0.3.46`.
+This document is for maintainers or local automation that still assumes the old monolithic CLI/runtime design. It summarizes the behavioral and structural shifts introduced across the refactor and TUI slices up to `v0.4.4`.
 
 ## Runtime Behavior Changes
 
@@ -13,6 +13,8 @@ This document is for maintainers or local automation that still assumes the old 
 - Resume logic now trusts only validated image files and `chapter.state.json`; corrupt or stale artifacts are removed and re-downloaded.
 - Browser startup uses a single-instance lock file per config directory instead of trying to kill a global Chrome PID.
 - Cloudflare expiry and HTTP 403 now trigger one explicit clearance refresh path instead of silently reusing stale browser state.
+- Scrambled comix.to pages are captured from the hydrated reader DOM first. The old private renderer import path remains only as a fallback, reducing breakage when comix.to changes private renderer function signatures.
+- The optional `comix-dl tui` entry point launches a Textual full-screen interface. Existing scriptable CLI commands remain supported.
 
 ## Architecture Changes
 
@@ -22,6 +24,7 @@ This document is for maintainers or local automation that still assumes the old 
 - comix.to logic is split across focused modules under `src/comix_dl/sites/`; `comix_to.py` is now a facade rather than a monolithic service/client.
 - Settings, history, and JSON-like state files now go through dedicated repositories or atomic-write helpers instead of open-coded file writes.
 - Shared download summary wording is centralized in `application/download_reporting.py` so CLI, history, and notifications do not drift.
+- `core/tui/` is a separate presentation layer for Textual screens, state reducers, clickable navigation, and live download progress. It calls the same application/session use cases as the CLI and must not call prompt-based CLI flows.
 
 ## Maintainer Action Items
 
@@ -29,6 +32,7 @@ This document is for maintainers or local automation that still assumes the old 
 - If tooling assumed a partially downloaded chapter could still yield PDF/CBZ output, update that assumption: only `complete` chapters convert.
 - If wrappers parsed ad hoc CLI summary strings, prefer the normalized history/reporting output instead.
 - If release automation still uses a `45%` coverage gate, update it to `70%`.
+- If automation imports only CLI modules, no change is required for TUI support. If it packages runtime dependencies manually, include `textual>=8.2,<9`.
 
 ## Reading Order
 

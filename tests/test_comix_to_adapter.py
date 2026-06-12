@@ -449,15 +449,19 @@ class TestSearch:
 
 class TestGetChapterImages:
     def test_extract_image_pages_helper_preserves_scrambled_metadata(self) -> None:
-        pages = extract_image_pages({
-            "pages": {
-                "baseUrl": "https://static.comix.to/c0db/i/b/d4/",
-                "items": [
-                    {"url": "plain.webp", "width": 800, "height": 1200},
-                    {"url": "scrambled.webp", "width": 968, "height": 1378, "s": 1},
-                ],
+        pages = extract_image_pages(
+            {
+                "url": "/title/rknv-neon-genesis-evangelion/4664251-chapter-97",
+                "pages": {
+                    "baseUrl": "https://static.comix.to/c0db/i/b/d4/",
+                    "items": [
+                        {"url": "plain.webp", "width": 800, "height": 1200},
+                        {"url": "scrambled.webp", "width": 968, "height": 1378, "s": 1},
+                    ],
+                },
             },
-        })
+            base_url="https://comix.to",
+        )
 
         assert pages == [
             ChapterPage(
@@ -465,12 +469,38 @@ class TestGetChapterImages:
                 width=800,
                 height=1200,
                 scrambled=False,
+                reader_url=None,
+                page_index=None,
             ),
             ChapterPage(
                 url="https://static.comix.to/c0db/si/b/d4/scrambled.webp",
                 width=968,
                 height=1378,
                 scrambled=True,
+                reader_url="https://comix.to/title/rknv-neon-genesis-evangelion/4664251-chapter-97",
+                page_index=1,
+            ),
+        ]
+
+    def test_adapter_extract_image_pages_helper_uses_adapter_base_url(self) -> None:
+        pages = _adapter()._extract_image_pages({
+            "url": "/title/rknv-neon-genesis-evangelion/4664251-chapter-97",
+            "pages": {
+                "baseUrl": "https://static.comix.to/c0db/i/b/d4/",
+                "items": [
+                    {"url": "scrambled.webp", "width": 968, "height": 1378, "s": 1},
+                ],
+            },
+        })
+
+        assert pages == [
+            ChapterPage(
+                url="https://static.comix.to/c0db/si/b/d4/scrambled.webp",
+                width=968,
+                height=1378,
+                scrambled=True,
+                reader_url="https://comix.to/title/rknv-neon-genesis-evangelion/4664251-chapter-97",
+                page_index=0,
             ),
         ]
 
@@ -500,6 +530,7 @@ class TestGetChapterImages:
             "result": {
                 "number": 14,
                 "name": "SWALLOW HOLLOW",
+                "url": "/title/rknv-neon-genesis-evangelion/4664251-chapter-97",
                 "pages": {
                     "baseUrl": "https://static.comix.to/c0db/i/b/d4/",
                     "items": [
@@ -523,12 +554,16 @@ class TestGetChapterImages:
                 width=800,
                 height=1200,
                 scrambled=False,
+                reader_url=None,
+                page_index=None,
             ),
             ChapterPage(
                 url="https://static.comix.to/c0db/si/b/d4/scrambled.webp",
                 width=968,
                 height=1378,
                 scrambled=True,
+                reader_url="https://comix.to/title/rknv-neon-genesis-evangelion/4664251-chapter-97",
+                page_index=1,
             ),
         ]
 

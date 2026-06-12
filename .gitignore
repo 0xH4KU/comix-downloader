@@ -6,6 +6,8 @@ __pycache__/
 dist/
 build/
 .venv/
+.worktrees/
+.superpowers/
 
 # Testing & coverage
 .pytest_cache/

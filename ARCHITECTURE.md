@@ -6,7 +6,7 @@ comix-downloader is a desktop-first manga downloader for `comix.to`. It uses a r
 
 The codebase is split into four practical layers:
 
-1. Presentation: `core/cli/__init__.py`, `core/cli/interactive.py`, `core/cli/display.py`, `core/cli/doctor.py`, `core/cli/flow_prompts.py`, `core/cli/download_progress.py`
+1. Presentation: `core/cli/__init__.py`, `core/cli/interactive.py`, `core/cli/display.py`, `core/cli/doctor.py`, `core/cli/flow_prompts.py`, `core/cli/download_progress.py`, `core/tui/`
 2. CLI workflow glue: `core/cli/flows.py`
 3. Application use cases: `core/application/query_usecase.py`, `core/application/download_usecase.py`, `core/application/cleanup_usecase.py`, `core/application/download_reporting.py`, `core/application/session.py`
 4. Site and infrastructure: `sites/`, `core/downloader.py`, `core/converters.py`, `core/engines/`, `core/settings.py`, `core/history.py`, `core/fileio.py`, `core/notify.py`, `core/errors.py`, `core/logging_utils.py`
@@ -27,6 +27,7 @@ core/cli/__init__.py
   +--> core/cli/flow_prompts.py
   +--> core/cli/download_progress.py
   +--> core/cli/flows.py
+  +--> core/tui/
            |
            +--> core/application/query_usecase.py
            +--> core/application/download_usecase.py
@@ -130,10 +131,23 @@ Pure deduplication rules collapse duplicate chapter variants by number, language
 comix.to-specific browser hooks live here:
 
 - service-access probe for Cloudflare clearance validation
-- scrambled image canvas renderer
-- cache-bust retry for decode failures
+- DOM-first scrambled image capture from the hydrated reader
+- reader-page reuse for multiple scrambled pages in the same chapter
+- legacy scrambled image canvas renderer fallback
+- cache-bust retry for legacy decode failures
 
 This keeps `CdpBrowser` reusable for future adapters.
+
+## TUI Stack
+
+The optional Textual interface lives under `core/tui/`. It is a sibling presentation layer to the Rich/prompt CLI, not a wrapper around prompt flows.
+
+- `core/tui/app.py` owns the shell, clickable navigation rail, status log drawer, and shared app-level navigation state.
+- `core/tui/controller.py` adapts Textual screens to `ApplicationSession`.
+- `core/tui/screens/` contains search, series/chapter selection, download progress, library, history, and settings panes.
+- `core/tui/state.py` keeps pure reducers for chapter selection, download rows, navigation snapshots, and status log state.
+
+The TUI calls application/session use cases directly and must not import prompt-based CLI flow modules.
 
 ## Download State Model
 

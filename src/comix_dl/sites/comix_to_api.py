@@ -194,7 +194,7 @@ class ComixToApiClient:
         if data is None:
             return None
 
-        image_pages = extract_image_pages(data)
+        image_pages = extract_image_pages(data, base_url=self.base_url)
         if image_pages is None:
             logger.warning("Invalid image payload for chapter %d", chapter_id)
             return None
@@ -334,7 +334,7 @@ class ComixToApiClient:
             data = await self.get_chapter_payload(engine, chapter_id)
             if data is None:
                 return 0
-            image_urls = extract_image_urls(data)
+            image_urls = extract_image_urls(data, base_url=self.base_url)
             if image_urls is not None:
                 return len(image_urls)
         except Exception as exc:

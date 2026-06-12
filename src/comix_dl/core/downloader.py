@@ -461,6 +461,8 @@ class Downloader:
                 width=image.width,
                 height=image.height,
                 referer=referer,
+                reader_url=image.reader_url,
+                page_index=image.page_index,
             )
         return await self._client.get_bytes(url, referer=referer)
 

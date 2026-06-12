@@ -41,6 +41,11 @@ comix-downloader/
         flows.py            # Search/download/list/clean flow orchestration
         interactive.py      # Interactive settings/history/filter UI
         display.py          # Rich tables and formatting
+      tui/
+        app.py              # Textual shell, navigation, and status log
+        controller.py       # Application-session adapter for screens
+        screens/            # Search, series, download, and management panes
+        state.py            # Pure TUI reducers and navigation snapshots
       config.py             # AppConfig dataclasses used for runtime injection
       converters.py         # PDF / CBZ conversion with bounded PDF batching
       downloader.py         # Image downloader
@@ -81,6 +86,9 @@ comix-dl doctor --deep
 
 # Debug logging
 comix-dl --debug
+
+# Optional full-screen Textual interface
+comix-dl tui
 ```
 
 ## Quality Checks
@@ -147,6 +155,7 @@ comix.to uses several identifiers:
 
 1. **New comix.to API call** — add method to `ComixToApiClient` in `sites/comix_to_api.py`
 2. **New CLI command** — add parser wiring in `src/comix_dl/core/cli/__init__.py`; keep orchestration/runtime setup in `src/comix_dl/core/application/` and leave `src/comix_dl/core/cli/flows.py` as a presentation adapter
+   If the feature belongs in the full-screen app, add it under `src/comix_dl/core/tui/` and keep TUI tests free of live Chrome/network dependencies.
 3. **New output format** — add converter in `converters.py`
    If it touches PDF batching, keep temp-workspace cleanup and batch-size tests green.
 4. **New setting** — add field to `Settings` in `settings.py`
@@ -155,6 +164,7 @@ comix.to uses several identifiers:
 6. **New dedup rule** — update `sites/comix_to_dedup.py` to emit `DedupDecision` entries and keep the CLI dedup report aligned with the actual rule
 7. **New download summary wording** — update `core/application/download_reporting.py` and keep CLI/history/notification tests aligned with the shared report output
 8. **New download-path log field** — update `logging_utils.py` and the download/use-case tests so structured logging stays stable
+9. **New scrambled image behavior** — prefer reader-DOM capture in `sites/comix_to_browser.py`; keep legacy renderer fallback tests so site renderer changes remain survivable
 
 ## Commit Conventions
 

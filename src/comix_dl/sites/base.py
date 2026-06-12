@@ -109,6 +109,8 @@ class Engine(Protocol):
         width: int | None = None,
         height: int | None = None,
         referer: str | None = None,
+        reader_url: str | None = None,
+        page_index: int | None = None,
     ) -> bytes:
         """Render a site-scrambled image URL into normal image bytes.
 

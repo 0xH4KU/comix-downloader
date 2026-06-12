@@ -115,6 +115,8 @@ class ChapterPage:
     width: int | None = None
     height: int | None = None
     scrambled: bool = False
+    reader_url: str | None = None
+    page_index: int | None = None
 
 
 @dataclass
