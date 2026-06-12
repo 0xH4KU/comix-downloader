@@ -16,7 +16,7 @@ from comix_dl.core.application.download_usecase import DownloadChapterEvent
 from comix_dl.core.history import HistoryEntry
 from comix_dl.core.models import ChapterInfo, SearchResult, SeriesInfo
 from comix_dl.core.settings import Settings
-from comix_dl.core.tui.app import ComixTuiApp, NavigationRail, StatusBar
+from comix_dl.core.tui.app import ComixTuiApp, NavigationRail, StatusLog
 from comix_dl.core.tui.screens.download import DownloadStatus, DownloadTitle
 from comix_dl.core.tui.screens.manage import DownloadsPane, SettingsOutput
 from comix_dl.core.tui.screens.series import SeriesTitle
@@ -90,13 +90,13 @@ async def test_app_mounts_search_screen_and_opens_controller(tmp_path: Path) -> 
     async with app.run_test(size=(100, 32)) as pilot:
         await pilot.pause()
         assert controller.opened is True
-        assert app.query_one("#status", StatusBar).renderable == "Ready to search"
+        assert app.query_one("#status-log", StatusLog).renderable == "Ready to search"
 
     assert controller.closed is True
 
 
 @pytest.mark.asyncio
-async def test_shell_starts_with_focused_wizard_navigation(tmp_path: Path) -> None:
+async def test_shell_starts_with_clickable_state_aware_navigation(tmp_path: Path) -> None:
     controller = FakeController(tmp_path)
     app = ComixTuiApp(controller=controller)
 
@@ -104,16 +104,42 @@ async def test_shell_starts_with_focused_wizard_navigation(tmp_path: Path) -> No
         await pilot.pause()
         rail = app.query_one("#sidebar", NavigationRail)
 
-        assert "1 Search" in rail.rendered_text
-        assert "2 Chapters" in rail.rendered_text
-        assert "3 Download" in rail.rendered_text
+        assert "WORKFLOW" in rail.rendered_text
+        assert "Search" in rail.rendered_text
+        assert "Chapters" not in rail.rendered_text
+        assert "Download" not in rail.rendered_text
+        assert "TOOLS" in rail.rendered_text
         assert "Library" in rail.rendered_text
-        assert "Search" in rail.classes
-        assert app.query_one("#status", StatusBar).renderable == "Ready to search"
+        assert "History" in rail.rendered_text
+        assert "Settings" in rail.rendered_text
+        assert "1 Search" not in rail.rendered_text
+        assert app.query_one("#status-log", StatusLog).renderable == "Ready to search"
 
 
 @pytest.mark.asyncio
-async def test_shell_navigation_updates_for_management_panes(tmp_path: Path) -> None:
+async def test_sidebar_clicks_open_management_panes(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(110, 34)) as pilot:
+        await pilot.click("#nav-library")
+        await pilot.pause()
+        assert app.query_one("#downloads-table", DataTable).row_count == 0
+        assert app.query_one("#status-log", StatusLog).renderable == "Viewing library"
+
+        await pilot.click("#nav-history")
+        await pilot.pause()
+        assert app.query_one("#history-table", DataTable).row_count == 0
+        assert app.query_one("#status-log", StatusLog).renderable == "Viewing history"
+
+        await pilot.click("#nav-settings")
+        await pilot.pause()
+        assert str(app.query_one("#settings-output", SettingsOutput).renderable) == f"Output folder: {tmp_path}"
+        assert app.query_one("#status-log", StatusLog).renderable == "Viewing settings"
+
+
+@pytest.mark.asyncio
+async def test_keyboard_navigation_continues_after_shell_screen_switch(tmp_path: Path) -> None:
     controller = FakeController(tmp_path)
     app = ComixTuiApp(controller=controller)
 
@@ -121,19 +147,12 @@ async def test_shell_navigation_updates_for_management_panes(tmp_path: Path) -> 
         await pilot.press("escape")
         await pilot.press("d")
         await pilot.pause()
-        rail = app.query_one("#sidebar", NavigationRail)
-        assert "Library" in rail.classes
-        assert app.query_one("#status", StatusBar).renderable == "Viewing library"
+        assert app.query_one("#downloads-table", DataTable).row_count == 0
 
         await pilot.press("h")
         await pilot.pause()
-        assert "History" in app.query_one("#sidebar", NavigationRail).classes
-        assert app.query_one("#status", StatusBar).renderable == "Viewing history"
 
-        await pilot.press("g")
-        await pilot.pause()
-        assert "Settings" in app.query_one("#sidebar", NavigationRail).classes
-        assert app.query_one("#status", StatusBar).renderable == "Viewing settings"
+        assert app.query_one("#history-table", DataTable).row_count == 0
 
 
 @pytest.mark.asyncio
@@ -166,7 +185,7 @@ async def test_search_screen_guides_empty_query(tmp_path: Path) -> None:
 
         assert "Type a manga name to begin" in str(app.query_one("#search-help", Static).content)
         assert str(app.query_one("#search-status", Static).content) == "Type a manga name, then press Enter to search."
-        assert app.query_one("#status", StatusBar).renderable == "Ready to search"
+        assert app.query_one("#status-log", StatusLog).renderable == "Ready to search"
 
 
 @pytest.mark.asyncio
@@ -187,7 +206,7 @@ async def test_search_results_update_global_status(tmp_path: Path) -> None:
         assert str(app.query_one("#search-status", Static).content) == (
             "2 results found. Select a row and press Enter to open it."
         )
-        assert app.query_one("#status", StatusBar).renderable == "2 results found"
+        assert app.query_one("#status-log", StatusLog).renderable == "2 results found"
 
 
 @pytest.mark.asyncio
@@ -295,7 +314,7 @@ async def test_series_screen_shows_selection_guidance(tmp_path: Path) -> None:
             app.query_one("#filter-help", Static).content
         )
         assert str(app.query_one("#selection-summary", Static).content) == "0 selected from 2 visible chapters."
-        assert app.query_one("#status", StatusBar).renderable == "Series loaded: Series A"
+        assert app.query_one("#status-log", StatusLog).renderable == "Series loaded: Series A"
 
 
 @pytest.mark.asyncio
@@ -317,7 +336,7 @@ async def test_series_download_without_selection_is_actionable(tmp_path: Path) -
         assert str(app.query_one("#series-status", Static).content) == (
             "Select at least one chapter with Space, then press D to download."
         )
-        assert app.query_one("#status", StatusBar).renderable == "Select chapters before downloading"
+        assert app.query_one("#status-log", StatusLog).renderable == "Select chapters before downloading"
 
 
 @pytest.mark.asyncio
@@ -394,7 +413,7 @@ async def test_download_screen_shows_batch_summary(tmp_path: Path) -> None:
         assert "Next: cleanup raw folders, return to Search, or inspect Library." in str(
             app.query_one("#download-status", DownloadStatus).renderable
         )
-        assert app.query_one("#status", StatusBar).renderable == "Download complete"
+        assert app.query_one("#status-log", StatusLog).renderable == "Download complete"
 
 
 @pytest.mark.asyncio

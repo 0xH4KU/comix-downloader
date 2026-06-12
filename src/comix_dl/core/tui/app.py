@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar, Protocol, cast
 
+from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal
+from textual.message import Message
+from textual.reactive import reactive
 from textual.widgets import Footer, Header, Static
 
 from comix_dl import __version__
 from comix_dl.core.tui.controller import TuiController
+from comix_dl.core.tui.state import LogDrawerState
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -18,48 +22,98 @@ if TYPE_CHECKING:
     from comix_dl.core.settings import Settings
 
 
-class StatusBar(Static):
-    """Static status line with a stable renderable test surface."""
+class StatusLog(Static):
+    """Collapsed or expanded status/log drawer above the Footer."""
+
+    expanded: reactive[bool] = reactive(False)
+
+    def __init__(self, *, widget_id: str | None = None) -> None:
+        super().__init__("", id=widget_id)
+        self.state = LogDrawerState()
 
     @property
     def renderable(self) -> object:
         return self.content
 
+    def push(self, message: str) -> None:
+        self.state.push(message)
+        self._sync()
+
+    def toggle(self) -> None:
+        self.state.toggle()
+        self.expanded = self.state.expanded
+        self._sync()
+
+    def _sync(self) -> None:
+        self.set_class(self.state.expanded, "expanded")
+        if self.state.expanded:
+            self.update("\n".join(self.state.visible_messages))
+            return
+        self.update(self.state.latest)
+
+
+StatusBar = StatusLog
+
+
+class NavigationItem(Static):
+    """One clickable navigation row."""
+
+    BINDINGS: ClassVar = [("enter", "select", "Select")]
+    can_focus = True
+
+    class Selected(Message):
+        """Posted when a navigation row is selected."""
+
+        def __init__(self, destination: str) -> None:
+            super().__init__()
+            self.destination = destination
+
+    def __init__(self, label: str, destination: str, *, active: bool) -> None:
+        classes = "nav-item active" if active else "nav-item"
+        super().__init__(label, id=f"nav-{destination.lower()}", classes=classes)
+        self.destination = destination
+
+    def on_click(self) -> None:
+        self.post_message(self.Selected(self.destination))
+
+    def action_select(self) -> None:
+        self.post_message(self.Selected(self.destination))
+
 
 class NavigationRail(Static):
-    """Sidebar navigation with active destination rendering."""
+    """Clickable sidebar navigation with state-aware workflow destinations."""
 
-    _ITEMS: ClassVar[tuple[tuple[str, str], ...]] = (
-        ("Search", "1 Search"),
-        ("Chapters", "2 Chapters"),
-        ("Download", "3 Download"),
-        ("Library", "Library"),
-        ("History", "History"),
-        ("Settings", "Settings"),
-    )
-
-    active: str = "Search"
+    _WORKFLOW: ClassVar[tuple[str, ...]] = ("Search", "Chapters", "Download")
+    _TOOLS: ClassVar[tuple[str, ...]] = ("Library", "History", "Settings")
 
     def __init__(self, *, widget_id: str | None = None) -> None:
         super().__init__("", id=widget_id)
+        self.active = "Search"
+        self.available: set[str] = {"Search", *self._TOOLS}
 
     @property
     def rendered_text(self) -> str:
-        return str(self.content)
+        return self._render_text()
 
-    def on_mount(self) -> None:
-        self.set_active(self.active)
+    def compose(self) -> ComposeResult:
+        yield Static("WORKFLOW", classes="nav-section")
+        for destination in self._WORKFLOW:
+            if destination in self.available:
+                yield NavigationItem(destination, destination, active=destination == self.active)
+        yield Static("TOOLS", classes="nav-section")
+        for destination in self._TOOLS:
+            yield NavigationItem(destination, destination, active=destination == self.active)
 
-    def set_active(self, active: str) -> None:
+    def set_state(self, *, active: str, available: set[str]) -> None:
         self.active = active
-        self.set_classes(" ".join(name for name, _label in self._ITEMS if name == active))
-        self.update(self._render_text())
+        self.available = set(available)
+        self.refresh(recompose=True)
 
     def _render_text(self) -> str:
-        lines: list[str] = []
-        for name, label in self._ITEMS:
-            marker = ">" if name == self.active else " "
-            lines.append(f"{marker} {label}")
+        lines = ["WORKFLOW"]
+        lines.extend(destination for destination in self._WORKFLOW if destination in self.available)
+        lines.append("TOOLS")
+        lines.extend(self._TOOLS)
         return "\n".join(lines)
 
 
@@ -98,6 +152,7 @@ class ComixTuiApp(App[int]):
         ("d", "show_downloads", "Downloads"),
         ("h", "show_history", "History"),
         ("g", "show_settings", "Settings"),
+        ("o", "toggle_logs", "Logs"),
     ]
 
     def __init__(self, *, controller: TuiControllerLike | None = None, mirror: str | None = None) -> None:
@@ -109,7 +164,7 @@ class ComixTuiApp(App[int]):
         with Horizontal(id="layout"):
             yield NavigationRail(widget_id="sidebar")
             yield Container(id="screen-host")
-        yield StatusBar("Opening session...", id="status")
+        yield StatusLog(widget_id="status-log")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -117,19 +172,55 @@ class ComixTuiApp(App[int]):
         await self.action_show_search()
 
     async def _open_controller(self) -> None:
-        status = self.query_one("#status", Static)
         try:
             await self.controller.open()
         except Exception as exc:
-            status.update(f"Session failed: {exc}")
+            self.set_status(f"Session failed: {exc}")
             return
-        status.update("Ready to search")
+        self.set_status("Ready to search")
+
+    def available_destinations(self) -> set[str]:
+        """Return destinations visible in the sidebar."""
+        return {"Search", "Library", "History", "Settings"}
+
+    def refresh_navigation(self, active: str) -> None:
+        self.query_one("#sidebar", NavigationRail).set_state(
+            active=active,
+            available=self.available_destinations(),
+        )
 
     def set_active_view(self, active: str) -> None:
-        self.query_one("#sidebar", NavigationRail).set_active(active)
+        self.refresh_navigation(active)
 
     def set_status(self, message: str) -> None:
-        self.query_one("#status", StatusBar).update(message)
+        self.query_one("#status-log", StatusLog).push(message)
+
+    def append_log(self, message: str) -> None:
+        self.set_status(message)
+
+    def action_toggle_logs(self) -> None:
+        self.query_one("#status-log", StatusLog).toggle()
+
+    @on(NavigationItem.Selected)
+    async def _navigation_selected(self, event: NavigationItem.Selected) -> None:
+        destination = event.destination
+        if destination == "Search":
+            await self.action_show_search()
+        elif destination == "Library":
+            await self.action_show_downloads()
+        elif destination == "History":
+            await self.action_show_history()
+        elif destination == "Settings":
+            await self.action_show_settings()
+
+    async def _replace_screen(self, widget: object) -> None:
+        """Replace the main pane and clear stale focus from the previous pane."""
+        from textual.widget import Widget
+
+        self.set_focus(None)
+        host = self.query_one("#screen-host", Container)
+        await host.remove_children()
+        await host.mount(cast("Widget", widget))
 
     async def on_unmount(self) -> None:
         await self.controller.close()
@@ -139,33 +230,25 @@ class ComixTuiApp(App[int]):
 
         self.set_active_view("Search")
         self.set_status("Ready to search")
-        host = self.query_one("#screen-host", Container)
-        await host.remove_children()
-        await host.mount(SearchScreen(self.controller))
+        await self._replace_screen(SearchScreen(self.controller))
 
     async def action_show_downloads(self) -> None:
         from comix_dl.core.tui.screens.manage import DownloadsPane
 
         self.set_active_view("Library")
         self.set_status("Viewing library")
-        host = self.query_one("#screen-host", Container)
-        await host.remove_children()
-        await host.mount(DownloadsPane(self.controller))
+        await self._replace_screen(DownloadsPane(self.controller))
 
     async def action_show_history(self) -> None:
         from comix_dl.core.tui.screens.manage import HistoryPane
 
         self.set_active_view("History")
         self.set_status("Viewing history")
-        host = self.query_one("#screen-host", Container)
-        await host.remove_children()
-        await host.mount(HistoryPane(self.controller))
+        await self._replace_screen(HistoryPane(self.controller))
 
     async def action_show_settings(self) -> None:
         from comix_dl.core.tui.screens.manage import SettingsPane
 
         self.set_active_view("Settings")
         self.set_status("Viewing settings")
-        host = self.query_one("#screen-host", Container)
-        await host.remove_children()
-        await host.mount(SettingsPane(self.controller))
+        await self._replace_screen(SettingsPane(self.controller))

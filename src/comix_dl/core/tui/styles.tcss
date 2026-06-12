@@ -8,7 +8,7 @@ Screen {
 }
 
 #sidebar {
-    width: 20;
+    width: 22;
     min-width: 18;
     height: 1fr;
     padding: 1 1;
@@ -17,12 +17,27 @@ Screen {
     border-right: solid $primary;
 }
 
-#sidebar.Search,
-#sidebar.Chapters,
-#sidebar.Download,
-#sidebar.Library,
-#sidebar.History,
-#sidebar.Settings {
+.nav-section {
+    text-style: bold;
+    color: $primary;
+    margin-top: 1;
+}
+
+.nav-item {
+    height: 1;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+.nav-item:hover,
+.nav-item:focus {
+    background: $boost;
+    color: $text;
+}
+
+.nav-item.active {
+    background: $primary-darken-2;
+    color: $text;
     text-style: bold;
 }
 
@@ -32,12 +47,17 @@ Screen {
     padding: 1 2;
 }
 
-#status {
+#status-log {
     dock: bottom;
     height: 1;
     padding: 0 1;
     background: $panel;
     color: $text-muted;
+    border-top: solid $surface-lighten-1;
+}
+
+#status-log.expanded {
+    height: 5;
 }
 
 #search-input,
