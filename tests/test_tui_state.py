@@ -7,12 +7,15 @@ import dataclasses
 import pytest
 
 from comix_dl.core.application.download_usecase import DownloadChapterEvent, DownloadSummary
-from comix_dl.core.models import ChapterInfo
+from comix_dl.core.models import ChapterInfo, SeriesInfo
 from comix_dl.core.tui.state import (
     ChapterSelectionState,
+    DownloadNavigationState,
     DownloadRequest,
     DownloadRowsState,
     DownloadStatus,
+    LogDrawerState,
+    SeriesNavigationState,
     format_summary_line,
 )
 
@@ -23,6 +26,21 @@ def _chapters() -> list[ChapterInfo]:
         ChapterInfo(title="Chapter 2 - Extra", chapter_id=2, number="2", image_count=12),
         ChapterInfo(title="Chapter 3 - Stage", chapter_id=3, number="3", image_count=8),
     ]
+
+
+def _series_for_navigation() -> SeriesInfo:
+    return SeriesInfo(
+        title="Series A",
+        authors=["Author A"],
+        genres=["Action"],
+        description="A short description",
+        chapters=[
+            ChapterInfo(title="Chapter 1", chapter_id=1, number="1", image_count=10),
+            ChapterInfo(title="Chapter 2 Extra", chapter_id=2, number="2", image_count=12),
+        ],
+        url="https://comix.to/manga/series-a",
+        hash_id="a",
+    )
 
 
 def _status(rows: DownloadRowsState, chapter_id: int) -> DownloadStatus:
@@ -96,6 +114,63 @@ def test_download_request_is_immutable_batch_input() -> None:
     assert request.optimize is True
     with pytest.raises(dataclasses.FrozenInstanceError):
         request.series_title = "Series B"  # type: ignore[misc]
+
+
+def test_log_drawer_state_tracks_latest_and_recent_messages() -> None:
+    state = LogDrawerState(max_messages=3)
+
+    state.push("Ready to search")
+    state.push("Searching for series")
+    state.push("2 results found")
+    state.push("Series loaded: Series A")
+
+    assert state.latest == "Series loaded: Series A"
+    assert state.visible_messages == [
+        "Searching for series",
+        "2 results found",
+        "Series loaded: Series A",
+    ]
+
+
+def test_log_drawer_state_toggles_expanded() -> None:
+    state = LogDrawerState()
+
+    assert state.expanded is False
+
+    state.toggle()
+
+    assert state.expanded is True
+
+
+def test_series_navigation_state_preserves_selection_filter_and_format() -> None:
+    series = _series_for_navigation()
+    state = SeriesNavigationState.from_series(series, default_format="pdf")
+
+    state.selection.apply_filter("+extra")
+    state.selection.select_visible()
+    state.format_value = "cbz"
+
+    assert state.series.title == "Series A"
+    assert state.selection.selected_count == 1
+    assert len(state.selection.visible_chapters) == 1
+    assert state.format_value == "cbz"
+
+
+def test_download_navigation_state_starts_ready_with_rows() -> None:
+    series = _series_for_navigation()
+    request = DownloadRequest(
+        series_title=series.title,
+        chapters=tuple(series.chapters[:1]),
+        fmt="pdf",
+        optimize=True,
+    )
+
+    state = DownloadNavigationState.from_request(request)
+
+    assert state.request is request
+    assert state.phase == "ready"
+    assert state.status_text == "Preparing download..."
+    assert list(state.rows.rows) == [1]
 
 
 def test_download_rows_start_queued_from_chapters() -> None:

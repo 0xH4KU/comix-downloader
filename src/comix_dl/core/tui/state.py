@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal
 
 from comix_dl.core.cli.display import format_bytes
 
 if TYPE_CHECKING:
     from comix_dl.core.application.download_usecase import DownloadChapterEvent, DownloadSummary
-    from comix_dl.core.models import ChapterInfo
+    from comix_dl.core.models import ChapterInfo, SeriesInfo
 
 
 OutputFormat = Literal["pdf", "cbz", "both"]
@@ -26,6 +26,7 @@ DownloadStatus = Literal[
     "converted",
     "conversion_failed",
 ]
+DownloadPhase = Literal["ready", "running", "cancelling", "failed", "complete"]
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,38 @@ class DownloadRequest:
     chapters: tuple[ChapterInfo, ...]
     fmt: OutputFormat
     optimize: bool
+
+
+@dataclass
+class LogDrawerState:
+    """Recent shell messages for the status/log drawer."""
+
+    messages: list[str] = field(default_factory=list)
+    max_messages: int = 5
+    expanded: bool = False
+
+    @property
+    def latest(self) -> str:
+        """Return the most recent message or an empty fallback."""
+        if not self.messages:
+            return ""
+        return self.messages[-1]
+
+    @property
+    def visible_messages(self) -> list[str]:
+        """Return the capped message history visible in expanded mode."""
+        return self.messages[-self.max_messages :]
+
+    def push(self, message: str) -> None:
+        """Append one non-empty message to the log."""
+        clean = message.strip()
+        if not clean:
+            return
+        self.messages.append(clean)
+
+    def toggle(self) -> None:
+        """Toggle expanded/collapsed log display."""
+        self.expanded = not self.expanded
 
 
 @dataclass
@@ -128,6 +161,27 @@ class ChapterSelectionState:
         """Clear all selected chapters."""
         self.selected_ids.clear()
         self.status = "Selection cleared."
+
+
+@dataclass
+class SeriesNavigationState:
+    """State needed to restore the current chapter-selection screen."""
+
+    series: SeriesInfo
+    selection: ChapterSelectionState
+    format_value: OutputFormat
+
+    @classmethod
+    def from_series(cls, series: SeriesInfo, *, default_format: str) -> SeriesNavigationState:
+        """Create restorable chapter-selection state for a loaded series."""
+        format_value: OutputFormat = "pdf"
+        if default_format in {"pdf", "cbz", "both"}:
+            format_value = default_format
+        return cls(
+            series=series,
+            selection=ChapterSelectionState.from_chapters(series.chapters),
+            format_value=format_value,
+        )
 
 
 @dataclass(frozen=True)
@@ -247,6 +301,25 @@ class DownloadRowsState:
                 status="conversion_failed",
                 detail=event.message or "Conversion failed.",
             )
+
+
+@dataclass
+class DownloadNavigationState:
+    """State needed to restore the current download screen without restarting it."""
+
+    request: DownloadRequest
+    rows: DownloadRowsState
+    phase: DownloadPhase = "ready"
+    status_text: str = "Preparing download..."
+    cleanup_available: bool = False
+
+    @classmethod
+    def from_request(cls, request: DownloadRequest) -> DownloadNavigationState:
+        """Create restorable download state for one download request."""
+        return cls(
+            request=request,
+            rows=DownloadRowsState.from_chapters(list(request.chapters)),
+        )
 
 
 def format_summary_line(summary: DownloadSummary) -> str:
