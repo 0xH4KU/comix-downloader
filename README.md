@@ -277,3 +277,13 @@ src/comix_dl/
 ## License
 
 MIT
+
+## Disclaimer
+
+This project (`comix-downloader`) is an open-source tool developed purely for **educational purposes, web automation research, and personal offline archival**. 
+
+1. **Personal Archival Only**: This tool is designed to assist users in saving legally accessible web content for personal, offline reading. It is strictly prohibited to use this tool for commercial purposes, mass distribution, or any form of copyright infringement. Please support the original creators and publishers.
+2. **Polite Scraping**: This project is built with a "Server-Friendly" mindset. It simulates normal human browsing behavior with built-in rate limits to prevent server overload. It does not perform malicious attacks, DDoS, or unauthorized server intrusions.
+3. **User Responsibility**: The creator of this repository is not responsible for any misuse of this tool. By using this software, you agree to take full responsibility for your actions and ensure they comply with local laws and the target website's Terms of Service.
+4. **No Affiliation**: This project is an independent open-source initiative and is not affiliated with, endorsed by, or connected to `comix.to` or any of its partners.
+5. **As Is**: The code is provided "as is" without any warranties. The author holds no liability for any damages, account bans, or legal disputes arising from the use of this software.
