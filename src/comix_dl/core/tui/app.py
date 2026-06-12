@@ -153,7 +153,7 @@ class ComixTuiApp(App[int]):
         ("d", "show_downloads", "Downloads"),
         ("h", "show_history", "History"),
         ("g", "show_settings", "Settings"),
-        ("o", "toggle_logs", "Logs"),
+        ("ctrl+o", "toggle_logs", "Logs"),
     ]
 
     def __init__(self, *, controller: TuiControllerLike | None = None, mirror: str | None = None) -> None:

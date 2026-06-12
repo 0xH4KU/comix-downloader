@@ -183,10 +183,9 @@ class SeriesPane(Widget):
     async def action_start_download(self) -> None:
         selected = self.selection.selected_chapters
         if not selected:
-            self.query_one("#series-status", Static).update(
-                "Select at least one chapter with Space, then press D to download."
-            )
-            self.shell.set_status("Select chapters before downloading")
+            message = "Select at least one chapter before downloading."
+            self.query_one("#series-status", Static).update(message)
+            self.shell.set_status(message)
             return
 
         request = DownloadRequest(

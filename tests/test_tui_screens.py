@@ -389,9 +389,51 @@ async def test_series_download_without_selection_is_actionable(tmp_path: Path) -
         await pilot.pause()
 
         assert str(app.query_one("#series-status", Static).content) == (
-            "Select at least one chapter with Space, then press D to download."
+            "Select at least one chapter before downloading."
         )
-        assert app.query_one("#status-log", StatusLog).renderable == "Select chapters before downloading"
+        assert app.query_one("#status-log", StatusLog).renderable == "Select at least one chapter before downloading."
+
+
+@pytest.mark.asyncio
+async def test_status_log_toggles_above_footer(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(110, 34)) as pilot:
+        await pilot.pause()
+        log = app.query_one("#status-log", StatusLog)
+
+        assert "expanded" not in log.classes
+        assert log.renderable == "Ready to search"
+
+        app.set_status("Second message")
+        app.set_status("Third message")
+        await pilot.press("ctrl+o")
+        await pilot.pause()
+
+        assert "expanded" in log.classes
+        assert "Ready to search" in str(log.renderable)
+        assert "Third message" in str(log.renderable)
+
+
+@pytest.mark.asyncio
+async def test_no_selection_download_message_uses_status_log(tmp_path: Path) -> None:
+    controller = FakeController(tmp_path)
+    from comix_dl.core.tui.screens.series import SeriesPane
+
+    app = ComixTuiApp(controller=controller)
+
+    async with app.run_test(size=(120, 36)) as pilot:
+        series_state = SeriesNavigationState.from_series(_series(), default_format="pdf")
+        app._series_state = series_state
+        host = app.query_one("#screen-host")
+        await host.remove_children()
+        await host.mount(SeriesPane(controller, series_state))
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+
+        assert app.query_one("#status-log", StatusLog).renderable == "Select at least one chapter before downloading."
 
 
 @pytest.mark.asyncio

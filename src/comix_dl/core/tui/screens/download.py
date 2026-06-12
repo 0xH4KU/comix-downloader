@@ -134,9 +134,11 @@ class DownloadPane(Widget):
         for row in self.rows.rows.values():
             table.add_row(row.title, row.status, row.progress_text, row.detail, key=str(row.chapter_id))
 
-    def _set_status(self, message: str) -> None:
+    def _set_status(self, message: str, *, log: bool = True) -> None:
         self.state.status_text = message
         self.query_one("#download-status", Static).update(message)
+        if log:
+            self.shell.set_status(message)
 
     def _batch_summary(self, state: str) -> str:
         chapter_count = len(self.request.chapters)
@@ -152,14 +154,12 @@ class DownloadPane(Widget):
     async def _run_download(self) -> None:
         self._set_summary("Running")
         self._set_status(f"Downloading {len(self.request.chapters)} chapter(s)...")
-        self.shell.set_status(f"Downloading {len(self.request.chapters)} chapter(s)")
         try:
             summary = await self.controller.download(self.request, on_event=self._handle_event)
         except Exception as exc:
             self.state.phase = "failed"
             self._set_summary("Failed")
             self._set_status(f"Download failed: {exc}")
-            self.shell.set_status("Download failed")
             self.query_one("#cancel-button", Button).disabled = True
             return
 
@@ -178,7 +178,7 @@ class DownloadPane(Widget):
             self._cleanup_plan = None
             self.state.cleanup_available = False
             self.query_one("#cleanup-button", Button).disabled = True
-            self._set_status(f"{status}. Cleanup check failed: {exc}")
+            self._set_status(f"{status}. Cleanup check failed: {exc}", log=False)
             return
 
         cleanup_button = self.query_one("#cleanup-button", Button)
@@ -186,13 +186,14 @@ class DownloadPane(Widget):
             self.state.cleanup_available = True
             cleanup_button.disabled = False
             self._set_status(
-                f"{status}. Cleanup available for {len(self._cleanup_plan.candidates)} raw folder(s)."
+                f"{status}. Cleanup available for {len(self._cleanup_plan.candidates)} raw folder(s).",
+                log=False,
             )
             return
 
         self.state.cleanup_available = False
         cleanup_button.disabled = True
-        self._set_status(status)
+        self._set_status(status, log=False)
 
     @on(Button.Pressed, "#cancel-button")
     def _button_cancel(self, event: Button.Pressed) -> None:
@@ -209,7 +210,6 @@ class DownloadPane(Widget):
         self.state.phase = "cancelling"
         self._set_summary("Cancelling")
         self._set_status("Cancellation requested. Waiting for active chapter work to stop...")
-        self.shell.set_status("Cancelling download")
         self.query_one("#cancel-button", Button).disabled = True
 
     async def action_back_to_search(self) -> None:
