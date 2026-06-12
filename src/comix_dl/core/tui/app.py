@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
+    from textual.widget import Widget
+
     from comix_dl.core.models import SeriesInfo
     from comix_dl.core.settings import Settings
 
@@ -241,8 +243,6 @@ class ComixTuiApp(App[int]):
 
     async def _replace_screen(self, widget: object) -> None:
         """Replace the main pane and clear stale focus from the previous pane."""
-        from textual.widget import Widget
-
         self.set_focus(None)
         host = self.query_one("#screen-host", Container)
         await host.remove_children()
