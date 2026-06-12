@@ -7,6 +7,7 @@ dist/
 build/
 .venv/
 .worktrees/
+.superpowers/
 
 # Testing & coverage
 .pytest_cache/
